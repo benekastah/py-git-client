@@ -1,0 +1,124 @@
+"""One long-lived `git cat-file --batch-command`, for resolving names and reading objects
+without a process each."""
+
+import contextlib
+import re
+import subprocess
+import threading
+from dataclasses import dataclass
+from types import TracebackType
+from typing import Self
+
+from git_client.client import Git, GitError, encode
+
+OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+"""A full object id: SHA-1 or SHA-256."""
+
+
+@dataclass(frozen=True)
+class ObjectInfo:
+    """What `cat-file` says of an object: its id, type (e.g. "commit") and size in bytes."""
+
+    id: str
+    type: str
+    size: int
+
+
+class CatFile:
+    """Resolves names and reads objects through one `git cat-file --batch-command`, started
+    when first needed and kept until `close` (or the end of a `with` block).
+
+    It sees refs and objects as they are when asked, even when other processes have changed
+    them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
+    no upstream), git cat-file exits rather than saying they name nothing; then that name
+    resolves to nothing, and the next request starts another process.
+    """
+
+    def __init__(self, git: Git) -> None:
+        self.git = git
+        self._process: subprocess.Popen[bytes] | None = None
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Stop the process, if one is running."""
+        with self._lock:
+            self._stop()
+
+    def info(self, name: str) -> ObjectInfo | None:
+        """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
+        --verify` would find it, or None if it names nothing (or is ambiguous)."""
+        if not name or "\n" in name or "\r" in name:
+            # A line ending would put the process out of step with what's read back.
+            return None
+        with self._lock:
+            header = self._request(b"info " + encode(name))
+        if header is None or len(header) != 3:
+            # "<name> missing" (or "ambiguous"), which splits in three if name has spaces.
+            return None
+        object_id, kind, size = (part.decode() for part in header)
+        if not OBJECT_ID.fullmatch(object_id) or not size.isdigit():
+            return None
+        return ObjectInfo(object_id, kind, int(size))
+
+    def resolve(self, name: str) -> str | None:
+        """The id of the object `name` names, or None if it names nothing."""
+        found = self.info(name)
+        return None if found is None else found.id
+
+    def read(self, object_id: str) -> tuple[str, bytes]:
+        """The type and content of the object with this full id (as `git cat-file <type>
+        <id>` prints it: a commit's headers and message exactly as they are). Raises
+        GitError if there's no such object."""
+        if not OBJECT_ID.fullmatch(object_id):
+            raise ValueError(f"{object_id!r} isn't a full object id")
+        with self._lock:
+            header = self._request(b"contents " + object_id.encode())
+            if header is None or len(header) != 3:
+                raise GitError(
+                    ["cat-file", "contents", object_id], 1, f"{object_id} isn't an object"
+                )
+            assert self._process is not None and self._process.stdout is not None
+            content = self._process.stdout.read(int(header[2]))
+            self._process.stdout.read(1)  # the newline after the content
+        return header[1].decode(), content
+
+    def _request(self, command: bytes) -> list[bytes] | None:
+        """Send command, and return the first line of the reply, split, or None if the process
+        stopped (the next request starts another). Hold the lock."""
+        if self._process is None:
+            # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name that's
+            # both a branch and a tag), as rev-parse --quiet doesn't.
+            self._process = self.git.popen("cat-file", "--batch-command")
+        assert self._process.stdin is not None and self._process.stdout is not None
+        try:
+            self._process.stdin.write(command + b"\n")
+            self._process.stdin.flush()
+            reply = self._process.stdout.readline()
+        except OSError:
+            reply = b""
+        if not reply:
+            self._stop()
+            return None
+        return reply.split()
+
+    def _stop(self) -> None:
+        """Stop the process, if one is running. Hold the lock."""
+        if self._process is None:
+            return
+        if self._process.stdin is not None:
+            # It may have stopped already (on Windows, not always with a BrokenPipeError).
+            with contextlib.suppress(OSError):
+                self._process.stdin.close()
+        self._process.wait()
+        self._process = None
