@@ -244,14 +244,22 @@ def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
     assert client.run("log", "-2", "--format=%an") == "Command\nClient"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows passes the environment as str")
-def test_text_in_env_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> None:
+def test_text_reaches_git_as_utf8(repo: Git) -> None:
+    repo.run(
+        "commit", "--quiet", "--allow-empty", "-m", "Zoë 张", env={"GIT_AUTHOR_NAME": "Zoë 张"}
+    )
+
+    assert repo.run_bytes("log", "-1", "--format=%an %s") == "Zoë 张 Zoë 张\n".encode()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows passes text to git as str")
+def test_text_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> None:
     # In a Python of its own, since the filesystem encoding is set as Python starts: ASCII,
     # in the C locale, when Python neither coerces it nor uses UTF-8 mode. (Its command line
     # is ASCII too, so the name is escaped there.)
     script = (
         "import sys; from git_client import Git; Git(sys.argv[1]).run('commit', '--quiet',"
-        " '--allow-empty', '-m', 'x', env={'GIT_AUTHOR_NAME': 'Zo\\u00eb \\u5f20'})"
+        " '--allow-empty', '-m', 'Zo\\u00eb \\u5f20', env={'GIT_AUTHOR_NAME': 'Zo\\u00eb \\u5f20'})"
     )
     subprocess.run(
         [sys.executable, "-c", script, repo.directory],
@@ -259,7 +267,7 @@ def test_text_in_env_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git
         check=True,
     )
 
-    assert repo.run_bytes("log", "-1", "--format=%an") == "Zoë 张\n".encode()
+    assert repo.run_bytes("log", "-1", "--format=%an %s") == "Zoë 张 Zoë 张\n".encode()
 
 
 @pytest.fixture
@@ -300,6 +308,15 @@ def test_runs_in_its_directory_wherever_we_are(
     assert (
         Path(repo.run("rev-parse", "--show-toplevel")).resolve() == Path(repo.directory).resolve()
     )
+
+
+def test_a_path_given_as_bytes_reaches_git(repo: Git) -> None:
+    name = "café".encode()
+    (Path(repo.directory) / "café").write_bytes(b"x\n")
+
+    repo.run_bytes("add", "--", name)
+
+    assert repo.run_bytes("diff", "--cached", "--name-only", "-z") == name + b"\0"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows passes arguments as str")
