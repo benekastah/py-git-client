@@ -41,7 +41,8 @@ _NO_IDENTITY = re.compile(
 
 
 class ClientTimeout(enum.Enum):
-    """CLIENT_TIMEOUT's type."""
+    """CLIENT_TIMEOUT's type: a sentinel, whose one member means "the client's timeout". It's
+    an enum so that `Literal[ClientTimeout.CLIENT]` can type it, apart from None (no timeout)."""
 
     CLIENT = enum.auto()
 
