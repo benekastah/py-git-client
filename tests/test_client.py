@@ -115,6 +115,23 @@ def test_find_git_never_takes_a_git_in_the_current_directory(
     assert find_git() == str(real / name)
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="only Windows runs a batch file by its extension"
+)
+@pytest.mark.usefixtures("fresh_find_git")
+def test_find_git_never_takes_a_batch_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # cmd.exe would read &, | and % in git's arguments (e.g. a branch name) as its own.
+    shims, real = tmp_path / "shims", tmp_path / "bin"
+    shims.mkdir()
+    real.mkdir()
+    for name in ("git.cmd", "git.bat"):
+        (shims / name).write_text("@echo off\n", encoding="utf-8")
+    (real / "git.exe").write_bytes(b"")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shims), str(real)]))
+
+    assert find_git() == str(real / "git.exe")
+
+
 @pytest.mark.usefixtures("fresh_find_git")
 def test_find_git_fails_rather_than_run_whatever_git_is_nearby(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

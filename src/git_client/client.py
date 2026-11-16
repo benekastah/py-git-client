@@ -57,20 +57,17 @@ def find_git(env_var: str | None = None) -> str:
 def on_path(name: str) -> str | None:
     """The full path of the program `name` in a directory on PATH, or None. Only absolute
     directories count: an empty or relative entry means the current directory, and on Windows
-    shutil.which looks there first whatever PATH says, so a repository holding a git.exe (or
-    git.bat) would be run as git."""
-    extensions = (
-        (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
-        if sys.platform == "win32"
-        else [""]
-    )
+    shutil.which looks there first whatever PATH says, so a repository holding a git.exe
+    would be run as git. On Windows, only `<name>.exe`, as Windows itself runs a name: a
+    batch file (e.g. an npm shim, git.cmd) runs in cmd.exe, which would read characters in
+    git's arguments (&, |, %; a branch name can hold them) as commands of its own."""
+    filename = name + ".exe" if sys.platform == "win32" else name
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not os.path.isabs(directory):
             continue
-        for extension in extensions:
-            candidate = os.path.join(directory, name + extension.lower())
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
+        candidate = os.path.join(directory, filename)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
     return None
 
 
