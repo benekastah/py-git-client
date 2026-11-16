@@ -85,7 +85,8 @@ class CatFile:
     def read(self, object_id: str) -> tuple[str, bytes]:
         """The type and content of the object with this full id (as `git cat-file <type>
         <id>` prints it: a commit's headers and message exactly as they are). Raises
-        GitError if there's no such object, or if git is too old for this (see CatFile)."""
+        GitError if there's no such object, if git stops partway through it, or if git is
+        too old for this (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         with self._lock:
@@ -95,8 +96,17 @@ class CatFile:
                     ["cat-file", "contents", object_id], 1, f"{object_id} isn't an object"
                 )
             assert self._process is not None and self._process.stdout is not None
-            content = self._process.stdout.read(int(header[2]))
-            self._process.stdout.read(1)  # the newline after the content
+            size = int(header[2])
+            content = self._process.stdout.read(size)
+            newline = self._process.stdout.read(1)
+            if len(content) != size or newline != b"\n":
+                # It stopped partway through (killed, say): what came is no object's content.
+                self._stop()
+                raise GitError(
+                    ["cat-file", "contents", object_id],
+                    1,
+                    f"cat-file stopped after {len(content)} of its {size} bytes",
+                )
         return header[1].decode(), content
 
     def _request(self, command: bytes) -> list[bytes] | None:

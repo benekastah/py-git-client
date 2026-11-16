@@ -137,3 +137,28 @@ def test_a_git_without_batch_command_is_an_error_not_an_empty_answer(repo: Git) 
         pytest.raises(GitError, match="2.36"),
     ):
         cat_file.resolve("HEAD")
+
+
+class GitThatDiesMidObject(Git):
+    """A git whose cat-file says an object has 100 bytes, then stops after 10."""
+
+    def popen(
+        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+    ) -> subprocess.Popen[bytes]:
+        script = (
+            "import sys; sys.stdin.readline();"
+            " sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
+        )
+        return subprocess.Popen(
+            [sys.executable, "-c", script, "1" * 40],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+
+
+def test_an_object_cut_short_is_an_error_not_its_content(repo: Git) -> None:
+    with (
+        CatFile(GitThatDiesMidObject(repo.directory)) as cat_file,
+        pytest.raises(GitError, match="10 of its 100 bytes"),
+    ):
+        cat_file.read("1" * 40)
