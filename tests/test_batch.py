@@ -319,8 +319,12 @@ def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
     assert [repo.run_bytes("cat-file", "blob", blob) for blob in ids] == contents
 
 
-def test_hash_blobs_of_nothing_is_nothing(repo: Git) -> None:
+def test_nothing_to_do_starts_no_git(repo: Git, git_calls: list[list[str]]) -> None:
     assert hash_blobs(repo, []) == []
+    assert patch_ids(repo) == []
+    update_refs(repo, [])
+
+    assert git_calls == []
 
 
 def test_update_refs_makes_every_change(repo: Git) -> None:
