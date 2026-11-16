@@ -55,34 +55,20 @@ def github_repo(url: str) -> str:
     return "/".join(match.groups())
 
 
-def _origin_url_repo(repo: Path, push: bool) -> str:
-    """OWNER/REPO from the URL git uses to fetch from (or push to) origin, insteadOf applied,
-    so that an alias rewritten to github.com works. If that isn't on github.com, it's from
-    the URL as configured, which insteadOf may rewrite to a mirror or (in the tests) a local
-    repository standing in for it."""
-    used = _git(repo, "remote", "get-url", *(["--push"] if push else []), "origin")
-    try:
-        return github_repo(used)
-    except ReleaseError:
-        keys = ["remote.origin.pushurl", "remote.origin.url"] if push else ["remote.origin.url"]
-        for key in keys:
-            configured = subprocess.run(
-                ["git", "-C", str(repo), "config", "--get", key],
-                capture_output=True,
-                encoding="utf-8",
-                check=False,
-            ).stdout.strip()
-            if configured:
-                return github_repo(configured)
-        raise
+def origin_urls(repo: Path) -> tuple[str, str]:
+    """The URLs git fetches origin from and pushes it to, after its URL rewriting (insteadOf,
+    pushInsteadOf). The tests replace it: their origin is a local repository standing in for
+    GitHub."""
+    fetch = _git(repo, "remote", "get-url", "origin")
+    return fetch, _git(repo, "remote", "get-url", "--push", "origin")
 
 
 def origin_github_repo(repo: Path) -> str:
     """OWNER/REPO of `repo`'s origin on github.com, which gh is told (left to itself, it may
-    pick another remote, e.g. upstream). Refuses unless origin is on github.com, and the tag
-    is pushed to the same repository whose CI is checked."""
-    fetch = _origin_url_repo(repo, push=False)
-    push = _origin_url_repo(repo, push=True)
+    pick another remote, e.g. upstream). Refuses unless git both fetches from and pushes to
+    that repository, so that CI is checked where the tag goes."""
+    fetch_url, push_url = origin_urls(repo)
+    fetch, push = github_repo(fetch_url), github_repo(push_url)
     if push.lower() != fetch.lower():
         raise ReleaseError(f"origin fetches from {fetch} but pushes to {push}")
     return fetch

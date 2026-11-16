@@ -190,13 +190,19 @@ def test_open_pr_opens_it_on_the_repository_and_returns_its_url(
 
 class FakeGitHub:
     """Stands in for what dev_project asks of gh and uv, which would reach the network: the CI
-    status of a commit, the PRs opened, and the lock files updated."""
+    status of a commit, the PRs opened, and the lock files updated; and for origin's URLs."""
 
     def __init__(self, status: str = "success") -> None:
         self.status = status
         self.asked: list[str] = []
         self.prs: list[tuple[str, str, str]] = []
         self.locked: list[Path] = []
+        self.urls: tuple[str, str] = (GITHUB_ORIGIN, GITHUB_ORIGIN)
+
+    def origin_urls(self, repo: Path) -> tuple[str, str]:
+        """origin's fetch and push URLs: example/repo on GitHub, for which the tests' local
+        bare repository stands in."""
+        return self.urls
 
     def ci_status(self, repo: Path, github: str, sha: str) -> str:
         assert github == "example/repo"
@@ -220,19 +226,17 @@ def github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
     monkeypatch.setattr(dev_project, "ci_status", fake.ci_status)
     monkeypatch.setattr(dev_project, "open_pr", fake.open_pr)
     monkeypatch.setattr(dev_project, "uv_lock", fake.uv_lock)
+    monkeypatch.setattr(dev_project, "origin_urls", fake.origin_urls)
     return fake
 
 
 @pytest.fixture
 def repos(repo_templates: RepoTemplates, tmp_path: Path) -> Path:
     """A copy of make_origin_and_clone's repositories, with a commit in clone that origin
-    hasn't got, which a release mustn't tag. clone's origin is a GitHub URL, example/repo,
-    which git rewrites to origin.git."""
+    hasn't got, which a release mustn't tag."""
     repo_templates.build("origin-and-clone", make_origin_and_clone)
     directory = repo_templates.copy("origin-and-clone", tmp_path / "repos")
     clone = Git(directory / "clone")
-    clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
-    clone.run("config", f"url.{(directory / 'origin.git').as_posix()}.insteadOf", GITHUB_ORIGIN)
     (directory / "clone" / "local").write_bytes(b"local\n")
     clone.run("add", "local")
     clone.run("commit", "--quiet", "-m", "not pushed")
@@ -349,8 +353,7 @@ def test_release_refuses_a_next_version_branch_on_origin(repos: Path, github: Fa
 
 
 def test_release_refuses_an_origin_not_on_github(repos: Path, github: FakeGitHub) -> None:
-    clone = Git(repos / "clone")
-    clone.run("config", "remote.origin.url", (repos / "origin.git").as_posix())
+    github.urls = ("/srv/repo.git", "/srv/repo.git")
     with pytest.raises(ReleaseError, match="only github.com is supported"):
         dev_project.publish(repos / "clone", "0.0.1")
     assert github.asked == []
@@ -375,8 +378,7 @@ def test_release_says_how_to_finish_when_interrupted_after_the_tag(
 
 def test_release_drops_the_tag_it_couldnt_push(repos: Path, github: FakeGitHub) -> None:
     clone = Git(repos / "clone")
-    # git pushes to a missing repository, while origin's URLs, as configured, stay on GitHub.
-    clone.run("config", f"url.{(repos / 'missing.git').as_posix()}.pushInsteadOf", GITHUB_ORIGIN)
+    clone.run("config", "remote.origin.pushurl", (repos / "missing.git").as_posix())
     with pytest.raises(ReleaseError, match="push"):
         dev_project.publish(repos / "clone", "0.0.1")
     assert clone.run("tag") == ""
@@ -400,13 +402,24 @@ def test_origin_github_repo_follows_insteadof(
     assert dev_project.origin_github_repo(repos / "clone") == "example/repo"
 
 
-def test_origin_github_repo_falls_back_to_the_configured_url(repos: Path) -> None:
-    # repos' origin is a GitHub URL that insteadOf rewrites to a local bare repository.
-    assert dev_project.origin_github_repo(repos / "clone") == "example/repo"
+def test_origin_github_repo_refuses_a_local_origin(repos: Path) -> None:
+    with pytest.raises(ReleaseError, match="only github.com is supported"):
+        dev_project.origin_github_repo(repos / "clone")
+
+
+def test_origin_github_repo_refuses_github_rewritten_elsewhere(repos: Path) -> None:
+    # CI would be checked on GitHub, but the tag pushed to the mirror.
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
+    clone.run("config", "url.https://mirror.example/.insteadOf", "https://github.com/")
+    with pytest.raises(ReleaseError, match="only github.com is supported"):
+        dev_project.origin_github_repo(repos / "clone")
 
 
 def test_origin_github_repo_refuses_pushing_elsewhere(repos: Path) -> None:
-    Git(repos / "clone").run("config", "remote.origin.pushurl", "git@github.com:other/repo.git")
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
+    clone.run("config", "remote.origin.pushurl", "git@github.com:other/repo.git")
     with pytest.raises(ReleaseError, match="pushes to other/repo"):
         dev_project.origin_github_repo(repos / "clone")
 
@@ -415,9 +428,9 @@ def test_origin_github_repo_follows_pushinsteadof(repos: Path) -> None:
     clone = Git(repos / "clone")
     clone.run("config", "remote.origin.url", "gh:example/repo")
     clone.run("config", "url.https://github.com/.insteadOf", "gh:")
-    clone.run("config", "url.git@github.com:.pushInsteadOf", "gh:")
-    assert clone.run("remote", "get-url", "--push", "origin") == "git@github.com:example/repo"
-    assert dev_project.origin_github_repo(repos / "clone") == "example/repo"
+    clone.run("config", "url.git@github.com:other/.pushInsteadOf", "gh:example/")
+    with pytest.raises(ReleaseError, match="pushes to other/repo"):
+        dev_project.origin_github_repo(repos / "clone")
 
 
 def test_release_keeps_a_next_version_branch_it_didnt_create(
