@@ -30,7 +30,7 @@ or `pip install git+https://github.com/benekastah/py-git-client`.
 ## Using it
 
 ```python
-from git_client import CatFile, Git, RefUpdate, config, refs, update_refs
+from git_client import CatFile, Git, RefUpdate, config, config_key, refs, update_refs
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
 # a tool names its own variable so its users can choose, e.g. git itself, for speed.
@@ -47,6 +47,7 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
         kind, content = cat_file.read(readme)
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
+push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
 for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
     print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
 

@@ -5,7 +5,17 @@ from typing import IO
 
 import pytest
 
-from git_client import Git, GitError, RefUpdate, config, hash_blobs, patch_ids, refs, update_refs
+from git_client import (
+    Git,
+    GitError,
+    RefUpdate,
+    config,
+    config_key,
+    hash_blobs,
+    patch_ids,
+    refs,
+    update_refs,
+)
 from git_client.client import Arg, EnvValue
 
 
@@ -33,6 +43,17 @@ def test_config_tells_a_key_with_no_value_from_an_empty_one(repo: Git) -> None:
     # git reads the first as true and the second as false.
     assert entries["flags.bare"] == [None]
     assert entries["flags.empty"] == [""]
+
+
+def test_config_key_names_a_key_as_config_does(repo: Git) -> None:
+    repo.run("config", "branch.Topic.pushRemote", "origin")
+    repo.run("config", "url.https://Example.org/.insteadOf", "ex:")
+
+    entries = config(repo)
+
+    assert entries[config_key("branch.Topic.pushRemote")] == ["origin"]
+    assert entries[config_key("URL.https://Example.org/.insteadOf")] == ["ex:"]
+    assert entries[config_key("User.Name")] == ["Test"]
 
 
 def test_patch_ids_in_a_sha256_repository(tmp_path: Path) -> None:
