@@ -58,9 +58,9 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   `git cat-file --batch`) over one per request.
 - **Each CI job has a time limit** (`timeout-minutes` in `.github/workflows/check.yml`),
   about 20% over how long it takes in finished runs, rounded up to a whole minute; until
-  there are some, 5 minutes on Linux and 10 on macOS and Windows. If a job runs into its
-  limit, speed it up if you can (the tests, or the code itself); only if you can't, raise the
-  limit, saying why.
+  there are some, 5 minutes on Linux and 10 on macOS and Windows. "CI passed" keeps at least
+  2, for its force-cancel step's minute. If a job runs into its limit, speed it up if you
+  can (the tests, or the code itself); only if you can't, raise the limit, saying why.
 
 ## Linux, macOS and Windows
 
