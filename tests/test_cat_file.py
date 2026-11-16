@@ -8,8 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, GitError, NotARepositoryError, UnknownRevisionError
-from git_client.client import Arg, EnvValue
+from git_client import (
+    Arg,
+    CatFile,
+    EnvValue,
+    Git,
+    GitError,
+    NotARepositoryError,
+    UnknownRevisionError,
+)
 from git_client.testing import real_git
 
 
