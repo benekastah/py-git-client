@@ -48,7 +48,7 @@ class GitTimeoutError(GitError):
 
 
 class NotARepositoryError(GitError):
-    """There's no repository at the client's directory (or above it)."""
+    """There's no repository at the client's directory (or above it), or no such directory."""
 
 
 class UnknownRevisionError(GitError):
@@ -91,7 +91,8 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
         ),
     ),
     (ConfigLockedError, re.compile("could not lock config file")),
-    (NotARepositoryError, re.compile("not a git repository")),
+    # The second is -C's, for a directory that isn't there.
+    (NotARepositoryError, re.compile("not a git repository|cannot change to '")),
     (
         UnknownRevisionError,
         # "ambiguous argument 'x': unknown revision or path not in the working tree", but not

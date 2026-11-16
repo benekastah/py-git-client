@@ -29,6 +29,11 @@ def test_a_directory_with_no_repository(tmp_path: Path) -> None:
         git.run("rev-parse", "HEAD")
 
 
+def test_a_directory_that_isnt_there(tmp_path: Path) -> None:
+    with pytest.raises(NotARepositoryError):
+        Git(tmp_path / "missing").run("status")
+
+
 @pytest.mark.parametrize(
     "args",
     [

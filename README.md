@@ -76,7 +76,7 @@ said and raises a subclass:
 
 | Error | When |
 | --- | --- |
-| `NotARepositoryError` | There's no repository at the client's directory. |
+| `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again. |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
