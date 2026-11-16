@@ -1,0 +1,13 @@
+# Copier's record of this project's answers, for `copier update`; don't edit it by hand.
+_commit: 72ca802
+_src_path: gh:benekastah/python-template
+author_email: benekastah@gmail.com
+author_name: Paul Harper
+copyright_year: '2026'
+description: 'Run git from Python with as few processes as possible: one way to start
+    git, a long-lived cat-file, and batched reads and writes.'
+github_user: benekastah
+min_python: '3.11'
+newest_python: '3.15'
+package_name: git_client
+project_name: py-git-client
