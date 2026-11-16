@@ -11,8 +11,13 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
-- `src/git_client/__init__.py`: the public API; anything not exported there is private.
-- `tests/`: the tests, against real repositories (see `tests/conftest.py`).
+- `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
+  git config, the real git, repository templates, and `FakeGit`. It may import pytest; nothing
+  else in `src/` may.
+- `src/git_client/__init__.py`: the public API; anything not exported there (or in `testing`)
+  is private.
+- `tests/`: the tests, against real repositories, through the `git_client.testing` plugin (see
+  `tests/conftest.py`).
 - `dev.py`: setting up a clone and running the checks, on every system (see the README).
 
 ## Rules for this project
@@ -24,7 +29,9 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
-- **Real git, not mocks, in the tests:** what this library promises is how git behaves.
+- **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
+  `FakeGit` is for projects using it, to unit-test the commands they run, once this library
+  has shown how git answers them.
 - **Errors are the library's own**, never subprocess's: which `GitError` a failure raises is
   read from git's message (in English: commands whose output is read run with `LC_ALL=C`),
   and each message matched is one a test makes real git print.

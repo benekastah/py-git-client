@@ -87,6 +87,44 @@ said and raises a subclass:
 Any other failure is a plain `GitError`. `ok` and `passthrough` say whether git succeeded
 instead, but raise `GitTimeoutError` past a timeout.
 
+## Testing a tool that uses it
+
+`git_client.testing` is a pytest plugin. Load it in your top `conftest.py`
+(`pytest_plugins = ["git_client.testing"]`) or with `-p git_client.testing`:
+
+- **Every test's git gets a config of its own** (the `git_config` fixture, automatic): an
+  identity, `main` as the first branch, and no background maintenance, which would otherwise
+  start a process after each commit. The user's and the system's config don't reach it.
+- **Repositories built once per session, copied for each test** (`repo_templates`): building
+  takes many git processes, copying takes none. Remotes pointing inside a template are pointed
+  at the copy's.
+
+  ```python
+  def make_origin_and_clone(directory: Path) -> None:
+      # e.g. git init --bare origin.git, git clone origin.git clone, a first commit
+      ...
+
+
+  @pytest.fixture
+  def clone(repo_templates: RepoTemplates, tmp_path: Path) -> Git:
+      repo_templates.build("origin-and-clone", make_origin_and_clone)
+      return Git(repo_templates.copy("origin-and-clone", tmp_path / "repos") / "clone")
+  ```
+- **`real_git()`**: git itself, from `git --exec-path`, rather than a wrapper or launcher that
+  starts another process for each.
+- **`FakeGit`**, for unit tests of the git commands your code runs, without a process: give it
+  responses, run your code with it, and check what it ran. Assert the commands where they're
+  the behavior (what's pushed, deleted or rewritten); otherwise give realistic output and
+  assert the result. Leave what a command does end to end to tests on real git.
+
+  ```python
+  git = FakeGit()
+  git.respond(["rev-parse", "--abbrev-ref", "HEAD"], stdout="main\n")
+  git.respond(["push"])
+  publish(git)  # your code
+  assert git.commands[-1] == ["push", "origin", "main"]
+  ```
+
 ## Development
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone the repository,

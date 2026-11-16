@@ -22,7 +22,7 @@ packages = ["src/git_client"]
 [tool.pytest]
 testpaths = ["tests"]
 # One worker per CPU (pytest-xdist); `-n 0` runs them one at a time, e.g. to debug.
-addopts = ["--numprocesses", "auto"]
+addopts = ["--numprocesses", "auto", "-p", "git_client.testing"]
 
 [tool.ruff]
 line-length = 100
