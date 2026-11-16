@@ -51,6 +51,8 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             git.run("add", "ignored-by-user")
             assert (tmp_path / ".git" / "index").is_file()
             assert not (tmp_path / ".git" / "from-the-users-template").exists()
+            assert git.run("rev-parse", "--show-object-format") == "sha1"
+            assert not (tmp_path / ".git" / "reftable").exists()
             # An editor that leaves the message as it is.
             git.run("commit", "--quiet", "--allow-empty", "--edit", "-m", "first")
             assert git.run("log", "-1", "--format=%an %cn") == "Test Test"
@@ -89,6 +91,8 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
         "GIT_SEQUENCE_EDITOR": "false",
         "GIT_ALLOW_PROTOCOL": "file:https",
         "GIT_TERMINAL_PROMPT": "1",
+        "GIT_DEFAULT_HASH": "sha256",
+        "GIT_DEFAULT_REF_FORMAT": "reftable",
         "GIT_ASKPASS": str(askpass),
         "SSH_ASKPASS": str(askpass),
     }.items():

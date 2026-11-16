@@ -80,6 +80,8 @@ GIT_ENVIRONMENT_VARIABLES = (
     "GIT_REPLACE_REF_BASE",
     "GIT_SHALLOW_FILE",
     "GIT_TEMPLATE_DIR",
+    "GIT_DEFAULT_HASH",
+    "GIT_DEFAULT_REF_FORMAT",
     "GIT_SEQUENCE_EDITOR",
     "GIT_ASKPASS",
     "SSH_ASKPASS",
@@ -87,7 +89,8 @@ GIT_ENVIRONMENT_VARIABLES = (
 """git's variables that the tests' git mustn't inherit (e.g. from a git hook that runs the
 tests), since they win over any config: which repository to use and what's in it (those `git
 rev-parse --local-env-vars` lists), who's committing, extra config, GIT_TEMPLATE_DIR, which
-would copy a user's hooks into each new repository, the user's editor for `rebase -i`, and
+would copy a user's hooks into each new repository, the object and ref formats of a new
+repository (GIT_DEFAULT_HASH, GIT_DEFAULT_REF_FORMAT: e.g. sha256 ids), the user's editor for `rebase -i`, and
 the programs git runs to ask for a username or password (GIT_ASKPASS, then SSH_ASKPASS,
 which a desktop may set), even with GIT_TERMINAL_PROMPT=0."""
 

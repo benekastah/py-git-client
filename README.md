@@ -99,9 +99,10 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   a process after each commit), and no global ignore or attributes file. What a test writes
   there (`git config --global`) no other test sees. The user's and the system's config don't
   reach it, nor do git's variables that would win over it (e.g. `GIT_DIR`, `GIT_INDEX_FILE`,
-  `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook running the tests would pass on;
-  see `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git
-  gets `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
+  `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook running the tests would pass on,
+  or `GIT_DEFAULT_HASH`, which would make sha256 repositories; see
+  `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git gets
+  `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
   `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
   `GIT_TERMINAL_PROMPT=0` (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are
   cleared, so no program asks either): see `GIT_SETTINGS`. A test that needs
