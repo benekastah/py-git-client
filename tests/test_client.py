@@ -139,17 +139,38 @@ def test_var_gives_gits_value_for_a_variable(repo: Git) -> None:
     assert ident.startswith("Test <test@example.com> ")
 
 
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "",  # unable to auto-detect email address, unless this machine's name gives one
+        "[user]\n\tuseConfigOnly = true\n",  # no email was given
+        "[user]\n\tuseConfigOnly = true\n\temail = a@example.com\n",  # no name was given
+        "[user]\n\tname =\n\temail = a@example.com\n",  # empty ident name
+    ],
+)
 def test_var_gives_none_when_git_has_no_value_for_it(
-    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: str
 ) -> None:
     for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "EMAIL"):
         monkeypatch.delenv(name, raising=False)
-    (tmp_path / "config").write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
+    (tmp_path / "config").write_text(identity, encoding="utf-8")
     anonymous = Git(repo.directory, env={"GIT_CONFIG_GLOBAL": str(tmp_path / "config")})
+    if (
+        not identity
+        and anonymous.process("var", "GIT_AUTHOR_IDENT", capture_output=True).returncode == 0
+    ):
+        pytest.skip("git finds an email address from this machine's name")
 
     assert anonymous.var("GIT_AUTHOR_IDENT") is None
+
+
+def test_var_raises_for_what_isnt_a_missing_value(repo: Git) -> None:
     with pytest.raises(GitError):
-        anonymous.var("NO_SUCH_VARIABLE")
+        repo.var("NO_SUCH_VARIABLE")
+    with (Path(repo.directory) / ".git" / "config").open("a", encoding="utf-8") as f:
+        f.write("[core\n")
+    with pytest.raises(GitError, match="bad config line"):
+        repo.var("GIT_AUTHOR_IDENT")
 
 
 def test_ok_says_whether_it_succeeded(repo: Git) -> None:
