@@ -96,12 +96,6 @@ def refs(git: Git, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]
     return found
 
 
-def object_id_length(git: Git) -> int:
-    """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for SHA-256
-    (`Git.object_id_length`, read once per client)."""
-    return git.object_id_length()
-
-
 def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
