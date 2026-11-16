@@ -1,8 +1,12 @@
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from typing import IO
 
 import pytest
 
 from git_client import Git, GitError, RefUpdate, config, hash_blobs, patch_ids, refs, update_refs
+from git_client.client import Arg, EnvValue
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -194,6 +198,35 @@ def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
 
     assert commit == signed
     assert "no-such-gpg" not in trace.read_text(encoding="utf-8")
+
+
+class CountingGit(Git):
+    """Counts the processes it starts."""
+
+    started = 0
+
+    def process(
+        self,
+        *args: Arg,
+        capture_output: bool = False,
+        input: bytes | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        self.started += 1
+        return super().process(
+            *args, capture_output=capture_output, input=input, stdout=stdout, env=env
+        )
+
+
+def test_patch_ids_reads_the_object_format_once_per_client(repo: Git) -> None:
+    git = CountingGit(repo.directory)
+    patch_ids(git, ["log", "-p", "HEAD"])
+    git.started = 0
+
+    patch_ids(git, ["log", "-p", "HEAD"])
+
+    assert git.started == 2  # the command, and patch-id
 
 
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:

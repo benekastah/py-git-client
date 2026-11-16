@@ -109,6 +109,15 @@ class Git:
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
+        self._object_id_length: int | None = None
+
+    def object_id_length(self) -> int:
+        """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
+        SHA-256. Read from git the first time it's asked; a repository's can't change."""
+        if self._object_id_length is None:
+            sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
+            self._object_id_length = 64 if sha256 else 40
+        return self._object_id_length
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:

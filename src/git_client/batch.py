@@ -72,8 +72,9 @@ def refs(git: Git, *patterns: str) -> dict[str, Ref]:
 
 
 def object_id_length(git: Git) -> int:
-    """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for SHA-256."""
-    return 64 if git.run("rev-parse", "--show-object-format") == "sha256" else 40
+    """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for SHA-256
+    (`Git.object_id_length`, read once per client)."""
+    return git.object_id_length()
 
 
 def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
@@ -92,7 +93,7 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
     """
     if not commands:
         return []
-    length = object_id_length(git)
+    length = git.object_id_length()
     patches: list[str] = []
     for i, (command, *rest) in enumerate(commands, 1):
         if command == "diff":
