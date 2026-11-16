@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client.client import Arg, EnvValue, Git, encode, find_git
+from git_client.client import CLIENT_TIMEOUT, Arg, EnvValue, Git, Timeout, encode, find_git
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -286,6 +286,7 @@ class FakeGit(Git):
         input: bytes | None = None,
         stdout: object = None,
         env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
