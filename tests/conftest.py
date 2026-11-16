@@ -10,11 +10,13 @@ from git_client import Git
 @pytest.fixture(autouse=True, scope="session")
 def git_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     """A git config of the tests' own, in place of the user's and the system's: an identity,
-    and no background maintenance, which would start a process after each commit."""
+    no ignore or attributes file (git's defaults are in the user's home), and no background
+    maintenance, which would start a process after each commit."""
     config = tmp_path_factory.mktemp("git") / "config"
     config.write_text(
         "[user]\n\tname = Test\n\temail = test@example.com\n"
-        "[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
+        "[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
+        "[core]\n\texcludesFile =\n\tattributesFile =\n",
         encoding="utf-8",
     )
     with pytest.MonkeyPatch.context() as patch:
