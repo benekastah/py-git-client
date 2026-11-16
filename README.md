@@ -13,7 +13,7 @@ what git-stack, git-recommit and move-forward share for that:
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
-  their upstreams, symbolic refs and HEAD (`refs`), patch ids for many commands (`patch_ids`),
+  their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
   blobs (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 
 It has no dependencies of its own, and needs Python 3.11 or newer and git 2.36 or newer (for
@@ -47,8 +47,8 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
         kind, content = cat_file.read(readme)
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
-for ref in refs(git, "refs/heads/").values():
-    print(ref.name, ref.object, ref.upstream, ref.head)
+for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
+    print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
 
 old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved

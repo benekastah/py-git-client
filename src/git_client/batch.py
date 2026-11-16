@@ -3,7 +3,7 @@
 import os
 import tempfile
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from git_client.client import Git, GitError, decode, encode
 
@@ -46,22 +46,26 @@ def config(git: Git) -> dict[str, list[str | None]]:
 @dataclass(frozen=True)
 class Ref:
     """A ref, from `refs`: its full name, the object it points to, the full name of its
-    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), and whether
-    HEAD is on it."""
+    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), whether HEAD
+    is on it, and the other fields `refs` was asked for, by name."""
 
     name: str
     object: str
     upstream: str
     symref: str
     head: bool
+    fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
 
 
-def refs(git: Git, *patterns: str) -> dict[str, Ref]:
+def refs(git: Git, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
-    refs if none), by full name, from one `git for-each-ref`."""
+    refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
+    read, as `--format` names them without `%(...)` (e.g. "upstream:track",
+    "committerdate:iso-strict", "push:remotename"), each of whose values must be one line."""
+    extra = "".join(f"%00%({name})" for name in fields)
     listing = git.run_bytes(
         "for-each-ref",
-        "--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD)",
+        f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
         "--end-of-options",
         *patterns,
     )
@@ -71,8 +75,10 @@ def refs(git: Git, *patterns: str) -> dict[str, Ref]:
     for line in decode(listing).split("\n"):
         if not line:
             continue
-        name, object_id, upstream, symref, head = line.split("\0")
-        found[name] = Ref(name, object_id, upstream, symref, head == "*")
+        name, object_id, upstream, symref, head, *values = line.split("\0")
+        found[name] = Ref(
+            name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
+        )
     return found
 
 

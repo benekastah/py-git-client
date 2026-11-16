@@ -69,6 +69,17 @@ def test_refs_gives_each_refs_object_upstream_and_whether_head_is_on_it(
     assert found["refs/remotes/origin/HEAD"].symref == "refs/remotes/origin/main"
 
 
+def test_refs_reads_the_fields_asked_for_in_the_same_process(repo: Git) -> None:
+    repo.run("branch", "--quiet", "topic")
+    repo.run("branch", "--quiet", "--set-upstream-to", "main", "topic")
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
+
+    found = refs(repo, "refs/heads/", fields=("upstream:track", "subject"))
+
+    assert found["refs/heads/topic"].fields == {"upstream:track": "[behind 1]", "subject": "first"}
+    assert found["refs/heads/main"].fields == {"upstream:track": "", "subject": "second"}
+
+
 def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:
     # Python's splitlines would split this name too.
     repo.run("branch", "a\u2028b")
