@@ -1,5 +1,6 @@
 """dev_project.py's `release`, against a local bare repository standing in for origin."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,87 @@ def test_github_repo_reads_owner_and_name(url: str) -> None:
 def test_github_repo_refuses_other_urls(url: str) -> None:
     with pytest.raises(ReleaseError, match="isn't a GitHub repository"):
         dev_project.github_repo(url)
+
+
+class FakeRun:
+    """Stands in for dev_project._run, to test what's asked of gh, and how its answers are
+    read, without the network: records each command and answers with `output`."""
+
+    def __init__(self, output: str) -> None:
+        self.output = output
+        self.commands: list[list[str]] = []
+
+    def __call__(self, args: list[str], cwd: Path, stdin: str | None = None) -> str:
+        self.commands.append(args)
+        return self.output
+
+
+def check_runs(*runs: tuple[str, str | None]) -> str:
+    """gh api's answer listing check runs, each a (status, conclusion)."""
+    listed = [{"status": status, "conclusion": conclusion} for status, conclusion in runs]
+    return json.dumps({"total_count": len(listed), "check_runs": listed})
+
+
+@pytest.mark.parametrize(
+    ("runs", "status"),
+    [
+        ((), "missing"),
+        ((("queued", None),), "pending"),
+        ((("in_progress", None),), "pending"),
+        ((("completed", "success"),), "success"),
+        ((("completed", "failure"),), "failure"),
+        ((("completed", "cancelled"),), "cancelled"),
+        ((("completed", None),), "no conclusion"),
+        ((("completed", "success"), ("completed", "success")), "success"),
+        ((("completed", "success"), ("in_progress", None)), "pending"),
+        ((("completed", "success"), ("completed", "failure")), "failure"),
+    ],
+)
+def test_ci_status_needs_every_run_to_succeed(
+    monkeypatch: pytest.MonkeyPatch, runs: tuple[tuple[str, str | None], ...], status: str
+) -> None:
+    run = FakeRun(check_runs(*runs))
+    monkeypatch.setattr(dev_project, "_run", run)
+    assert dev_project.ci_status(Path(), "example/repo", "abc123") == status
+    assert run.commands == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/example/repo/commits/abc123/check-runs",
+            "-f",
+            "check_name=CI passed",
+            "-f",
+            "app_id=15368",
+        ]
+    ]
+
+
+def test_open_pr_opens_it_on_the_repository_and_returns_its_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = FakeRun("Warning: 1 uncommitted change\nhttps://github.com/example/repo/pull/7")
+    monkeypatch.setattr(dev_project, "_run", run)
+    url = dev_project.open_pr(Path(), "example/repo", "start-0.0.2", "Title", "Body")
+    assert url == "https://github.com/example/repo/pull/7"
+    assert run.commands == [
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            "example/repo",
+            "--base",
+            "main",
+            "--head",
+            "start-0.0.2",
+            "--title",
+            "Title",
+            "--body",
+            "Body",
+        ]
+    ]
 
 
 class FakeGitHub:

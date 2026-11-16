@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CI_CHECK = "CI passed"
 """The check main's ruleset requires, which says every CI job passed."""
+GITHUB_ACTIONS_APP = 15368
+"""GitHub Actions' app id, which reports CI_CHECK."""
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 GITHUB_URL = re.compile(
     r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -84,9 +86,13 @@ def _git(repo: Path, *args: str, stdin: str | None = None) -> str:
 
 
 def ci_status(repo: Path, github: str, sha: str) -> str:
-    """How GitHub Actions' "CI passed" check ended on commit `sha` of `github` (OWNER/REPO): "success" or
-    another conclusion (e.g. "failure"), "pending" while it runs or waits, "missing" if it
-    hasn't started."""
+    """How GitHub Actions' "CI passed" check ended on commit `sha` of `github` (OWNER/REPO):
+    "success" if every run of it succeeded, "pending" while one runs or waits, "missing" if
+    none has started, or else the first other conclusion (e.g. "failure").
+
+    A commit can have several runs (e.g. a pull request's as well as main's push), and
+    another app could report a check of the same name, so only GitHub Actions' count, all of
+    them."""
     output = _run(
         [
             "gh",
@@ -96,16 +102,20 @@ def ci_status(repo: Path, github: str, sha: str) -> str:
             f"repos/{github}/commits/{sha}/check-runs",
             "-f",
             f"check_name={CI_CHECK}",
+            "-f",
+            f"app_id={GITHUB_ACTIONS_APP}",
         ],
         repo,
     )
     runs: list[dict[str, str | None]] = json.loads(output)["check_runs"]
     if not runs:
         return "missing"
-    latest = runs[0]  # GitHub lists the latest run of each check (filter=latest) first.
-    if latest["status"] != "completed":
+    if any(run["status"] != "completed" for run in runs):
         return "pending"
-    return latest["conclusion"] or "missing"
+    for run in runs:
+        if run["conclusion"] != "success":
+            return run["conclusion"] or "no conclusion"
+    return "success"
 
 
 def open_pr(worktree: Path, github: str, branch: str, title: str, body: str) -> str:
