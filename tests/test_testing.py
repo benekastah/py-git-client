@@ -233,6 +233,31 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
     ]
 
 
+@pytest.fixture
+def new_clone(request: pytest.FixtureRequest, repo_templates: RepoTemplates, tmp_path: Path) -> Git:
+    """A copy of make_origin_and_clone's clone, from a template built for this test alone, so
+    building it, and repointing the copy's remote, happen while this fixture is set up."""
+    name = f"new-clone-{request.node.name}"
+    repo_templates.build(name, make_origin_and_clone)
+    return Git(repo_templates.copy(name, tmp_path / "copy") / "clone")
+
+
+def test_git_calls_leaves_out_a_template_set_up_after_it(
+    git_calls: list[list[str]], new_clone: Git
+) -> None:
+    new_clone.run("status", "--porcelain")
+
+    assert git_calls == [["status", "--porcelain"]]
+
+
+def test_git_calls_leaves_out_a_template_set_up_before_it(
+    new_clone: Git, git_calls: list[list[str]]
+) -> None:
+    new_clone.run("status", "--porcelain")
+
+    assert git_calls == [["status", "--porcelain"]]
+
+
 def test_these_tests_run_the_real_git() -> None:
     assert find_git() == real_git()
 
@@ -284,15 +309,24 @@ def test_a_copy_fetches_and_pushes_its_own_copy_of_each_remote(
     )
 
 
+def traced_commands(trace: Path) -> list[str]:
+    """The git commands GIT_TRACE wrote to `trace`, one per git process."""
+    if not trace.exists():
+        return []
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    return [line.split("built-in: git ", 1)[1] for line in lines if "built-in: git " in line]
+
+
 def test_a_copy_takes_one_git_per_url_it_repoints(
-    repo_templates: RepoTemplates, tmp_path: Path, git_calls: list[list[str]]
+    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_templates.build("origin-and-clone", make_origin_and_clone)
-    git_calls.clear()
+    monkeypatch.setenv("GIT_TRACE", str(tmp_path / "trace"))
 
     copy = repo_templates.copy("origin-and-clone", tmp_path / "copy")
 
-    assert [call[0] for call in git_calls] == ["config", "config"]  # url and pushurl
+    commands = traced_commands(tmp_path / "trace")
+    assert [command.split()[0] for command in commands] == ["config", "config"]  # url, pushurl
     for key in ("remote.origin.url", "remote.origin.pushurl"):
         assert Path(Git(copy / "clone").run("config", key)) == copy / "origin.git"
 
@@ -358,16 +392,16 @@ def test_a_template_keeps_no_sample_hooks(repo_templates: RepoTemplates, tmp_pat
 
 
 def test_copying_a_repository_without_remotes_starts_no_git(
-    repo_templates: RepoTemplates, tmp_path: Path, git_calls: list[list[str]]
+    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def make_plain(directory: Path) -> None:
         Git(directory).run("init", "--quiet", "repo")
 
     repo_templates.build("plain", make_plain)
-    git_calls.clear()
+    monkeypatch.setenv("GIT_TRACE", str(tmp_path / "trace"))
 
     assert (repo_templates.copy("plain", tmp_path / "copy") / "repo" / ".git").is_dir()
-    assert git_calls == []
+    assert traced_commands(tmp_path / "trace") == []
 
 
 def make_symlink(directory: Path) -> None:

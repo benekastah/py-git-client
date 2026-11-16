@@ -151,7 +151,8 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   os.environ["MY_TOOL_GIT"] = real_git()
   ```
 - **`git_calls`**: the arguments of each git process a `Git` starts during the test, while
-  real git runs, to count a tool's processes or check the ones it starts:
+  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
+  plugin's own, building and copying templates, whatever order the fixtures come in:
 
   ```python
   def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:

@@ -8,6 +8,8 @@ Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 `outside_any_repository`). It imports pytest, so only tests should import it.
 """
 
+import contextlib
+import contextvars
 import functools
 import os
 import re
@@ -15,7 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -151,6 +153,21 @@ def git_client_test_config(git_config: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(git_config))
 
 
+# Whether the plugin is setting up repositories (building or copying a template), whose git
+# processes git_calls leaves out.
+_setting_up: contextvars.ContextVar[bool] = contextvars.ContextVar("_setting_up", default=False)
+
+
+@contextlib.contextmanager
+def _unrecorded() -> Generator[None]:
+    """Leaves the git processes started in the block out of git_calls."""
+    token = _setting_up.set(True)
+    try:
+        yield
+    finally:
+        _setting_up.reset(token)
+
+
 class RepoTemplates:
     """Repositories built once per session, by name, and copied for each test that wants one:
     copying a directory is much quicker than the git processes that built it.
@@ -174,7 +191,7 @@ class RepoTemplates:
         if name not in self._built:
             directory.mkdir(parents=True)
             try:
-                with pytest.MonkeyPatch.context() as patch:
+                with pytest.MonkeyPatch.context() as patch, _unrecorded():
                     patch.setenv("GIT_CONFIG_GLOBAL", str(self.config))
                     make(directory)
             except BaseException:
@@ -197,7 +214,8 @@ class RepoTemplates:
         update-index -q --refresh` first."""
         source = self.root / name
         shutil.copytree(source, dest, symlinks=True)
-        _repoint_remotes(source, dest)
+        with _unrecorded():
+            _repoint_remotes(source, dest)
         return dest
 
 
@@ -358,20 +376,23 @@ def fresh_find_git() -> Iterator[None]:
 
 @pytest.fixture
 def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """The arguments of each git process a `Git` starts from now on (through `process` or
+    """The arguments of each git process a `Git` starts during the test (through `process` or
     `popen`; without `git -C <directory>`), in order, while git runs as it would: to count a
-    tool's processes, or check the ones it starts."""
+    tool's processes, or check the ones it starts. It leaves out the plugin's own, building
+    and copying templates (see RepoTemplates), whichever fixture is set up first."""
     calls: list[list[str]] = []
     process, popen = Git.process, Git.popen
 
     def recording_process(
         self: Git, *args: Arg, **kwargs: Any
     ) -> subprocess.CompletedProcess[bytes]:
-        calls.append([os.fsdecode(arg) for arg in args])
+        if not _setting_up.get():
+            calls.append([os.fsdecode(arg) for arg in args])
         return process(self, *args, **kwargs)
 
     def recording_popen(self: Git, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
-        calls.append([os.fsdecode(arg) for arg in args])
+        if not _setting_up.get():
+            calls.append([os.fsdecode(arg) for arg in args])
         return popen(self, *args, **kwargs)
 
     monkeypatch.setattr(Git, "process", recording_process)
