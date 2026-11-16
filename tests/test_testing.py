@@ -1,4 +1,3 @@
-import subprocess
 import sys
 from pathlib import Path
 
@@ -227,12 +226,33 @@ def test_a_copy_fetches_and_pushes_its_own_copy_of_each_remote(
     )
 
 
+def test_a_copy_takes_one_git_per_url_it_repoints(
+    repo_templates: RepoTemplates, tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    repo_templates.build("origin-and-clone", make_origin_and_clone)
+    git_calls.clear()
+
+    copy = repo_templates.copy("origin-and-clone", tmp_path / "copy")
+
+    assert [call[0] for call in git_calls] == ["config", "config"]  # url and pushurl
+    for key in ("remote.origin.url", "remote.origin.pushurl"):
+        assert Path(Git(copy / "clone").run("config", key)) == copy / "origin.git"
+
+
 def make_nested(directory: Path) -> None:
-    Git(directory).run("init", "--quiet", "--bare", str(directory / "upstream.git"))
+    # A name git quotes in its config file, for its "#".
+    Git(directory).run("init", "--quiet", "--bare", str(directory / "up #1.git"))
     Git(directory).run("init", "--quiet", str(directory / "deep" / "down" / "work"))
     work = Git(directory / "deep" / "down" / "work")
-    work.run("remote", "add", "origin", str(directory / "upstream.git"))
-    work.run("config", "--add", "remote.origin.url", str(directory / "upstream.git"))
+    work.run("remote", "add", "origin", str(directory / "up #1.git"))
+    work.run("config", "--add", "remote.origin.url", str(directory / "up #1.git"))
+    work.run("remote", "add", "elsewhere", "https://example.org/x.git")
+    # As a person might write it: the old form of section, and a comment.
+    upstream = (directory / "up #1.git").as_posix()
+    with (directory / "deep" / "down" / "work" / ".git" / "config").open(
+        "a", encoding="utf-8"
+    ) as config:
+        config.write(f'[remote.ByHand]\n\tURL = "{upstream}" ; written by hand\n')
 
 
 def test_repoints_every_url_of_a_repository_however_deep(
@@ -241,29 +261,25 @@ def test_repoints_every_url_of_a_repository_however_deep(
     repo_templates.build("nested", make_nested)
     copy = repo_templates.copy("nested", tmp_path / "copy")
 
-    urls = (
-        Git(copy / "deep" / "down" / "work")
-        .run("config", "--get-all", "remote.origin.url")
-        .splitlines()
-    )
+    work = Git(copy / "deep" / "down" / "work")
+    urls = work.run("config", "--get-all", "remote.origin.url").splitlines()
 
-    assert [Path(url) for url in urls] == [copy / "upstream.git", copy / "upstream.git"]
+    assert [Path(url) for url in urls] == [copy / "up #1.git", copy / "up #1.git"]
+    assert work.run("config", "remote.elsewhere.url") == "https://example.org/x.git"
+    assert Path(work.run("config", "remote.byhand.url")) == copy / "up #1.git"
 
 
 def test_copying_a_repository_without_remotes_starts_no_git(
-    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo_templates: RepoTemplates, tmp_path: Path, git_calls: list[list[str]]
 ) -> None:
     def make_plain(directory: Path) -> None:
         Git(directory).run("init", "--quiet", "repo")
 
     repo_templates.build("plain", make_plain)
-
-    def no_git(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        raise AssertionError("started git")
-
-    monkeypatch.setattr(Git, "process", no_git)
+    git_calls.clear()
 
     assert (repo_templates.copy("plain", tmp_path / "copy") / "repo" / ".git").is_dir()
+    assert git_calls == []
 
 
 def make_symlink(directory: Path) -> None:

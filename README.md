@@ -122,9 +122,9 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
 - **Repositories built once per session, copied for each test** (`repo_templates`), under
   the session's config rather than the config of the test that asks first: building
   takes many git processes, copying takes none for a repository without remotes. One with
-  remotes takes one `git config` to list its URLs and, for each that points inside the
-  template (`url` and `pushurl`), one to clear it and one per value, to point it at the
-  copy's. Submodules and linked worktrees aren't repointed.
+  remotes takes a `git config` for each remote's `url` or `pushurl` that points inside the
+  template, to point it at the copy's (for a key with several values, one to clear it and
+  one per value). Submodules and linked worktrees aren't repointed.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:

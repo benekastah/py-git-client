@@ -9,6 +9,7 @@ Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 
 import functools
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -20,7 +21,16 @@ from typing import Any
 
 import pytest
 
-from git_client.client import CLIENT_TIMEOUT, Arg, EnvValue, Git, Timeout, encode, find_git
+from git_client.client import (
+    CLIENT_TIMEOUT,
+    Arg,
+    EnvValue,
+    Git,
+    Timeout,
+    decode,
+    encode,
+    find_git,
+)
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -210,41 +220,82 @@ def _repositories(root: Path) -> Iterator[Path]:
 
 def _repoint_remotes(source: Path, dest: Path) -> None:
     """In each repository under `dest` (copied from `source`), point every remote URL (`url`
-    and `pushurl`) that's a path under `source` at the same path under `dest`, through `git
-    config` rather than by editing the file, where git escapes backslashes (Windows' paths).
-    A repository whose config names no remote starts no process; one that does starts one
-    to list its URLs, then, for each that moves, one to clear it and one per value.
-    Submodules aren't repointed (their remote, in `.git/modules/<name>/config`, and the
-    superproject's `submodule.<name>.url` still name the template), nor linked worktrees
-    (whose `gitdir:` is an absolute path into the template)."""
+    and `pushurl`) that's a path under `source` at the same path under `dest`. The URLs are
+    read from the config file (not from files it includes), and each that moves is set
+    through `git config` rather than by editing the file, where git escapes backslashes
+    (Windows' paths): one process for a key with one value, and for one with several, one to
+    clear it and one per value. Submodules aren't repointed (their remote, in
+    `.git/modules/<name>/config`, and the superproject's `submodule.<name>.url` still name
+    the template), nor linked worktrees (whose `gitdir:` is an absolute path into the
+    template)."""
     for repo in _repositories(dest):
         if (repo / ".git").is_file():
             continue
         config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
-        if not config.is_file() or "[remote" not in config.read_text(
-            encoding="utf-8", errors="replace"
-        ):
+        if not config.is_file():
             continue
         git = Git(repo)
-        listed = git.process(
-            "config",
-            "--local",
-            "--null",
-            "--get-regexp",
-            r"^remote\..*\.(url|pushurl)$",
-            capture_output=True,
-        )
-        urls: dict[str, list[str]] = {}
-        for entry in listed.stdout.decode("utf-8", "surrogateescape").split("\0"):
-            if entry:
-                key, _, url = entry.partition("\n")
-                urls.setdefault(key, []).append(url)
-        for key, values in urls.items():
+        for key, values in _remote_urls(decode(config.read_bytes())).items():
             moved = [_moved(url, source, dest) for url in values]
-            if moved != values:
+            if moved == values:
+                continue
+            if len(moved) == 1:
+                git.run("config", "--local", key, moved[0])
+            else:
                 git.run("config", "--local", "--unset-all", key)
                 for url in moved:
                     git.run("config", "--local", "--add", key, url)
+
+
+# A config file's section header, `[remote "origin"]` (or the old `[remote.origin]`), and a
+# remote's URL, `url = ...` or `pushurl = ...`: names are case-insensitive.
+_SECTION = re.compile(r'\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]')
+_URL = re.compile(r"\s*(url|pushurl)\s*=(.*)", re.IGNORECASE)
+
+
+def _remote_urls(text: str) -> dict[str, list[str]]:
+    """The remotes' URLs in a config file's text, by key (`remote.<name>.url` or
+    `.pushurl`), in order, as git reads them."""
+    urls: dict[str, list[str]] = {}
+    remote: str | None = None
+    for line in text.splitlines():
+        if section := _SECTION.match(line):
+            name, subsection = section[1], section[2]
+            if subsection is not None:
+                remote = _unescaped(subsection) if name.lower() == "remote" else None
+            else:
+                # The old form, whose subsection git reads in lower case.
+                first, dot, rest = name.partition(".")
+                remote = rest.lower() if dot and first.lower() == "remote" else None
+        elif remote is not None and (entry := _URL.match(line)):
+            key = f"remote.{remote}.{entry[1].lower()}"
+            urls.setdefault(key, []).append(_config_value(entry[2]))
+    return urls
+
+
+def _unescaped(text: str) -> str:
+    """A quoted subsection's text, without its escapes (\\" and \\\\)."""
+    return re.sub(r"\\(.)", r"\1", text)
+
+
+def _config_value(raw: str) -> str:
+    """A value as git reads it from what follows `=`: without the space around it (outside
+    quotes), its quotes, its escapes (\\n, \\t, \\b, \\" and \\\\), and a comment after it."""
+    value: list[str] = []
+    quoted = escaped = False
+    for c in raw:
+        if escaped:
+            value.append({"n": "\n", "t": "\t", "b": "\b"}.get(c, c))
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        elif c == '"':
+            quoted = not quoted
+        elif c in "#;" and not quoted:
+            break
+        else:
+            value.append(c)
+    return "".join(value).strip()
 
 
 def _moved(url: str, source: Path, dest: Path) -> str:
