@@ -53,13 +53,24 @@ Timeout: TypeAlias = float | None | Literal[ClientTimeout.CLIENT]
 """A command's timeout, in seconds: None for none, or (the default) the client's."""
 
 
+# What Windows runs in cmd.exe.
+_BATCH = {".bat", ".cmd"}
+
+
 @functools.cache
 def find_git(env_var: str | None = None) -> str:
     """The git to run: the program `$env_var` names, if that's set; else the git on PATH (a
     wrapper such as git-ai included), by its full path, which posix_spawn needs. Found once per
     process. Raises FileNotFoundError if there's none: running plain "git" would let the OS
-    look in the current directory, where a repository could hold a git of its own."""
+    look in the current directory, where a repository could hold a git of its own. On
+    Windows, raises ValueError if `$env_var` names a batch file (.bat or .cmd), for the
+    reason on_path gives."""
     if env_var and (configured := os.environ.get(env_var)):
+        if sys.platform == "win32" and os.path.splitext(configured)[1].lower() in _BATCH:
+            raise ValueError(
+                f"${env_var} names a batch file, {configured}, which would run in cmd.exe:"
+                " it would read &, | and % in git's arguments as its own; name an .exe"
+            )
         return configured
     found = on_path("git")
     if found is None:
@@ -147,9 +158,10 @@ class Git:
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
-    FileNotFoundError if there's no git to find. `env` is added to the environment of every
-    command. `timeout` is how many seconds a command may run (None: as long as it takes),
-    unless given its own; one that runs longer is stopped, and raises GitTimeoutError.
+    FileNotFoundError if there's no git to find (see find_git). `env` is added to the
+    environment of every command. `timeout` is how many seconds a command may run (None: as
+    long as it takes), unless given its own; one that runs longer is stopped, and raises
+    GitTimeoutError.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.

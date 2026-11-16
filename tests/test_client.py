@@ -346,6 +346,21 @@ def test_find_git_never_takes_a_batch_file(tmp_path: Path, monkeypatch: pytest.M
     assert find_git() == str(real / "git.exe")
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="only Windows runs a batch file by its extension"
+)
+@pytest.mark.usefixtures("fresh_find_git")
+@pytest.mark.parametrize("name", ["git-ai.cmd", "GIT.BAT"])
+def test_find_git_refuses_a_batch_file_the_projects_variable_names(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # As on PATH: cmd.exe would read &, | and % in git's arguments as its own.
+    monkeypatch.setenv("MY_PROJECT_GIT", f"C:\\tools\\{name}")
+
+    with pytest.raises(ValueError, match="MY_PROJECT_GIT"):
+        find_git("MY_PROJECT_GIT")
+
+
 @pytest.mark.usefixtures("fresh_find_git")
 def test_find_git_fails_rather_than_run_whatever_git_is_nearby(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
