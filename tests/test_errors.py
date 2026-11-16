@@ -161,13 +161,14 @@ def not_found() -> Iterator[str]:
             thread.join()
 
 
-# A proxy would answer for the server on this machine.
-NO_PROXY = {"no_proxy": "*", "NO_PROXY": "*"}
+# For a server on this machine: over HTTP, which the tests' git doesn't allow by default, and
+# with no proxy, which would answer for it.
+LOCAL_HTTP = {"GIT_ALLOW_PROTOCOL": "http", "no_proxy": "*", "NO_PROXY": "*"}
 
 
 def test_a_remote_with_no_such_repository(repo: Git, not_found: str) -> None:
     with pytest.raises(RemoteError):
-        repo.run("ls-remote", not_found, env=NO_PROXY)
+        repo.run("ls-remote", not_found, env=LOCAL_HTTP)
 
 
 def test_a_remote_that_cant_be_reached(repo: Git) -> None:
@@ -176,7 +177,7 @@ def test_a_remote_that_cant_be_reached(repo: Git) -> None:
         port = closed.getsockname()[1]
 
     with pytest.raises(RemoteError):
-        repo.run("ls-remote", f"http://127.0.0.1:{port}/repo.git", env=NO_PROXY)
+        repo.run("ls-remote", f"http://127.0.0.1:{port}/repo.git", env=LOCAL_HTTP)
 
 
 @pytest.fixture

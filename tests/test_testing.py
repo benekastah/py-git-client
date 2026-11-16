@@ -29,9 +29,12 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
     (home / ".config" / "git" / "ignore").write_text("ignored-by-user\n", encoding="utf-8")
     pytester.makepyfile(
         """
+        import os
         from pathlib import Path
 
-        from git_client import Git
+        import pytest
+
+        from git_client import Git, GitError
 
 
         def test_inside(tmp_path: Path) -> None:
@@ -42,17 +45,35 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             git.run("add", "ignored-by-user")
             assert (tmp_path / ".git" / "index").is_file()
             assert not (tmp_path / ".git" / "from-the-users-template").exists()
-            git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+            # An editor that leaves the message as it is.
+            git.run("commit", "--quiet", "--allow-empty", "--edit", "-m", "first")
             assert git.run("log", "-1", "--format=%an %cn") == "Test Test"
+            git.run("rebase", "--quiet", "--interactive", "HEAD")
+            # No network, and no asking for a password.
+            with pytest.raises(GitError, match="transport 'https' not allowed"):
+                git.run("ls-remote", "https://example.invalid/repo.git")
+            assert os.environ["GIT_TERMINAL_PROMPT"] == "0"
         """
     )
+    (tmp_path / "system-config").write_text("[user]\n\tname = From The System\n", encoding="utf-8")
+    Git(tmp_path).run("init", "--quiet", "hooks-repository")
     for name, value in {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
+        "GIT_DIR": str(tmp_path / "hooks-repository" / ".git"),
         "GIT_AUTHOR_NAME": "From A Hook",
         "GIT_COMMITTER_NAME": "From A Hook",
         "GIT_INDEX_FILE": str(tmp_path / "hooks-index"),
         "GIT_TEMPLATE_DIR": str(template),
+        "GIT_CONFIG_PARAMETERS": "'user.name'='From A Hook'",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "user.name",
+        "GIT_CONFIG_VALUE_0": "From A Hook",
+        "GIT_CONFIG_SYSTEM": str(tmp_path / "system-config"),
+        "GIT_EDITOR": "false",
+        "GIT_SEQUENCE_EDITOR": "false",
+        "GIT_ALLOW_PROTOCOL": "file:https",
+        "GIT_TERMINAL_PROMPT": "1",
     }.items():
         monkeypatch.setenv(name, value)
 

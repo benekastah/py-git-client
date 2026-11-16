@@ -66,11 +66,18 @@ GIT_ENVIRONMENT_VARIABLES = (
     "GIT_REPLACE_REF_BASE",
     "GIT_SHALLOW_FILE",
     "GIT_TEMPLATE_DIR",
+    "GIT_SEQUENCE_EDITOR",
 )
 """git's variables that the tests' git mustn't inherit (e.g. from a git hook that runs the
 tests), since they win over any config: which repository to use and what's in it (those `git
-rev-parse --local-env-vars` lists), who's committing, extra config, and GIT_TEMPLATE_DIR,
-which would copy a user's hooks into each new repository."""
+rev-parse --local-env-vars` lists), who's committing, extra config, GIT_TEMPLATE_DIR, which
+would copy a user's hooks into each new repository, and the user's editor for `rebase -i`."""
+
+GIT_SETTINGS = {"GIT_EDITOR": "true", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0"}
+"""What the tests' git gets in its environment: an editor that leaves a message (or `rebase
+-i`'s list) as it is, rather than the user's, which would make a test depend on their shell
+or wait for them; only local remotes (no network: a test that needs more, e.g. ssh through a
+fake ssh, widens GIT_ALLOW_PROTOCOL itself); and no asking for a username or password."""
 
 
 @functools.cache
@@ -99,9 +106,9 @@ def git_client_isolation(
 ) -> Iterator[Path]:
     """Cuts git off from the user's setup for the whole session, session fixtures included:
     its global config is the tests' own (git_config_text, in a file of the session's, which
-    each test then swaps for its own: see git_config), with no system config, and none of
-    GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or GIT_CONFIG_VALUE_n. Yields the
-    session's config file."""
+    each test then swaps for its own: see git_config), with no system config, GIT_SETTINGS,
+    and none of GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or GIT_CONFIG_VALUE_n.
+    Yields the session's config file."""
     config = tmp_path_factory.mktemp("git-config") / "config"
     config.write_text(git_config_text, encoding="utf-8")
     counted = [n for n in os.environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))]
@@ -110,6 +117,8 @@ def git_client_isolation(
             patch.delenv(name, raising=False)
         patch.setenv("GIT_CONFIG_GLOBAL", str(config))
         patch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        for name, value in GIT_SETTINGS.items():
+            patch.setenv(name, value)
         yield config
 
 

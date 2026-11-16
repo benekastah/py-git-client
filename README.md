@@ -100,8 +100,19 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   there (`git config --global`) no other test sees. The user's and the system's config don't
   reach it, nor do git's variables that would win over it (e.g. `GIT_DIR`, `GIT_INDEX_FILE`,
   `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook running the tests would pass on;
-  see `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. To add
-  entries, override the session-scoped `git_config_text` fixture:
+  see `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git
+  gets `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
+  `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
+  `GIT_TERMINAL_PROMPT=0` (no asking for a password): see `GIT_SETTINGS`. A test that needs
+  another protocol widens it in a fixture of its own:
+
+  ```python
+  @pytest.fixture
+  def ssh_remotes(monkeypatch: pytest.MonkeyPatch) -> None:
+      monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file:ssh")  # and GIT_SSH_COMMAND, a fake ssh
+  ```
+
+  To add config entries, override the session-scoped `git_config_text` fixture:
 
   ```python
   @pytest.fixture(scope="session")
