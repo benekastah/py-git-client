@@ -1,10 +1,12 @@
 """Running git: finding it once, starting it the quickest way each system allows, and passing
 text and paths to it as git expects them."""
 
+import contextlib
 import enum
 import functools
 import os
 import re
+import signal
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -16,8 +18,9 @@ from git_client.errors import GitError, GitTimeoutError, error_for
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
 # inherited, as it would if run from a shell, and without close_fds (and with git's full path,
 # and no cwd) Python starts git with posix_spawn, which on macOS is about a third faster than
-# forking. (On macOS a new pipe is inheritable for a moment; see Git.popen.) On Windows, yes:
-# without it, a process one thread starts can inherit, and hold open, the pipes another thread
+# forking. (On macOS a new pipe is inheritable for a moment; see Git.popen. A command given a
+# process group of its own doesn't get posix_spawn either: see _own_process_group.) On
+# Windows, yes: without it, a process one thread starts can inherit, and hold open, the pipes another thread
 # is setting up for its own process.
 CLOSE_FDS = sys.platform == "win32"
 
@@ -146,6 +149,88 @@ def check_names_nothing(git: "Git", name: str, *, timeout: Timeout = CLIENT_TIME
         raise error_from(args, result)
 
 
+# How long git, asked to stop, has to clean up (e.g. remove index.lock) before it's killed: as
+# long as subprocess gives a child after Ctrl-C.
+_GRACE = 0.25
+
+# How long a command that was stopped is given to let go of its output.
+_AFTER_STOP = 1.0
+
+
+def _own_process_group(timeout: float | None) -> bool:
+    """Whether git starts in a process group of its own, so that past its timeout, or on an
+    interrupt, what it started (hooks, ssh, git-remote-https, credential helpers) is stopped
+    with it: on Linux and macOS, for a command with a timeout, when the tool has no
+    controlling terminal (as in CI, or a service). With one, git stays in the terminal's
+    foreground group, as from a shell: a group of its own would be in the background, where
+    reading the terminal (a password prompt, an editor, a pager) stops it until the timeout,
+    and Ctrl-C would reach the tool alone. Only with a timeout, as a group keeps Python from
+    using posix_spawn."""
+    if timeout is None or sys.platform == "win32":
+        return False
+    try:
+        os.close(os.open("/dev/tty", os.O_RDWR))
+    except OSError:
+        return True
+    return False
+
+
+def _stop(process: subprocess.Popen[bytes], own_group: bool) -> None:
+    """Stop git, past its timeout or on an interrupt. On Linux and macOS, ask it to first, with
+    SIGINT (to its group, if it has one of its own), as Ctrl-C would, so it removes its lock
+    files, and kill it (and its group) if it's still there after _GRACE. On Windows, kill its
+    process tree (taskkill /T) and git: Windows has no signal to ask a process with no console
+    of its own to stop."""
+    if sys.platform == "win32":
+        # By its full path, as find_git finds git's: not from the current directory.
+        taskkill = os.path.join(
+            os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe"
+        )
+        # If taskkill can't run, git is still killed: what it started runs on.
+        with contextlib.suppress(OSError):
+            subprocess.run(
+                [taskkill, "/F", "/T", "/PID", str(process.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        process.kill()
+        return
+    # Gone already, or (on macOS) only zombies left in its group.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        if own_group:
+            os.killpg(process.pid, signal.SIGINT)
+        else:
+            process.send_signal(signal.SIGINT)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(_GRACE)
+    if own_group:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+    process.kill()
+
+
+def _let_go_of_output(process: subprocess.Popen[bytes]) -> None:
+    """Stop reading git's output, which something it started may still hold open. On Windows,
+    leave the pipes to communicate's reader threads, which end when the pipes do: closing one
+    would wait for its thread's read, and so for whatever holds it."""
+    for pipe in (process.stdout, process.stderr):
+        if pipe is not None and sys.platform != "win32":
+            pipe.close()
+    process.stdout = process.stderr = None
+
+
+def _remaining_output(process: subprocess.Popen[bytes]) -> tuple[bytes | None, bytes | None]:
+    """What a stopped git printed, waiting at most _AFTER_STOP for the rest: something it
+    started that outlived it could hold its output open."""
+    try:
+        return process.communicate(timeout=_AFTER_STOP)
+    except subprocess.TimeoutExpired as expired:
+        _let_go_of_output(process)
+        return expired.stdout, expired.stderr
+
+
 def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
     """The GitError for a command that failed: a subclass for a failure the library knows from
     what git said (see errors.py)."""
@@ -162,6 +247,16 @@ class Git:
     environment of every command. `timeout` is how many seconds a command may run (None: as
     long as it takes), unless given its own; one that runs longer is stopped, and raises
     GitTimeoutError.
+
+    Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
+    is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
+    quarter of a second later; the call then waits at most a second more for its output. On
+    Linux and macOS it's asked with SIGINT, as Ctrl-C asks it. When the tool has no
+    controlling terminal (as in CI, or a service), a command with a timeout runs in a process
+    group of its own, so what git started (hooks, ssh, credential helpers) is stopped with
+    it. With a terminal, git stays in its foreground, as from a shell, so it can ask for a
+    password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
+    Windows, git and what it started are killed (taskkill /T), with no chance to clean up.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
@@ -242,21 +337,30 @@ class Git:
         read, in theirs. Every git process but `popen`'s starts here, so a subclass can
         override this to change how each runs (e.g. to make every command fail once the tool
         is shutting down)."""
-        try:
-            return subprocess.run(
-                self.command(*args),
-                stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
-                stderr=subprocess.PIPE if capture_output else None,
-                input=input,
-                env=self.environment(env, english=capture_output),
-                close_fds=CLOSE_FDS,
-                check=False,
-                timeout=self.timeout if timeout is CLIENT_TIMEOUT else timeout,
-            )
-        except subprocess.TimeoutExpired as expired:
-            raise GitTimeoutError(
-                args, None, decode(expired.stderr or b""), decode(expired.stdout or b"")
-            ) from None
+        seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
+        own_group = _own_process_group(seconds)
+        with subprocess.Popen(
+            self.command(*args),
+            stdin=None if input is None else subprocess.PIPE,
+            stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
+            stderr=subprocess.PIPE if capture_output else None,
+            env=self.environment(env, english=capture_output),
+            close_fds=CLOSE_FDS,
+            process_group=0 if own_group else None,
+        ) as process:
+            try:
+                output, errors = process.communicate(input, timeout=seconds)
+            except subprocess.TimeoutExpired:
+                _stop(process, own_group)
+                output, errors = _remaining_output(process)
+                raise GitTimeoutError(
+                    args, None, decode(errors or b""), decode(output or b"")
+                ) from None
+            except BaseException:  # e.g. KeyboardInterrupt
+                _stop(process, own_group)
+                _let_go_of_output(process)
+                raise
+        return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
 
     def popen(
         self, *args: Arg, env: Mapping[str, EnvValue] | None = None

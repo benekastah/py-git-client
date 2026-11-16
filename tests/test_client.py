@@ -82,11 +82,9 @@ def test_a_failure_keeps_what_git_printed_to_stdout(repo: Git) -> None:
 
 @pytest.fixture
 def waiting(repo: Git) -> Git:
-    """repo, with aliases that run past a timeout of 0.2s: `git wait`, for 1s, and `git
-    pause`, for 0.5s."""
-    # Not much longer: on Windows, a timeout waits for what git started (here, sh and Python)
-    # to let go of its output.
-    for alias, seconds in (("wait", 1), ("pause", 0.5)):
+    """repo, with aliases that run past a timeout of 0.2s: `git wait`, for 10s, and `git
+    pause`, for 0.3s."""
+    for alias, seconds in (("wait", 10), ("pause", 0.3)):
         sleep = f'"{Path(sys.executable).as_posix()}" -c "import time; time.sleep({seconds})"'
         repo.run("config", f"alias.{alias}", f"!{sleep}")
     return repo

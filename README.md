@@ -7,8 +7,9 @@ what git-stack, git-recommit and move-forward share for that:
 
 - **One way to start git** (`Git`), the quickest each system allows: by its full path, with
   `-C` rather than a working directory, and, except on Windows (or for a long-lived process),
-  without `close_fds`, so Python can use `posix_spawn`. Text and paths go to git as git
-  expects them (see `Git.command`).
+  without `close_fds`, so Python can use `posix_spawn` (but for a command with a timeout run
+  without a terminal, which gets a process group of its own: see below). Text and paths go to
+  git as git expects them (see `Git.command`).
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
@@ -43,7 +44,7 @@ git.ok("merge-base", "--is-ancestor", "a", "b")  # True for exit 0, False for 1 
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
-# git is stopped and GitTimeoutError raised
+# git is stopped (see below) and GitTimeoutError raised
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
@@ -68,6 +69,15 @@ encoding. Both go for arguments and for values in `env`. Output is decoded as UT
 surrogateescape, so bytes that aren't UTF-8 survive a round trip through `encode`. Commands
 whose output the library reads run with `LC_ALL=C`, so git's messages are in English
 whatever the user's language; `passthrough`, whose output is the user's, keeps their locale.
+
+Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
+first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its
+lock files, and killed a quarter of a second later; the call then waits at most a second more
+for its output. When the tool has no terminal (CI, a service), a command with a timeout runs
+in a process group of its own on Linux and macOS, so what git started (hooks, ssh, credential
+helpers) is stopped with it. With a terminal, git stays in its foreground, as from a shell, so
+it can ask for a password or open an editor whatever its timeout, and only git is stopped. On
+Windows, git and what it started are killed, with no chance to clean up.
 
 ### Errors
 
