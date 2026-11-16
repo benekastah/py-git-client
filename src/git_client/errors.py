@@ -68,8 +68,8 @@ class UnknownRevisionError(GitError):
 
 
 class ConfigLockedError(GitError):
-    """Another process has the config file locked; git doesn't wait for it, so a write can
-    be tried again."""
+    """Another process has the config file locked, and kept it so for as long as git
+    retries (core.configLockTimeout, a second by default); a write can be tried again."""
 
 
 class RemoteError(GitError):
