@@ -26,7 +26,9 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it: a change
-  that could break one is a new major version, and the README's examples stay true.
+  that could break one is a new major version, and the README's examples stay true
+  (`tests/test_readme.py` runs its Python blocks, with git 2.36 or newer, the oldest
+  supported).
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
