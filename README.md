@@ -50,6 +50,8 @@ remotes = config(git)["remote.origin.url"]  # every value of each key
 for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
     print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
 
+# For a branch's short name, ask for the field "refname:lstrip=2", never "refname:short",
+# which comes back as "heads/v1" when a tag is named v1 too; and give git full ref names.
 old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
 ```

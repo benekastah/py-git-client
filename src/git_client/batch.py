@@ -61,7 +61,11 @@ def refs(git: Git, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
     refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
     read, as `--format` names them without `%(...)` (e.g. "upstream:track",
-    "committerdate:iso-strict", "push:remotename"), each of whose values must be one line."""
+    "committerdate:iso-strict", "push:remotename"), each of whose values must be one line.
+
+    For a branch's short name, ask for "refname:lstrip=2" (or "upstream:lstrip=2"), never
+    ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
+    full ref names or object ids rather than short names."""
     extra = "".join(f"%00%({name})" for name in fields)
     listing = git.run_bytes(
         "for-each-ref",

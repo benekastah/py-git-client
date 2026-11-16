@@ -69,6 +69,20 @@ def test_refs_gives_each_refs_object_upstream_and_whether_head_is_on_it(
     assert found["refs/remotes/origin/HEAD"].symref == "refs/remotes/origin/main"
 
 
+def test_refs_names_a_branch_fully_even_when_a_tag_has_its_name(repo: Git) -> None:
+    # %(refname:short) would give the branch as "heads/v1", which names no branch.
+    repo.run("tag", "v1")
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
+    repo.run("branch", "--quiet", "v1")
+    repo.run("branch", "--quiet", "--set-upstream-to", "main", "v1")
+
+    branch = refs(repo, "refs/heads/")["refs/heads/v1"]
+
+    assert branch.object == repo.run("rev-parse", "refs/heads/v1")
+    assert branch.object != repo.run("rev-parse", "refs/tags/v1")
+    assert branch.upstream == "refs/heads/main"
+
+
 def test_refs_reads_the_fields_asked_for_in_the_same_process(repo: Git) -> None:
     repo.run("branch", "--quiet", "topic")
     repo.run("branch", "--quiet", "--set-upstream-to", "main", "topic")
