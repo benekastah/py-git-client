@@ -418,3 +418,21 @@ def test_origin_github_repo_follows_pushinsteadof(repos: Path) -> None:
     clone.run("config", "url.git@github.com:.pushInsteadOf", "gh:")
     assert clone.run("remote", "get-url", "--push", "origin") == "git@github.com:example/repo"
     assert dev_project.origin_github_repo(repos / "clone") == "example/repo"
+
+
+def test_release_keeps_a_next_version_branch_it_didnt_create(
+    repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The branch appears between the refusals and `worktree add` (say, made in another
+    # terminal), so `worktree add -b` fails; the cleanup must leave it.
+    real_git = dev_project._git  # pyright: ignore[reportPrivateUsage]
+
+    def git(repo: Path, *args: str, stdin: str | None = None) -> str:
+        if args[:2] == ("worktree", "add"):
+            real_git(repo, "branch", "start-0.0.2", "origin/main")
+        return real_git(repo, *args, stdin=stdin)
+
+    monkeypatch.setattr(dev_project, "_git", git)
+    with pytest.raises(ReleaseError, match="already exists"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert Git(repos / "clone").ok("rev-parse", "--verify", "--quiet", "refs/heads/start-0.0.2")
