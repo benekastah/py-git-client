@@ -144,6 +144,36 @@ def test_text_in_env_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git
     assert repo.run_bytes("log", "-1", "--format=%an") == "Zoë 张\n".encode()
 
 
+@pytest.fixture
+def german(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A user who reads git in German, if git's translations are installed."""
+    monkeypatch.setenv("LANGUAGE", "de")
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    said = subprocess.run(
+        [repo.program, "-C", repo.directory, "rev-parse", "--verify", "no-such-branch"],
+        capture_output=True,
+        check=False,
+    ).stderr
+    if b"Needed a single revision" in said:
+        pytest.skip("git's German translation isn't installed")
+
+
+@pytest.mark.usefixtures("german")
+def test_captured_messages_are_in_english_whatever_the_users_language(repo: Git) -> None:
+    with pytest.raises(GitError) as raised:
+        repo.run("rev-parse", "--verify", "no-such-branch")
+
+    assert "Needed a single revision" in raised.value.stderr
+
+
+@pytest.mark.usefixtures("german")
+def test_passthrough_speaks_the_users_language(repo: Git, tmp_path: Path) -> None:
+    with (tmp_path / "out").open("wb") as out:
+        repo.passthrough("status", stdout=out)
+
+    assert "Auf Branch main" in (tmp_path / "out").read_text(encoding="utf-8")
+
+
 def test_runs_in_its_directory_wherever_we_are(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

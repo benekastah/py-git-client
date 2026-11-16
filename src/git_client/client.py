@@ -174,15 +174,19 @@ class Git:
             *(arg if isinstance(arg, bytes) else encode(arg) for arg in args),
         ]
 
-    def environment(self, env: Mapping[str, EnvValue] | None = None) -> dict[str, str]:
-        """The environment for a command: ours, then this client's `env`, then `env`. Off
-        Windows, git gets each value as bytes, like `command`: text as UTF-8 (whatever the
-        locale's encoding), and a path given as bytes as it is. Each is given here as the str
-        that os.fsdecode makes of those bytes, which Python turns back into them as it starts
-        git."""
+    def environment(
+        self, env: Mapping[str, EnvValue] | None = None, *, english: bool = False
+    ) -> dict[str, str]:
+        """The environment for a command: ours, then (if `english`) LC_ALL=C, so git's
+        messages are in English for the library to read, then this client's `env`, then
+        `env`. Off Windows, git gets each value as bytes, like `command`: text as UTF-8
+        (whatever the locale's encoding), and a path given as bytes as it is. Each is given
+        here as the str that os.fsdecode makes of those bytes, which Python turns back into
+        them as it starts git."""
         added = {**self.env, **(env or {})}
         return {
             **os.environ,
+            **({"LC_ALL": "C"} if english else {}),
             **{key: self._environment_value(value) for key, value in added.items()},
         }
 
@@ -202,7 +206,9 @@ class Git:
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         """Run git and return the finished process, whatever its exit status. Raises
-        GitTimeoutError if it runs past its timeout (see Git). Every git process but `popen`'s
+        GitTimeoutError if it runs past its timeout (see Git). With `capture_output`, git (and
+        any hook it runs) has LC_ALL=C, so its messages are in English whatever the user's
+        language; otherwise its output is the user's to read, in theirs. Every git process but `popen`'s
         starts here, so a subclass can override this to change how each runs (e.g. to make
         every command fail once the tool is shutting down)."""
         try:
@@ -211,7 +217,7 @@ class Git:
                 capture_output=capture_output,
                 stdout=None if capture_output else stdout,
                 input=input,
-                env=self.environment(env),
+                env=self.environment(env, english=capture_output),
                 close_fds=CLOSE_FDS,
                 check=False,
                 timeout=self.timeout if timeout is CLIENT_TIMEOUT else timeout,
@@ -226,13 +232,13 @@ class Git:
     ) -> subprocess.Popen[bytes]:
         """Start git with pipes for its stdin and stdout (its stderr goes nowhere), for a
         process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
-        has no timeout."""
+        has no timeout, and LC_ALL=C (see `process`)."""
         return subprocess.Popen(
             self.command(*args),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=self.environment(env),
+            env=self.environment(env, english=True),
             # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
             # non-inheritable, so a process that lives as long as the tool could hold the pipe
             # another thread is making, and that thread's process would never see EOF. One
