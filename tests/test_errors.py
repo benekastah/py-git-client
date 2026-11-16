@@ -89,6 +89,9 @@ def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> N
         ("cherry", "HEAD", "HEAD^{tree}"),  # unknown commit
         ("reset", "HEAD^{tree}"),  # Could not parse object
         ("rebase", "--onto", "HEAD^{tree}", "HEAD"),  # Does not point to a valid commit
+        # "expected commit type, but the object dereferences to tree type", then "not
+        # something we can merge"
+        ("merge", "HEAD^{tree}"),
     ],
 )
 def test_a_name_of_the_wrong_type_is_another_failure(repo: Git, args: tuple[str, ...]) -> None:
