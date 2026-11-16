@@ -6,10 +6,10 @@ import functools
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import IO, Final, Literal, TypeAlias
 
-from git_client.errors import GitTimeoutError, error_for
+from git_client.errors import GitError, GitTimeoutError, error_for
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -26,6 +26,10 @@ Arg: TypeAlias = str | bytes
 EnvValue: TypeAlias = str | bytes
 """A value for git's environment: text (str, e.g. an author's name), or a path in the
 filesystem (bytes, in its encoding)."""
+
+
+# git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
+_FATAL = 128
 
 
 class ClientTimeout(enum.Enum):
@@ -218,6 +222,11 @@ class Git:
         Raises GitError if it fails: a subclass (e.g. UnknownRevisionError) for a failure the
         library knows from what git said."""
         result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
+        return self._stdout(args, result)
+
+    @staticmethod
+    def _stdout(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
+        """What git printed to stdout, if it succeeded. Raises GitError if it failed."""
         if result.returncode != 0:
             stderr, stdout = decode(result.stderr), decode(result.stdout)
             raise error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
@@ -248,6 +257,25 @@ class Git:
         """Run git, discarding its output, and say whether it succeeded. Raises
         GitTimeoutError, rather than say no, if it runs past its timeout."""
         return self.process(*args, capture_output=True, env=env, timeout=timeout).returncode == 0
+
+    def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
+        """The id of the object `name` names (as `git rev-parse --verify`), or None if it
+        names nothing. Raises GitError for another failure (e.g. NotARepositoryError). For
+        many names, a CatFile takes one process for all of them."""
+        args = ("rev-parse", "--verify", "--quiet", "--end-of-options", name)
+        result = self.process(*args, capture_output=True, timeout=timeout)
+        if result.returncode == 1 and not result.stderr:
+            return None
+        return decode(self._stdout(args, result)).strip()
+
+    def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
+        """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None
+        if it has none (e.g. no identity is set). Raises GitError for an unknown variable,
+        or another failure."""
+        result = self.process("var", name, capture_output=True, timeout=timeout)
+        if result.returncode == _FATAL and error_for(decode(result.stderr), "") is GitError:
+            return None
+        return decode(self._stdout(("var", name), result)).strip()
 
     def passthrough(
         self,

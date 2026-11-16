@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, GitError, GitTimeoutError, UnknownRevisionError, find_git
+from git_client import (
+    Git,
+    GitError,
+    GitTimeoutError,
+    NotARepositoryError,
+    UnknownRevisionError,
+    find_git,
+)
 
 
 @pytest.fixture
@@ -94,6 +101,40 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
         waiting.ok("wait", timeout=0.2)
     assert client.run("pause", timeout=None) == ""
     assert client.passthrough("pause", timeout=10)
+
+
+def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
+    assert repo.resolve("main") == repo.run("rev-parse", "HEAD")
+    assert repo.resolve("no-such-branch") is None
+    assert repo.resolve("--all") is None  # a name, not an option
+
+
+def test_resolve_raises_for_what_isnt_a_name_naming_nothing(tmp_path: Path) -> None:
+    (tmp_path / "plain").mkdir()
+    git = Git(tmp_path / "plain", env={"GIT_CEILING_DIRECTORIES": str(tmp_path)})
+
+    with pytest.raises(NotARepositoryError):
+        git.resolve("HEAD")
+
+
+def test_var_gives_gits_value_for_a_variable(repo: Git) -> None:
+    ident = repo.var("GIT_AUTHOR_IDENT")
+
+    assert ident is not None
+    assert ident.startswith("Test <test@example.com> ")
+
+
+def test_var_gives_none_when_git_has_no_value_for_it(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / "config").write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
+    anonymous = Git(repo.directory, env={"GIT_CONFIG_GLOBAL": str(tmp_path / "config")})
+
+    assert anonymous.var("GIT_AUTHOR_IDENT") is None
+    with pytest.raises(GitError):
+        anonymous.var("NO_SUCH_VARIABLE")
 
 
 def test_ok_says_whether_it_succeeded(repo: Git) -> None:

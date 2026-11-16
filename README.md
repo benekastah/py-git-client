@@ -39,6 +39,8 @@ git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure
 git.ok("merge-base", "--is-ancestor", "a", "b")  # True or False
+git.resolve("main@{upstream}")  # an object id, or None if it names nothing
+git.var("GIT_AUTHOR_IDENT")  # git's value, or None if it has none (e.g. no identity)
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped and GitTimeoutError raised
 
