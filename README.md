@@ -103,7 +103,8 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   see `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git
   gets `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
   `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
-  `GIT_TERMINAL_PROMPT=0` (no asking for a password): see `GIT_SETTINGS`. A test that needs
+  `GIT_TERMINAL_PROMPT=0` (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are
+  cleared, so no program asks either): see `GIT_SETTINGS`. A test that needs
   another protocol widens it in a fixture of its own:
 
   ```python

@@ -59,12 +59,18 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             with pytest.raises(GitError, match="transport 'https' not allowed"):
                 git.run("ls-remote", "https://example.invalid/repo.git")
             assert os.environ["GIT_TERMINAL_PROMPT"] == "0"
+            with pytest.raises(GitError, match="terminal prompts disabled"):
+                git.run("credential", "fill", input="protocol=https\\nhost=example.invalid\\n\\n")
         """
     )
     # Which the tests' config doesn't set: commits would fail.
     (tmp_path / "system-config").write_text(
         "[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = no-such-gpg\n", encoding="utf-8"
     )
+    # A program that answers a password prompt, as a desktop's (e.g. KDE's ksshaskpass) does.
+    askpass = tmp_path / "askpass"
+    askpass.write_text(f"#!{sys.executable}\nprint('secret')\n", encoding="utf-8")
+    askpass.chmod(0o755)
     Git(tmp_path).run("init", "--quiet", "hooks-repository")
     for name, value in {
         "HOME": str(home),
@@ -83,6 +89,8 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
         "GIT_SEQUENCE_EDITOR": "false",
         "GIT_ALLOW_PROTOCOL": "file:https",
         "GIT_TERMINAL_PROMPT": "1",
+        "GIT_ASKPASS": str(askpass),
+        "SSH_ASKPASS": str(askpass),
     }.items():
         monkeypatch.setenv(name, value)
 
