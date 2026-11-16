@@ -267,11 +267,21 @@ stops it after the tag is pushed, the command says how to finish by hand.
 
 ### CI and dependencies
 
-CI (`.github/workflows/check.yml`) runs the static checks once, on Linux, and the tests on
-Linux, macOS and Windows, with the oldest and newest Python py-git-client supports, for
-every pull request and every push to `main`. It installs from `uv.lock` and fails if it's out
-of date. Dependabot proposes new versions of the dependencies and the workflow's actions
-weekly, each a week after its release.
+CI (`.github/workflows/ci.yml`) runs the static checks once, on Linux, and the tests on Linux,
+macOS and Windows, with the oldest and newest Python py-git-client supports, for every pull
+request and every push to `main`, along with this project's own jobs, in
+`.github/workflows/project.yml`. Each job has a time limit of at most 5 minutes: on a system
+where the tests take longer, they run in several jobs (shards), as many as the Copier answers'
+`test_shards_linux`, `test_shards_macos` or `test_shards_windows` say (AGENTS.md says how to
+change one). It installs from `uv.lock` and fails if it's out of date. A coverage job puts the
+lines and branches the tests don't run in its summary; set `fail_under` in
+`[tool.coverage.report]` to make CI fail below a total. Dependabot proposes new versions of the
+dependencies and of the actions the workflows and the setup action use, weekly, each a week
+after its release.
+
+Coverage runs only on Linux, so code that only runs on macOS or Windows counts as missed there.
+Once `fail_under` is set, mark such a branch `# pragma: no cover`, and give it a test that runs on
+its own system.
 
 ### Updating from the template
 
@@ -283,7 +293,11 @@ uvx copier update --defaults
 ```
 
 It merges them with your changes, marking conflicts as git does. It never changes this
-README, PROJECT_AGENTS.md or `.github/workflows/check.yml` once written (though it writes one
-again if it's gone): they're this project's own. `dev.py`, AGENTS.md and CLAUDE.md are the
-template's: add commands and install steps in `dev_project.py` instead (see `dev.py`'s
-docstring), and this project's own rules for agents in PROJECT_AGENTS.md.
+README, PROJECT_AGENTS.md, `docs/issues.md`, `docs/roadmap.md` or
+`.github/workflows/project.yml` once written (though it writes one again if it's gone):
+they're this project's own. `dev.py`, AGENTS.md, CLAUDE.md, `.github/workflows/ci.yml`,
+`.github/workflows/cancel.yml` and `.github/actions/setup` are the template's: add commands
+and install steps in `dev_project.py` instead (see `dev.py`'s docstring), this project's own
+rules for agents in PROJECT_AGENTS.md, and CI jobs in `project.yml`. A Dependabot bump to an
+action in `ci.yml` or `.github/actions/setup` can conflict with the template's: keep the
+newer version.
