@@ -203,10 +203,20 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
     assert all(expected)
 
 
-def test_patch_ids_gives_the_same_ids_whatever_prefixes_the_config_asks_for(repo: Git) -> None:
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("diff.noprefix", "true"),
+        ("color.ui", "always"),
+        ("diff.external", "no-such-external-diff"),
+    ],
+)
+def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
+    repo: Git, key: str, value: str
+) -> None:
     commands = topic_changing(repo, "b")
     expected = patch_ids(repo, *commands)
-    repo.run("config", "diff.noprefix", "true")
+    repo.run("config", key, value)
 
     assert patch_ids(repo, *commands) == expected
 
