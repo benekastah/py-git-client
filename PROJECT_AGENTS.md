@@ -47,3 +47,6 @@ the shape of the code or a rule here changes.
 ## CI
 
 - **main's ruleset requires the "CI passed" check.**
+- **`ci.yml`'s time limits are this project's**, lower than the template's 5 minutes: static
+  and coverage 1 minute, the tests 2 (they take up to about a minute, on macOS and Windows).
+  Where an update changes one of those lines, keep this project's limit.
