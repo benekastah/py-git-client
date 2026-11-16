@@ -94,13 +94,22 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
 `git_client.testing` is a pytest plugin. Load it in your top `conftest.py`
 (`pytest_plugins = ["git_client.testing"]`) or with `-p git_client.testing`:
 
-- **Every test's git gets a config of its own** (the `git_config` fixture, automatic): an
+- **Every test's git gets a config of its own** (automatic; `git_config` is its file): an
   identity, `main` as the first branch, no background maintenance (which would otherwise start
-  a process after each commit), and no global ignore or attributes file. The user's and the
-  system's config don't reach it, nor do git's variables that would win over it (e.g.
-  `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook
-  running the tests would pass on; see `GIT_ENVIRONMENT_VARIABLES`).
-- **Repositories built once per session, copied for each test** (`repo_templates`): building
+  a process after each commit), and no global ignore or attributes file. What a test writes
+  there (`git config --global`) no other test sees. The user's and the system's config don't
+  reach it, nor do git's variables that would win over it (e.g. `GIT_DIR`, `GIT_INDEX_FILE`,
+  `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook running the tests would pass on;
+  see `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. To add
+  entries, override the session-scoped `git_config_text` fixture:
+
+  ```python
+  @pytest.fixture(scope="session")
+  def git_config_text() -> str:
+      return TEST_GIT_CONFIG + "[commit]\n\tgpgSign = false\n"
+  ```
+- **Repositories built once per session, copied for each test** (`repo_templates`), under
+  the session's config rather than the config of the test that asks first: building
   takes many git processes, copying takes none for a repository without remotes. One with
   remotes takes one `git config` to list its URLs and, for each that points inside the
   template (`url` and `pushurl`), one to clear it and one per value, to point it at the

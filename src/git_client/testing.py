@@ -3,8 +3,8 @@ built once per session and copied for each test, and a fake `Git` for unit tests
 commands a tool runs.
 
 Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
-["git_client.testing"]`) or with `-p git_client.testing`, for the `git_config` and
-`repo_templates` fixtures. It imports pytest, so only tests should import it.
+["git_client.testing"]`) or with `-p git_client.testing`, for its fixtures (`git_config`,
+`git_config_text`, `repo_templates`). It imports pytest, so only tests should import it.
 """
 
 import functools
@@ -86,13 +86,24 @@ def real_git() -> str:
     return str(candidate) if candidate.exists() else found
 
 
+@pytest.fixture(scope="session")
+def git_config_text() -> str:
+    """The text of the tests' git config: TEST_GIT_CONFIG. A project overrides this fixture
+    to add entries, e.g. `return TEST_GIT_CONFIG + "[commit]\\n\\tgpgSign = false\\n"`."""
+    return TEST_GIT_CONFIG
+
+
 @pytest.fixture(scope="session", autouse=True)
-def git_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """Every test's git gets the tests' own config (TEST_GIT_CONFIG) as its global config, no
-    system config, and none of GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or
-    GIT_CONFIG_VALUE_n. Yields the config file's path."""
+def git_client_isolation(
+    tmp_path_factory: pytest.TempPathFactory, git_config_text: str
+) -> Iterator[Path]:
+    """Cuts git off from the user's setup for the whole session, session fixtures included:
+    its global config is the tests' own (git_config_text, in a file of the session's, which
+    each test then swaps for its own: see git_config), with no system config, and none of
+    GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or GIT_CONFIG_VALUE_n. Yields the
+    session's config file."""
     config = tmp_path_factory.mktemp("git-config") / "config"
-    config.write_text(TEST_GIT_CONFIG, encoding="utf-8")
+    config.write_text(git_config_text, encoding="utf-8")
     counted = [n for n in os.environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))]
     with pytest.MonkeyPatch.context() as patch:
         for name in [*GIT_ENVIRONMENT_VARIABLES, *counted]:
@@ -102,17 +113,35 @@ def git_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         yield config
 
 
+@pytest.fixture
+def git_config(tmp_path_factory: pytest.TempPathFactory, git_config_text: str) -> Path:
+    """This test's git config file (its global config), written from git_config_text, so
+    what one test writes there (`git config --global`) no other test sees."""
+    config = tmp_path_factory.mktemp("git-config") / "config"
+    config.write_text(git_config_text, encoding="utf-8")
+    return config
+
+
+@pytest.fixture(autouse=True)
+def git_client_test_config(git_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gives each test's git its own config, git_config's file: a project that overrides
+    git_config changes only the file."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(git_config))
+
+
 class RepoTemplates:
     """Repositories built once per session, by name, and copied for each test that wants one:
     copying a directory is much quicker than the git processes that built it.
 
     `build(name, make)` calls `make(directory)` the first time, to fill an empty directory
-    with one or more repositories (e.g. `origin.git` and a clone of it); `copy(name, dest)`
-    copies them for a test.
+    with one or more repositories (e.g. `origin.git` and a clone of it), with `config` as
+    git's global config, whichever test asks first; `copy(name, dest)` copies them for a
+    test.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, config: Path) -> None:
         self.root = root
+        self.config = config
         self._built: set[str] = set()
 
     def build(self, name: str, make: Callable[[Path], None]) -> Path:
@@ -122,7 +151,9 @@ class RepoTemplates:
         if name not in self._built:
             directory.mkdir(parents=True)
             try:
-                make(directory)
+                with pytest.MonkeyPatch.context() as patch:
+                    patch.setenv("GIT_CONFIG_GLOBAL", str(self.config))
+                    make(directory)
             except BaseException:
                 _remove(directory)
                 raise
@@ -215,9 +246,12 @@ def _moved(url: str, source: Path, dest: Path) -> str:
 
 
 @pytest.fixture(scope="session")
-def repo_templates(tmp_path_factory: pytest.TempPathFactory, git_config: Path) -> RepoTemplates:
-    """Repositories built once per session and copied for each test (see RepoTemplates)."""
-    return RepoTemplates(tmp_path_factory.mktemp("repo-templates"))
+def repo_templates(
+    tmp_path_factory: pytest.TempPathFactory, git_client_isolation: Path
+) -> RepoTemplates:
+    """Repositories built once per session, under the session's git config, and copied for
+    each test (see RepoTemplates)."""
+    return RepoTemplates(tmp_path_factory.mktemp("repo-templates"), git_client_isolation)
 
 
 class UnexpectedCommand(AssertionError):

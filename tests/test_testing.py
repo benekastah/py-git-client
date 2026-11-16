@@ -61,6 +61,100 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
     result.assert_outcomes(passed=1)
 
 
+def test_a_projects_own_git_config_fixture_keeps_the_isolation(
+    pytester: pytest.Pytester, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytester.makeconftest(
+        """
+        from pathlib import Path
+
+        import pytest
+
+        from git_client.testing import TEST_GIT_CONFIG
+
+
+        @pytest.fixture(scope="session")
+        def git_config(tmp_path_factory: pytest.TempPathFactory) -> Path:
+            config = tmp_path_factory.mktemp("own") / "config"
+            config.write_text(TEST_GIT_CONFIG, encoding="utf-8")
+            return config
+        """
+    )
+    pytester.makepyfile(
+        """
+        import os
+        from pathlib import Path
+
+        from git_client import Git
+
+
+        def test_inside(tmp_path: Path, git_config: Path) -> None:
+            assert "GIT_DIR" not in os.environ
+            assert os.environ["GIT_CONFIG_GLOBAL"] == str(git_config)
+            Git(tmp_path).run("init", "--quiet")
+        """
+    )
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
+
+    result = pytester.runpytest_subprocess("-p", "git_client.testing", "-p", "no:xdist")
+
+    result.assert_outcomes(passed=1)
+
+
+def test_each_test_has_a_config_of_its_own_with_the_projects_entries(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makeconftest(
+        """
+        import pytest
+
+        from git_client.testing import TEST_GIT_CONFIG
+
+
+        @pytest.fixture(scope="session")
+        def git_config_text() -> str:
+            return TEST_GIT_CONFIG + "[commit]\\n\\tgpgSign = false\\n"
+        """
+    )
+    pytester.makepyfile(
+        """
+        from pathlib import Path
+
+        from git_client import Git, config
+
+
+        def test_first(tmp_path: Path) -> None:
+            Git(tmp_path).run("config", "--global", "leak.x", "1")
+
+
+        def test_second(tmp_path: Path) -> None:
+            Git(tmp_path).run("init", "--quiet")
+            entries = config(Git(tmp_path))
+            assert "leak.x" not in entries
+            assert entries["commit.gpgsign"] == ["false"]
+            assert entries["user.name"] == ["Test"]
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-p", "git_client.testing", "-p", "no:xdist")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_templates_build_under_the_sessions_config(
+    repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    def make(directory: Path) -> None:
+        Git(directory).run("init", "--quiet", "repo")
+        Git(directory / "repo").run("commit", "--quiet", "--allow-empty", "-m", "first")
+
+    Git(tmp_path).run("config", "--global", "user.name", "Only This Test")
+    repo_templates.build("under-session-config", make)
+
+    copy = repo_templates.copy("under-session-config", tmp_path / "copy") / "repo"
+    assert Git(copy).run("log", "-1", "--format=%an") == "Test"
+
+
 def test_real_git_is_the_git_in_gits_exec_path() -> None:
     exec_path = Path(Git(".", program=real_git()).run("--exec-path"))
     beside = exec_path / ("git.exe" if sys.platform == "win32" else "git")
