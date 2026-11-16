@@ -112,7 +112,10 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
         re.compile(
             "unknown revision|bad revision '|Needed a single revision|^fatal: bad object "
             "|(?i:not a valid object name)|invalid reference: |invalid upstream '"
-            "| - not something we can merge|Failed to resolve '.*' as a valid ref",
+            "| - not something we can merge|Failed to resolve '.*' as a valid ref"
+            # Of a full id the repository lacks, as some commands say it.
+            "|Not a valid commit name |Invalid revision range |Does not point to a valid commit '"
+            "| is not a valid object$|Could not parse object '|^fatal: unknown commit ",
             re.MULTILINE,
         ),
     ),

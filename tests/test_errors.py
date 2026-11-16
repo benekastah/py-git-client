@@ -58,6 +58,13 @@ MISSING = "0123" * 10
         ("merge", "no-such-branch"),  # not something we can merge
         ("merge-tree", "--write-tree", "main", "no-such-branch"),
         ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
+        ("merge-base", "HEAD", MISSING),  # Not a valid commit name
+        ("merge-base", "--is-ancestor", MISSING, "HEAD"),
+        ("log", f"HEAD..{MISSING}"),  # Invalid revision range
+        ("rebase", "--onto", MISSING, "HEAD"),  # Does not point to a valid commit
+        ("commit-tree", "-p", MISSING, "HEAD^{tree}"),  # <id> is not a valid object
+        ("reset", MISSING),  # Could not parse object
+        ("cherry", "HEAD", MISSING),  # unknown commit
     ],
 )
 def test_a_revision_that_names_nothing(repo: Git, args: tuple[str, ...]) -> None:
