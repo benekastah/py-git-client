@@ -20,8 +20,8 @@ from git_client.errors import GitError, GitTimeoutError, error_for
 # and no cwd) Python starts git with posix_spawn, which on macOS is about a third faster than
 # forking. (On macOS a new pipe is inheritable for a moment; see Git.popen. A command given a
 # process group of its own doesn't get posix_spawn either: see _own_process_group.) On
-# Windows, yes: without it, a process one thread starts can inherit, and hold open, the pipes another thread
-# is setting up for its own process.
+# Windows, yes: without it, a process one thread starts can inherit, and hold open, the pipes
+# another thread is setting up for its own process.
 CLOSE_FDS = sys.platform == "win32"
 
 Arg: TypeAlias = str | bytes
@@ -264,9 +264,6 @@ class Git:
     an exception in its main thread, e.g. `signal.signal(signal.SIGTERM, lambda *_:
     sys.exit(143))`: any exception that reaches a running command stops git as an interrupt
     does.
-
-    Every command is given its directory with `-C` rather than as a working directory, which
-    would keep Python from using posix_spawn.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
