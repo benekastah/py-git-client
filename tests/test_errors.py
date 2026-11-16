@@ -5,7 +5,7 @@ import http.server
 import socket
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -180,17 +180,29 @@ def test_a_remote_that_cant_be_reached(repo: Git) -> None:
         repo.run("ls-remote", f"http://127.0.0.1:{port}/repo.git", env=LOCAL_HTTP)
 
 
-@pytest.fixture
-def behind(repo: Git, tmp_path: Path) -> Git:
-    """repo, with origin, a bare clone of it, to which another clone has pushed a commit."""
-    origin, other = tmp_path / "origin.git", tmp_path / "other"
+# The repo_from fixture's type (see conftest.py).
+RepoFrom = Callable[[str, Callable[[Git], None]], Git]
+
+
+def fall_behind(repo: Git) -> None:
+    """Give repo origin, a bare clone of it, to which another clone has pushed a commit, and
+    a commit of its own."""
+    origin, other = (
+        Path(repo.directory).parent / "origin.git",
+        Path(repo.directory).parent / "other",
+    )
     repo.run("clone", "--quiet", "--bare", repo.directory, str(origin))
     repo.run("clone", "--quiet", str(origin), str(other))
     Git(other).run("commit", "--quiet", "--allow-empty", "-m", "theirs")
     Git(other).run("push", "--quiet", "origin", "main")
     repo.run("remote", "add", "origin", str(origin))
     repo.run("commit", "--quiet", "--allow-empty", "-m", "ours")
-    return repo
+
+
+@pytest.fixture
+def behind(repo_from: RepoFrom) -> Git:
+    """A repository whose origin has a commit it doesn't (see fall_behind)."""
+    return repo_from("behind", fall_behind)
 
 
 def test_a_push_that_needs_a_fetch_first(behind: Git) -> None:
@@ -215,16 +227,20 @@ def test_a_push_the_remote_refuses(repo: Git, tmp_path: Path) -> None:
         other.run("push", "--quiet", "origin", "main")
 
 
-@pytest.fixture
-def diverged(repo: Git) -> Git:
-    """repo, with a branch, topic, that changes `a` as main does too."""
+def diverge(repo: Git) -> None:
+    """Give repo a branch, topic, that changes `a` as main does too."""
     repo.run("switch", "--quiet", "-c", "topic")
     (Path(repo.directory) / "a").write_bytes(b"topic\n")
     repo.run("commit", "--quiet", "-am", "topic")
     repo.run("switch", "--quiet", "main")
     (Path(repo.directory) / "a").write_bytes(b"main\n")
     repo.run("commit", "--quiet", "-am", "main")
-    return repo
+
+
+@pytest.fixture
+def diverged(repo_from: RepoFrom) -> Git:
+    """A repository whose main and topic change `a` each (see diverge)."""
+    return repo_from("diverged", diverge)
 
 
 @pytest.mark.parametrize(
