@@ -25,10 +25,14 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
-- **The API is a contract.** git-stack, git-recommit and move-forward build on it: a change
-  that could break one is a new major version, and the README's examples stay true
-  (`tests/test_readme.py` runs its Python blocks, with git 2.36 or newer, the oldest
-  supported).
+- **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
+  README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
+  or newer, the oldest supported). They depend on
+  `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
+  their uv.lock.
+- **Versions.** A change that could break git-stack, git-recommit or move-forward increments
+  the patch version. Each version is released as a git tag, `vX.Y.Z`, as often as needed.
+  `main` always carries the next version to release: after releasing 0.0.1, it moves to 0.0.2.
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
