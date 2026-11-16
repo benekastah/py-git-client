@@ -62,6 +62,7 @@ def refs(git: Git, *patterns: str) -> dict[str, Ref]:
     listing = git.run_bytes(
         "for-each-ref",
         "--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD)",
+        "--end-of-options",
         *patterns,
     )
     found: dict[str, Ref] = {}

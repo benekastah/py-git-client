@@ -76,6 +76,12 @@ def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main", "refs/heads/a\u2028b"}
 
 
+def test_refs_takes_a_pattern_that_looks_like_an_option_as_a_pattern(repo: Git) -> None:
+    repo.run("branch", "topic")
+
+    assert refs(repo, "--points-at=topic") == {}
+
+
 def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> None:
     repo.run("switch", "--quiet", "-c", "topic")
     for name in ("b", "c"):
