@@ -8,11 +8,13 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import IO, Self, TypeAlias
 
-# Whether git's processes are started with close_fds. Not on Linux or macOS: Python opens its
-# own files non-inheritable (PEP 446), so there's nothing to close, and without close_fds (and
-# with git's full path, and no cwd) Python starts git with posix_spawn, which on macOS is about
-# a third faster than forking. On Windows, yes: without it, a process one thread starts can
-# inherit, and hold open, the pipes another thread is setting up for its own process.
+# Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
+# opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
+# inherited, as it would if run from a shell, and without close_fds (and with git's full path,
+# and no cwd) Python starts git with posix_spawn, which on macOS is about a third faster than
+# forking. (On macOS a new pipe is inheritable for a moment; see Git.popen.) On Windows, yes:
+# without it, a process one thread starts can inherit, and hold open, the pipes another thread
+# is setting up for its own process.
 CLOSE_FDS = sys.platform == "win32"
 
 Arg: TypeAlias = str | bytes
@@ -157,7 +159,11 @@ class Git:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=self.environment(env),
-            close_fds=CLOSE_FDS,
+            # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
+            # non-inheritable, so a process that lives as long as the tool could hold the pipe
+            # another thread is making, and that thread's process would never see EOF. One
+            # process a session doesn't need posix_spawn's speed.
+            close_fds=True,
         )
 
     def run_bytes(

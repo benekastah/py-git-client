@@ -6,8 +6,9 @@ times a command is only as fast as the number of git processes it starts. py-git
 what git-stack, git-recommit and move-forward share for that:
 
 - **One way to start git** (`Git`), the quickest each system allows: by its full path, with
-  `-C` rather than a working directory, and, except on Windows, without `close_fds`, so Python
-  can use `posix_spawn`. Text and paths go to git as git expects them (see `Git.command`).
+  `-C` rather than a working directory, and, except on Windows (or for a long-lived process),
+  without `close_fds`, so Python can use `posix_spawn`. Text and paths go to git as git
+  expects them (see `Git.command`).
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).

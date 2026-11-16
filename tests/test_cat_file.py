@@ -1,4 +1,5 @@
 import gc
+import os
 import subprocess
 import sys
 import warnings
@@ -83,6 +84,25 @@ def test_works_in_a_sha256_repository(tmp_path: Path) -> None:
         assert len(blob) == 64
         assert cat_file.resolve(blob) == blob
         assert cat_file.read(blob) == ("blob", b"content\n")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" and sys.version_info < (3, 12),
+    reason="os.set_blocking takes a pipe on Windows only from Python 3.12",
+)
+def test_its_process_holds_no_descriptor_of_ours_open(repo: Git) -> None:
+    # One the tool inherited, say, or a pipe another thread was setting up for its process:
+    # held by a cat-file that lives as long as the tool, it would never see EOF.
+    read_end, write_end = os.pipe()
+    os.set_inheritable(write_end, True)
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+        os.close(write_end)
+        os.set_blocking(read_end, False)
+        try:
+            assert os.read(read_end, 1) == b""
+        finally:
+            os.close(read_end)
 
 
 def test_stopping_leaves_no_pipe_open(repo: Git) -> None:
