@@ -130,10 +130,10 @@ class RepoTemplates:
         return directory
 
     def copy(self, name: str, dest: Path) -> Path:
-        """Copy the repositories `build` made for `name` to `dest`, pointing remotes that named
-        one of them at its copy. Returns `dest`."""
+        """Copy the repositories `build` made for `name` to `dest` (symlinks as symlinks),
+        pointing remotes that named one of them at its copy. Returns `dest`."""
         source = self.root / name
-        shutil.copytree(source, dest)
+        shutil.copytree(source, dest, symlinks=True)
         _repoint_remotes(source, dest)
         return dest
 

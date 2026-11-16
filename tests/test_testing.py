@@ -136,6 +136,28 @@ def test_copying_a_repository_without_remotes_starts_no_git(
     assert (repo_templates.copy("plain", tmp_path / "copy") / "repo" / ".git").is_dir()
 
 
+def make_symlink(directory: Path) -> None:
+    Git(directory).run("init", "--quiet", "repo")
+    (directory / "repo" / "a").write_bytes(b"a\n")
+    (directory / "repo" / "link").symlink_to("a")
+    (directory / "repo" / "dangling").symlink_to("no-such-file")
+    Git(directory / "repo").run("add", ".")
+    Git(directory / "repo").run("commit", "--quiet", "-m", "links")
+
+
+def test_a_copy_keeps_symlinks_as_they_are(repo_templates: RepoTemplates, tmp_path: Path) -> None:
+    try:
+        (tmp_path / "link").symlink_to("target")
+    except OSError:
+        pytest.skip("symlinks can't be made here (Windows without developer mode)")
+    repo_templates.build("symlink", make_symlink)
+
+    copy = repo_templates.copy("symlink", tmp_path / "copy") / "repo"
+
+    assert Git(copy).run("status", "--porcelain") == ""
+    assert (copy / "link").readlink() == Path("a")
+
+
 def test_a_template_is_built_once(repo_templates: RepoTemplates) -> None:
     builds: list[Path] = []
 
