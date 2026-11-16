@@ -138,7 +138,13 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
       return Git(repo_templates.copy("origin-and-clone", tmp_path / "repos") / "clone")
   ```
 - **`real_git()`**: git itself, from `git --exec-path`, rather than a wrapper or launcher that
-  starts another process for each.
+  starts another process for each. The plugin runs it for its own git (repointing a copy's
+  remotes), but your tool runs `find_git`'s: point your tool's variable at it in your top
+  `conftest.py`, at import, before anything calls `find_git`, which caches its answer:
+
+  ```python
+  os.environ["MY_TOOL_GIT"] = real_git()
+  ```
 - **`git_calls`**: the arguments of each git process a `Git` starts during the test, while
   real git runs, to count a tool's processes or check the ones it starts:
 

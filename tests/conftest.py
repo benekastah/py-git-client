@@ -1,9 +1,15 @@
+import os
 from pathlib import Path
 
 import pytest
 
-from git_client import Git
-from git_client.testing import RepoTemplates
+from git_client import Git, find_git
+from git_client.testing import RepoTemplates, real_git
+
+# These tests run git itself, rather than a wrapper on PATH, as a project's tests run its tool
+# on real_git(): first on PATH, before anything but real_git asks find_git.
+os.environ["PATH"] = os.pathsep.join([str(Path(real_git()).parent), os.environ.get("PATH", "")])
+find_git.cache_clear()
 
 
 def make_repo(directory: Path) -> None:

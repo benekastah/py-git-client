@@ -96,7 +96,8 @@ fake ssh, widens GIT_ALLOW_PROTOCOL itself); and no asking for a username or pas
 def real_git() -> str:
     """git itself, from `git --exec-path`, rather than a wrapper (e.g. git-ai) or Git for
     Windows' launcher on PATH, which start another process for each; else the git on PATH.
-    Found once per process."""
+    Found once per process. The plugin runs it for its own git; a project points the tool it
+    tests at it (see the README)."""
     found = find_git()
     exec_path = Git(".", program=found).run_bytes("--exec-path")
     candidate = Path(os.fsdecode(exec_path.strip())) / (
@@ -235,7 +236,7 @@ def _repoint_remotes(source: Path, dest: Path) -> None:
         config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
         if not config.is_file():
             continue
-        git = Git(repo)
+        git = Git(repo, program=real_git())
         for key, values in _remote_urls(decode(config.read_bytes())).items():
             moved = [_moved(url, source, dest) for url in values]
             if moved == values:

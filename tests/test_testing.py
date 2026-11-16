@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, RefUpdate, config, update_refs
+from git_client import CatFile, Git, RefUpdate, config, find_git, update_refs
 from git_client.testing import FakeGit, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -190,6 +190,10 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
     ]
 
 
+def test_these_tests_run_the_real_git() -> None:
+    assert find_git() == real_git()
+
+
 def test_real_git_is_the_git_in_gits_exec_path() -> None:
     exec_path = Path(Git(".", program=real_git()).run("--exec-path"))
     beside = exec_path / ("git.exe" if sys.platform == "win32" else "git")
@@ -237,6 +241,26 @@ def test_a_copy_takes_one_git_per_url_it_repoints(
     assert [call[0] for call in git_calls] == ["config", "config"]  # url and pushurl
     for key in ("remote.origin.url", "remote.origin.pushurl"):
         assert Path(Git(copy / "clone").run("config", key)) == copy / "origin.git"
+
+
+@pytest.mark.usefixtures("fresh_find_git")
+def test_a_copy_runs_the_real_git_whatever_git_is_on_path(
+    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_templates.build("origin-and-clone", make_origin_and_clone)
+    real_git()  # found once per process, before PATH changes, as in a session
+    # A git on PATH that can't run, so that only real_git()'s does.
+    name = "git.exe" if sys.platform == "win32" else "git"
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / name).write_bytes(b"")
+    (tmp_path / "bin" / name).chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    find_git.cache_clear()
+
+    copy = repo_templates.copy("origin-and-clone", tmp_path / "copy")
+
+    url = Git(copy / "clone", program=real_git()).run("config", "remote.origin.url")
+    assert Path(url) == copy / "origin.git"
 
 
 def make_nested(directory: Path) -> None:
