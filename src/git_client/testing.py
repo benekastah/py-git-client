@@ -167,8 +167,9 @@ class RepoTemplates:
         self._built: set[str] = set()
 
     def build(self, name: str, make: Callable[[Path], None]) -> Path:
-        """The directory `make` filled, making it the first time `name` is asked for. If
-        `make` fails, nothing is kept, so the next build tries again and fails as it did."""
+        """The directory `make` filled, making it the first time `name` is asked for, then
+        deleting git's sample hooks (`hooks/*.sample`). If `make` fails, nothing is kept, so
+        the next build tries again and fails as it did."""
         directory = self.root / name
         if name not in self._built:
             directory.mkdir(parents=True)
@@ -179,6 +180,9 @@ class RepoTemplates:
             except BaseException:
                 _remove(directory)
                 raise
+            # Fewer files to copy; the hooks directories stay, for a test to add a hook to.
+            for sample in directory.glob("**/hooks/*.sample"):
+                sample.unlink()
             self._built.add(name)
         return directory
 

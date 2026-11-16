@@ -293,6 +293,16 @@ def test_repoints_every_url_of_a_repository_however_deep(
     assert Path(work.run("config", "remote.byhand.url")) == copy / "up #1.git"
 
 
+def test_a_template_keeps_no_sample_hooks(repo_templates: RepoTemplates, tmp_path: Path) -> None:
+    repo_templates.build("origin-and-clone", make_origin_and_clone)
+
+    copy = repo_templates.copy("origin-and-clone", tmp_path / "copy")
+
+    for hooks in (copy / "clone" / ".git" / "hooks", copy / "origin.git" / "hooks"):
+        assert hooks.is_dir()
+        assert list(hooks.iterdir()) == []
+
+
 def test_copying_a_repository_without_remotes_starts_no_git(
     repo_templates: RepoTemplates, tmp_path: Path, git_calls: list[list[str]]
 ) -> None:
