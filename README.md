@@ -89,9 +89,9 @@ signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # 128 + SIGTERM, as a s
 ```
 
 Like Ctrl-C's `KeyboardInterrupt`, that exception is raised in the main thread alone, so it
-stops only a git the main thread runs. A tool that runs git in other threads stops them itself
-before it exits (e.g. they check a flag it sets, and it joins them), or gives their commands no
-timeout, so git stays in the tool's group.
+stops only a git the main thread runs. A git another thread runs goes on until it finishes or
+times out, and is orphaned if the tool is killed first; to have it stopped with the tool, give
+those commands no timeout, so git stays in the tool's group and gets the signal itself.
 
 ### Errors
 

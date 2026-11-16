@@ -264,9 +264,10 @@ class Git:
     an exception in its main thread, e.g. `signal.signal(signal.SIGTERM, lambda *_:
     sys.exit(143))`: any exception that reaches a running command stops git as an interrupt
     does. Like Ctrl-C's KeyboardInterrupt, it's raised in the main thread alone, so it stops
-    only a git the main thread runs: a tool that runs git in other threads stops them itself
-    before it exits (e.g. they check a flag it sets, and it joins them), or gives their
-    commands no timeout, so git stays in the tool's group.
+    only a git the main thread runs. A git another thread runs goes on until it finishes or
+    times out, and is orphaned if the tool is killed first; to have it stopped with the
+    tool, give those commands no timeout, so git stays in the tool's group and gets the
+    signal itself.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
