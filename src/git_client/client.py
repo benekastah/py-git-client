@@ -10,7 +10,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import IO, Final, Literal, TypeAlias
 
-from git_client.errors import GitTimeoutError, error_for
+from git_client.errors import GitError, GitTimeoutError, error_for
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -98,6 +98,13 @@ def encode(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
+def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
+    """The GitError for a command that failed: a subclass for a failure the library knows from
+    what git said (see errors.py)."""
+    stderr, stdout = decode(result.stderr), decode(result.stdout or b"")
+    return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
+
+
 class Git:
     """Runs git in `directory`, as `git -C <directory>` does.
 
@@ -179,16 +186,18 @@ class Git:
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         """Run git and return the finished process, whatever its exit status. Raises
-        GitTimeoutError if it runs past its timeout (see Git). With `capture_output`, git (and
-        any hook it runs) has LC_ALL=C, so its messages are in English whatever the user's
-        language; otherwise its output is the user's to read, in theirs. Every git process but `popen`'s
-        starts here, so a subclass can override this to change how each runs (e.g. to make
-        every command fail once the tool is shutting down)."""
+        GitTimeoutError if it runs past its timeout (see Git). With `capture_output`, its
+        stderr is captured, and its stdout too unless `stdout` says where it goes (e.g.
+        subprocess.DEVNULL); git (and any hook it runs) then has LC_ALL=C, so its messages
+        are in English whatever the user's language. Otherwise its output is the user's to
+        read, in theirs. Every git process but `popen`'s starts here, so a subclass can
+        override this to change how each runs (e.g. to make every command fail once the tool
+        is shutting down)."""
         try:
             return subprocess.run(
                 self.command(*args),
-                capture_output=capture_output,
-                stdout=None if capture_output else stdout,
+                stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
+                stderr=subprocess.PIPE if capture_output else None,
                 input=input,
                 env=self.environment(env, english=capture_output),
                 close_fds=CLOSE_FDS,
@@ -236,8 +245,7 @@ class Git:
     def _stdout(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
         """What git printed to stdout, if it succeeded. Raises GitError if it failed."""
         if result.returncode != 0:
-            stderr, stdout = decode(result.stderr), decode(result.stdout)
-            raise error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
+            raise error_from(args, result)
         return result.stdout
 
     def run(
@@ -262,9 +270,17 @@ class Git:
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bool:
-        """Run git, discarding its output, and say whether it succeeded. Raises
-        GitTimeoutError, rather than say no, if it runs past its timeout."""
-        return self.process(*args, capture_output=True, env=env, timeout=timeout).returncode == 0
+        """Run a git command whose exit status is a yes-or-no answer, discarding its output:
+        True for 0, False for 1, which is git's no (e.g. `merge-base --is-ancestor`, `diff
+        --quiet`, `merge-tree`'s conflicts, `config --get` of a key that isn't set). Raises
+        GitError for any other exit status, as `run` does (e.g. UnknownRevisionError for a
+        revision that names nothing), and GitTimeoutError if it runs past its timeout."""
+        result = self.process(
+            *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
+        )
+        if result.returncode not in (0, 1):
+            raise error_from(args, result)
+        return result.returncode == 0
 
     def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """The id of the object `name` names (as `git rev-parse --verify`), or None if it

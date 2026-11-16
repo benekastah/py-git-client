@@ -173,9 +173,23 @@ def test_var_raises_for_what_isnt_a_missing_value(repo: Git) -> None:
         repo.var("GIT_AUTHOR_IDENT")
 
 
-def test_ok_says_whether_it_succeeded(repo: Git) -> None:
-    assert repo.ok("rev-parse", "--verify", "main")
-    assert not repo.ok("rev-parse", "--verify", "no-such-branch")
+def test_ok_answers_yes_for_exit_0_and_no_for_exit_1(repo: Git) -> None:
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
+    (Path(repo.directory) / "a").write_bytes(b"changed\n")
+
+    assert repo.ok("merge-base", "--is-ancestor", "HEAD~1", "HEAD")
+    assert not repo.ok("merge-base", "--is-ancestor", "HEAD", "HEAD~1")
+    assert repo.ok("diff", "--quiet", "--cached")
+    assert not repo.ok("diff", "--quiet")
+    assert not repo.ok("config", "--get", "no.such-key")
+
+
+def test_ok_raises_for_a_failure(repo: Git) -> None:
+    with pytest.raises(UnknownRevisionError) as raised:
+        repo.ok("merge-base", "--is-ancestor", "no-such-branch", "HEAD")
+
+    assert raised.value.returncode == 128
+    assert "no-such-branch" in raised.value.stderr
 
 
 def test_input_and_output_keep_their_line_endings(repo: Git) -> None:

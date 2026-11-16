@@ -38,7 +38,7 @@ from git_client import CatFile, Git, RefUpdate, config, config_key, refs, update
 git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (the default): none
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure
-git.ok("merge-base", "--is-ancestor", "a", "b")  # True or False
+git.ok("merge-base", "--is-ancestor", "a", "b")  # True for exit 0, False for 1 (git's no)
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
@@ -84,8 +84,9 @@ said and raises a subclass:
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
 | `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
 
-Any other failure is a plain `GitError`. `ok` and `passthrough` say whether git succeeded
-instead, but raise `GitTimeoutError` past a timeout.
+Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
+(True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
+`passthrough` says whether git succeeded instead, but raises `GitTimeoutError` past a timeout.
 
 ## Testing a tool that uses it
 
