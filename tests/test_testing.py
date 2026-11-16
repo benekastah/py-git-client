@@ -1,5 +1,5 @@
-import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,6 +36,8 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             git.run("init", "--quiet")
             (tmp_path / "ignored-by-user").write_text("x", encoding="utf-8")
             assert git.run("status", "--porcelain") == "?? ignored-by-user"
+            git.run("add", "ignored-by-user")
+            assert (tmp_path / ".git" / "index").is_file()
             git.run("commit", "--quiet", "--allow-empty", "-m", "first")
             assert git.run("log", "-1", "--format=%an %cn") == "Test Test"
         """
@@ -56,7 +58,7 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
 
 def test_real_git_is_the_git_in_gits_exec_path() -> None:
     exec_path = Path(Git(".", program=real_git()).run("--exec-path"))
-    beside = exec_path / ("git.exe" if os.name == "nt" else "git")
+    beside = exec_path / ("git.exe" if sys.platform == "win32" else "git")
 
     if beside.exists():
         assert Path(real_git()) == beside
@@ -140,7 +142,9 @@ def test_a_template_is_built_once(repo_templates: RepoTemplates) -> None:
 
 def test_a_build_that_fails_leaves_nothing_behind(repo_templates: RepoTemplates) -> None:
     def fails(directory: Path) -> None:
-        (directory / "half-made").write_text("", encoding="utf-8")
+        # A commit, so there are read-only objects to delete, which on Windows takes more.
+        Git(directory).run("init", "--quiet", "repo")
+        Git(directory / "repo").run("commit", "--quiet", "--allow-empty", "-m", "first")
         raise RuntimeError("couldn't make it")
 
     for _ in range(2):

@@ -10,6 +10,7 @@ Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 import functools
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -59,9 +60,17 @@ GIT_ENVIRONMENT_VARIABLES = (
     "GIT_CONFIG_PARAMETERS",
     "GIT_CONFIG_COUNT",
     "GIT_REFLOG_ACTION",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_TEMPLATE_DIR",
 )
-"""git's variables for which repository to use and who's committing, which win over any
-config: the tests' git mustn't inherit them, e.g. from a git hook that runs the tests."""
+"""git's variables for which repository to use, what's in it and who's committing (those
+`git rev-parse --local-env-vars` lists, and more), which win over any config, and
+GIT_TEMPLATE_DIR, which would copy a user's hooks into each new repository: the tests' git
+mustn't inherit them, e.g. from a git hook that runs the tests."""
 
 
 @functools.cache
@@ -116,7 +125,7 @@ class RepoTemplates:
             try:
                 make(directory)
             except BaseException:
-                shutil.rmtree(directory)
+                _remove(directory)
                 raise
             self._built.add(name)
         return directory
@@ -130,9 +139,24 @@ class RepoTemplates:
         return dest
 
 
+def _remove(directory: Path) -> None:
+    """Delete directory and what's in it, read-only files included: git makes its objects
+    read-only, which on Windows keeps rmtree from deleting them."""
+
+    def make_writable_and_retry(remove: Callable[[str], object], path: str, *_: object) -> None:
+        os.chmod(path, stat.S_IWRITE)
+        remove(path)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(directory, onexc=make_writable_and_retry)
+    else:
+        shutil.rmtree(directory, onerror=make_writable_and_retry)
+
+
 def repositories(root: Path) -> Iterator[Path]:
     """Every repository under root, root included: each directory with a `.git` in it, and each
-    bare repository (a directory with `HEAD`, `config` and `objects`)."""
+    bare repository (a directory with `HEAD`, `config` and `objects`). One whose `.git` is a
+    file (a submodule, or a linked worktree) is listed, but its `gitdir:` isn't followed."""
     for directory, subdirectories, files in os.walk(root):
         if ".git" in subdirectories or ".git" in files:
             yield Path(directory)
@@ -147,8 +171,13 @@ def repoint_remotes(source: Path, dest: Path) -> None:
     """In each repository under `dest` (copied from `source`), point every remote URL (`url`
     and `pushurl`) that's a path under `source` at the same path under `dest`, through `git
     config` rather than by editing the file, where git escapes backslashes (Windows' paths).
-    A repository whose config names no remote starts no process."""
+    A repository whose config names no remote starts no process; one that does starts one
+    to list its URLs, then, for each that moves, one to clear it and one per value.
+    Submodules and linked worktrees (whose `.git` is a file) aren't repointed: their
+    `gitdir:` still names the template."""
     for repo in repositories(dest):
+        if (repo / ".git").is_file():
+            continue
         config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
         if not config.is_file() or "[remote" not in config.read_text(
             encoding="utf-8", errors="replace"

@@ -99,9 +99,10 @@ instead, but raise `GitTimeoutError` past a timeout.
   committing (e.g. `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_AUTHOR_NAME`, which a git hook running
   the tests would pass on).
 - **Repositories built once per session, copied for each test** (`repo_templates`): building
-  takes many git processes, copying takes none, but for a `git config` or two in each copied
-  repository whose remotes point inside the template, to point them (`url` and `pushurl`) at
-  the copy's.
+  takes many git processes, copying takes none for a repository without remotes. One with
+  remotes takes one `git config` to list its URLs and, for each that points inside the
+  template (`url` and `pushurl`), one to clear it and one per value, to point it at the
+  copy's. Submodules and linked worktrees, whose `.git` is a file, aren't repointed.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:
