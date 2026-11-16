@@ -10,6 +10,7 @@ import pytest
 
 from git_client import CatFile, Git, GitError, NotARepositoryError, UnknownRevisionError
 from git_client.client import Arg, EnvValue
+from git_client.testing import real_git
 
 
 def test_resolves_names_to_object_ids(repo: Git) -> None:
@@ -49,10 +50,12 @@ def test_keeps_answering_after_a_name_git_exits_on(repo: Git) -> None:
 
 
 class StartsKeepingGit(Git):
-    """A Git that keeps each long-lived process it starts."""
+    """A Git that keeps each long-lived process it starts. It runs git itself: Git for
+    Windows' launcher on PATH starts git as a child, which killing the launcher leaves
+    running."""
 
     def __init__(self, directory: str) -> None:
-        super().__init__(directory)
+        super().__init__(directory, program=real_git())
         self.started: list[subprocess.Popen[bytes]] = []
 
     def popen(
