@@ -21,8 +21,9 @@ packages = ["src/git_client"]
 
 [tool.pytest]
 testpaths = ["tests"]
-# One worker per CPU (pytest-xdist); `-n 0` runs them one at a time, e.g. to debug.
-addopts = ["--numprocesses", "auto", "-p", "git_client.testing"]
+# One worker per CPU (pytest-xdist); `-n 0` runs them one at a time, e.g. to debug. -rs says
+# why each skipped test was skipped (e.g. no German translation of git on this machine).
+addopts = ["--numprocesses", "auto", "-p", "git_client.testing", "-rs"]
 
 [tool.ruff]
 line-length = 100

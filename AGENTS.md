@@ -26,7 +26,9 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it: a change
-  that could break one is a new major version, and the README's examples stay true.
+  that could break one is a new major version, and the README's examples stay true
+  (`tests/test_readme.py` runs its Python blocks, with git 2.36 or newer, the oldest
+  supported).
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
@@ -43,7 +45,7 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   in strict mode, then the tests. `python3 dev.py coverage` shows what the tests don't run.
   The pre-commit hook formats and lint-fixes staged files; the pre-push hook runs every
   check before a push to `main`. PRs are squash-merged, so the check must pass on a PR's
-  last commit.
+  last commit; and CI must pass on it too: main's ruleset requires the "CI passed" check.
 - **Tests keep to themselves**: no network, and not the user's real config, home directory
   or other state; use `tmp_path`, and give programs the tests start a config that reaches
   nothing.
@@ -55,8 +57,10 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   session and copy them for each test; and prefer one long-lived process (e.g.
   `git cat-file --batch`) over one per request.
 - **Each CI job has a time limit** (`timeout-minutes` in `.github/workflows/check.yml`),
-  about 20% over how long it takes. If a job runs into its limit, speed it up if you can
-  (the tests, or the code itself); only if you can't, raise the limit, saying why.
+  about 20% over how long it takes in finished runs, rounded up to a whole minute; until
+  there are some, 5 minutes on Linux and 10 on macOS and Windows. "CI passed" keeps at least
+  2, for its force-cancel step's minute. If a job runs into its limit, speed it up if you
+  can (the tests, or the code itself); only if you can't, raise the limit, saying why.
 
 ## Linux, macOS and Windows
 
