@@ -93,11 +93,15 @@ instead, but raise `GitTimeoutError` past a timeout.
 (`pytest_plugins = ["git_client.testing"]`) or with `-p git_client.testing`:
 
 - **Every test's git gets a config of its own** (the `git_config` fixture, automatic): an
-  identity, `main` as the first branch, and no background maintenance, which would otherwise
-  start a process after each commit. The user's and the system's config don't reach it.
+  identity, `main` as the first branch, no background maintenance (which would otherwise start
+  a process after each commit), and no global ignore or attributes file. The user's and the
+  system's config don't reach it, nor do git's variables for which repository to use or who's
+  committing (e.g. `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_AUTHOR_NAME`, which a git hook running
+  the tests would pass on).
 - **Repositories built once per session, copied for each test** (`repo_templates`): building
-  takes many git processes, copying takes none. Remotes pointing inside a template are pointed
-  at the copy's.
+  takes many git processes, copying takes none, but for a `git config` or two in each copied
+  repository whose remotes point inside the template, to point them (`url` and `pushurl`) at
+  the copy's.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:

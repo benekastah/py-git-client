@@ -7,10 +7,13 @@ Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 `repo_templates` fixtures. It imports pytest, so only tests should import it.
 """
 
+import functools
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -27,37 +30,67 @@ TEST_GIT_CONFIG = """\
 \tauto = false
 [gc]
 \tauto = 0
+[core]
+\texcludesFile =
+\tattributesFile =
 """
-"""The tests' git config: an identity, main as the first branch, and no background
-maintenance, which would start a `git maintenance run --auto` after each commit, fetch and
-push."""
+"""The tests' git config: an identity, main as the first branch, no background maintenance
+(which would start a `git maintenance run --auto` after each commit, fetch and push), and no
+global ignore or attributes file (`~/.config/git/ignore` and `attributes` would otherwise
+still apply)."""
+
+GIT_ENVIRONMENT_VARIABLES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_DATE",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_DATE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_REFLOG_ACTION",
+)
+"""git's variables for which repository to use and who's committing, which win over any
+config: the tests' git mustn't inherit them, e.g. from a git hook that runs the tests."""
 
 
+@functools.cache
 def real_git() -> str:
     """git itself, from `git --exec-path`, rather than a wrapper (e.g. git-ai) or Git for
-    Windows' launcher on PATH, which start another process for each; else the git on PATH."""
+    Windows' launcher on PATH, which start another process for each; else the git on PATH.
+    Found once per process."""
     found = find_git()
     exec_path = Git(".", program=found).run_bytes("--exec-path")
-    candidate = Path(os.fsdecode(exec_path.strip())) / ("git.exe" if os.name == "nt" else "git")
+    candidate = Path(os.fsdecode(exec_path.strip())) / (
+        "git.exe" if sys.platform == "win32" else "git"
+    )
     return str(candidate) if candidate.exists() else found
-
-
-def isolated_environment(config: Path) -> dict[str, str]:
-    """The environment variables that give git `config` (written with TEST_GIT_CONFIG) as its
-    global config, and no system config, so the user's and the system's settings don't reach
-    the tests."""
-    config.write_text(TEST_GIT_CONFIG, encoding="utf-8")
-    return {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 @pytest.fixture(scope="session", autouse=True)
 def git_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """Every test's git sees the tests' own config (TEST_GIT_CONFIG), not the user's or the
-    system's. Yields the config file's path."""
+    """Every test's git gets the tests' own config (TEST_GIT_CONFIG) as its global config, no
+    system config, and none of git's variables for which repository to use or who's
+    committing (GIT_ENVIRONMENT_VARIABLES, and each GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n).
+    Yields the config file's path."""
     config = tmp_path_factory.mktemp("git-config") / "config"
+    config.write_text(TEST_GIT_CONFIG, encoding="utf-8")
+    counted = [n for n in os.environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))]
     with pytest.MonkeyPatch.context() as patch:
-        for name, value in isolated_environment(config).items():
-            patch.setenv(name, value)
+        for name in [*GIT_ENVIRONMENT_VARIABLES, *counted]:
+            patch.delenv(name, raising=False)
+        patch.setenv("GIT_CONFIG_GLOBAL", str(config))
+        patch.setenv("GIT_CONFIG_NOSYSTEM", "1")
         yield config
 
 
@@ -75,11 +108,16 @@ class RepoTemplates:
         self._built: set[str] = set()
 
     def build(self, name: str, make: Callable[[Path], None]) -> Path:
-        """The directory `make` filled, making it the first time `name` is asked for."""
+        """The directory `make` filled, making it the first time `name` is asked for. If
+        `make` fails, nothing is kept, so the next build tries again and fails as it did."""
         directory = self.root / name
         if name not in self._built:
             directory.mkdir(parents=True)
-            make(directory)
+            try:
+                make(directory)
+            except BaseException:
+                shutil.rmtree(directory)
+                raise
             self._built.add(name)
         return directory
 
@@ -92,25 +130,58 @@ class RepoTemplates:
         return dest
 
 
+def repositories(root: Path) -> Iterator[Path]:
+    """Every repository under root, root included: each directory with a `.git` in it, and each
+    bare repository (a directory with `HEAD`, `config` and `objects`)."""
+    for directory, subdirectories, files in os.walk(root):
+        if ".git" in subdirectories or ".git" in files:
+            yield Path(directory)
+            if ".git" in subdirectories:
+                subdirectories.remove(".git")
+        elif "HEAD" in files and "config" in files and "objects" in subdirectories:
+            yield Path(directory)
+            subdirectories.clear()
+
+
 def repoint_remotes(source: Path, dest: Path) -> None:
-    """In each repository under `dest` (copied from `source`), point every remote whose URL is
-    a path under `source` at the same path under `dest`. Through `git config`, not by editing
-    the file, where git escapes backslashes (Windows' paths)."""
-    for config in [*dest.glob("*/.git/config"), *dest.glob("*/config"), dest / ".git" / "config"]:
-        if not config.is_file():
+    """In each repository under `dest` (copied from `source`), point every remote URL (`url`
+    and `pushurl`) that's a path under `source` at the same path under `dest`, through `git
+    config` rather than by editing the file, where git escapes backslashes (Windows' paths).
+    A repository whose config names no remote starts no process."""
+    for repo in repositories(dest):
+        config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
+        if not config.is_file() or "[remote" not in config.read_text(
+            encoding="utf-8", errors="replace"
+        ):
             continue
-        repo = config.parent.parent if config.parent.name == ".git" else config.parent
-        client = Git(repo)
-        listed = client.process(
-            "config", "--local", "--get-regexp", r"^remote\..*\.url$", capture_output=True
+        git = Git(repo)
+        listed = git.process(
+            "config",
+            "--local",
+            "--null",
+            "--get-regexp",
+            r"^remote\..*\.(url|pushurl)$",
+            capture_output=True,
         )
-        for line in listed.stdout.decode("utf-8", "surrogateescape").splitlines():
-            key, _, url = line.partition(" ")
-            try:
-                relative = Path(url).relative_to(source)
-            except ValueError:
-                continue
-            client.run("config", "--local", key, (dest / relative).as_posix())
+        urls: dict[str, list[str]] = {}
+        for entry in listed.stdout.decode("utf-8", "surrogateescape").split("\0"):
+            if entry:
+                key, _, url = entry.partition("\n")
+                urls.setdefault(key, []).append(url)
+        for key, values in urls.items():
+            moved = [_moved(url, source, dest) for url in values]
+            if moved != values:
+                git.run("config", "--local", "--unset-all", key)
+                for url in moved:
+                    git.run("config", "--local", "--add", key, url)
+
+
+def _moved(url: str, source: Path, dest: Path) -> str:
+    """url, if it's a path under source, as the same path under dest; else url as it is."""
+    try:
+        return (dest / Path(url).relative_to(source)).as_posix()
+    except ValueError:
+        return url
 
 
 @pytest.fixture(scope="session")
@@ -123,10 +194,21 @@ class UnexpectedCommand(AssertionError):
     """FakeGit was asked to run a command no response matches."""
 
 
+@dataclass(frozen=True)
+class Call:
+    """A command FakeGit was asked to run: git's arguments, what was sent on its stdin, and
+    the environment it added to ours."""
+
+    args: list[str]
+    input: bytes | None
+    env: dict[str, EnvValue]
+
+
 class FakeGit(Git):
     """A Git that starts no process, for unit tests of the git commands a tool runs: it
-    records each command's arguments in `commands`, and answers with the first response whose
-    arguments begin the command's. A command no response matches fails the test.
+    records each command in `calls` (its arguments alone in `commands`), and answers with the
+    first response whose arguments begin the command's. A command no response matches fails
+    the test.
 
         git = FakeGit()
         git.respond(["rev-parse", "--abbrev-ref", "HEAD"], stdout="main\\n")
@@ -134,15 +216,21 @@ class FakeGit(Git):
         ... run the code under test with git ...
         assert git.commands[-1] == ["push", "origin", "main"]
 
-    Assert the commands where they're the behavior (what's pushed, deleted or rewritten);
-    otherwise give realistic output and assert the result. It can't start long-lived processes
-    (`popen`), so CatFile needs a real Git.
+    Assert the commands where they're the behavior (what's pushed, deleted or rewritten;
+    `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
+    realistic output and assert the result. It can't start long-lived processes (`popen`),
+    so CatFile needs a real Git.
     """
 
     def __init__(self, directory: str | os.PathLike[str] = ".") -> None:
         super().__init__(directory, program="git")
-        self.commands: list[list[str]] = []
+        self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
+
+    @property
+    def commands(self) -> list[list[str]]:
+        """Each command's arguments, in the order they were run."""
+        return [call.args for call in self.calls]
 
     def respond(
         self,
@@ -170,7 +258,7 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         command = [os.fsdecode(arg) for arg in args]
-        self.commands.append(command)
+        self.calls.append(Call(command, input, {**self.env, **(env or {})}))
         for prefix, completed in self._responses:
             if command[: len(prefix)] == prefix:
                 return completed
