@@ -66,6 +66,16 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("config", "x.y", "z")
 
 
+def test_a_local_file_git_cant_read_is_no_remote(repo: Git, tmp_path: Path) -> None:
+    # "unable to access '<path>'", as git says of a remote's URL it can't reach.
+    (tmp_path / "a-directory").mkdir()
+
+    with pytest.raises(GitError) as raised:
+        repo.run("status", env={"GIT_CONFIG_GLOBAL": str(tmp_path / "a-directory")})
+
+    assert type(raised.value) is GitError
+
+
 def test_a_remote_that_isnt_a_repository(repo: Git, tmp_path: Path) -> None:
     (tmp_path / "plain").mkdir()
 

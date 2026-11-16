@@ -86,7 +86,8 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
         re.compile(
             "Could not read from remote repository"
             "|does not appear to be a git repository"
-            "|unable to access '"
+            # Of a URL (`<scheme>://`): git says the same of a local file it can't read.
+            "|unable to access '[a-zA-Z][a-zA-Z0-9+.-]*://"
             "|repository '.*' not found"
         ),
     ),
