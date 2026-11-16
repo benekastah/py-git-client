@@ -235,8 +235,8 @@ def github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
 def repos(repo_templates: RepoTemplates, tmp_path: Path) -> Path:
     """A copy of make_origin_and_clone's repositories, with a commit in clone that origin
     hasn't got, which a release mustn't tag."""
-    repo_templates.build("origin-and-clone", make_origin_and_clone)
-    directory = repo_templates.copy("origin-and-clone", tmp_path / "repos")
+    repo_templates.build("release-origin-and-clone", make_origin_and_clone)
+    directory = repo_templates.copy("release-origin-and-clone", tmp_path / "repos")
     clone = Git(directory / "clone")
     (directory / "clone" / "local").write_bytes(b"local\n")
     clone.run("add", "local")
