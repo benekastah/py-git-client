@@ -3,6 +3,7 @@ fails."""
 
 import http.server
 import socket
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -29,6 +30,15 @@ def test_a_directory_with_no_repository(tmp_path: Path) -> None:
         git.run("rev-parse", "HEAD")
 
 
+def test_a_directory_that_isnt_there(tmp_path: Path) -> None:
+    with pytest.raises(NotARepositoryError):
+        Git(tmp_path / "missing").run("status")
+
+
+# A full object id, of an object the repository doesn't have.
+MISSING = "0123" * 10
+
+
 @pytest.mark.parametrize(
     "args",
     [
@@ -36,6 +46,25 @@ def test_a_directory_with_no_repository(tmp_path: Path) -> None:
         ("log", "no-such-branch", "--"),  # bad revision
         ("rev-parse", "--verify", "no-such-branch"),  # Needed a single revision
         ("merge-base", "no-such-branch", "HEAD"),  # Not a valid object name
+        ("log", MISSING),  # bad object
+        ("rev-list", MISSING),
+        ("show", MISSING),
+        ("diff", MISSING),
+        ("branch", "new", "no-such-branch"),  # not a valid object name: '...'
+        ("commit-tree", "no-such-branch"),  # not a valid object name
+        ("switch", "no-such-branch"),  # invalid reference
+        ("worktree", "add", "../worktree", "no-such-branch"),
+        ("rebase", "no-such-branch"),  # invalid upstream
+        ("merge", "no-such-branch"),  # not something we can merge
+        ("merge-tree", "--write-tree", "main", "no-such-branch"),
+        ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
+        ("merge-base", "HEAD", MISSING),  # Not a valid commit name
+        ("merge-base", "--is-ancestor", MISSING, "HEAD"),
+        ("log", f"HEAD..{MISSING}"),  # Invalid revision range
+        ("rebase", "--onto", MISSING, "HEAD"),  # Does not point to a valid commit
+        ("commit-tree", "-p", MISSING, "HEAD^{tree}"),  # <id> is not a valid object
+        ("reset", MISSING),  # Could not parse object
+        ("cherry", "HEAD", MISSING),  # unknown commit
     ],
 )
 def test_a_revision_that_names_nothing(repo: Git, args: tuple[str, ...]) -> None:
@@ -53,6 +82,26 @@ def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> N
     assert type(raised.value) is GitError
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("merge-base", "HEAD", "HEAD^{tree}"),  # Not a valid commit name
+        ("cherry", "HEAD", "HEAD^{tree}"),  # unknown commit
+        ("reset", "HEAD^{tree}"),  # Could not parse object
+        ("rebase", "--onto", "HEAD^{tree}", "HEAD"),  # Does not point to a valid commit
+        # "expected commit type, but the object dereferences to tree type", then "not
+        # something we can merge"
+        ("merge", "HEAD^{tree}"),
+    ],
+)
+def test_a_name_of_the_wrong_type_is_another_failure(repo: Git, args: tuple[str, ...]) -> None:
+    # "object <id> is a tree, not a commit", then what git says of a name that names nothing.
+    with pytest.raises(GitError) as raised:
+        repo.run(*args)
+
+    assert type(raised.value) is GitError
+
+
 def test_a_locked_config_file(repo: Git) -> None:
     (Path(repo.directory) / ".git" / "config.lock").write_bytes(b"")
 
@@ -60,11 +109,33 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("config", "x.y", "z")
 
 
+def test_a_local_file_git_cant_read_is_no_remote(repo: Git, tmp_path: Path) -> None:
+    # "unable to access '<path>'", as git says of a remote's URL it can't reach.
+    (tmp_path / "a-directory").mkdir()
+
+    with pytest.raises(GitError) as raised:
+        repo.run("status", env={"GIT_CONFIG_GLOBAL": str(tmp_path / "a-directory")})
+
+    assert type(raised.value) is GitError
+
+
 def test_a_remote_that_isnt_a_repository(repo: Git, tmp_path: Path) -> None:
     (tmp_path / "plain").mkdir()
 
     with pytest.raises(RemoteError):
         repo.run("ls-remote", str(tmp_path / "plain"))
+
+
+def test_a_remote_that_cant_be_read_from(repo: Git) -> None:
+    # An ssh that fails, as one that can't connect does: git says only that it couldn't read.
+    ssh = f'"{Path(sys.executable).as_posix()}" -c "import sys; sys.exit(255)"'
+
+    with pytest.raises(RemoteError):
+        repo.run(
+            "ls-remote",
+            "ssh://example.invalid/repo.git",
+            env={"GIT_SSH_COMMAND": ssh, "GIT_ALLOW_PROTOCOL": "ssh"},
+        )
 
 
 @pytest.fixture
@@ -129,6 +200,16 @@ def test_a_push_that_isnt_a_fast_forward(behind: Git) -> None:
 
     with pytest.raises(PushRejectedError):
         behind.run("push", "--quiet", "origin", "main")
+
+
+def test_a_push_the_remote_refuses(repo: Git, tmp_path: Path) -> None:
+    # A push to the branch checked out in a repository with a worktree: " ! [remote rejected]".
+    other = Git(tmp_path / "other")
+    repo.run("clone", "--quiet", repo.directory, other.directory)
+    other.run("commit", "--quiet", "--allow-empty", "-m", "theirs")
+
+    with pytest.raises(PushRejectedError):
+        other.run("push", "--quiet", "origin", "main")
 
 
 @pytest.fixture

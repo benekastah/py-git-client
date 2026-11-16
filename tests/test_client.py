@@ -67,6 +67,21 @@ def test_a_failures_message_cuts_a_long_command_short() -> None:
     assert len(error.command) == 102
 
 
+def test_a_failures_message_can_be_written_whatever_bytes_git_was_given() -> None:
+    # A path that isn't UTF-8, as decode gives it: its byte as a surrogate, which UTF-8 can't
+    # write.
+    error = GitError(["add", "caf\udce9"], 128, "fatal: pathspec 'caf\udce9' did not match\n")
+
+    assert str(error).encode("utf-8") == (
+        b"git add caf\\xe9 failed (128):\nfatal: pathspec 'caf\\xe9' did not match"
+    )
+    assert (error.command, error.stderr) == (
+        ["add", "caf\udce9"],
+        "fatal: pathspec 'caf\udce9' did not match\n",
+    )
+    assert str(GitError(["add", "\ud800"], 128, "")).startswith("git add \\ud800 failed")
+
+
 def test_a_failure_keeps_what_git_printed_to_stdout(repo: Git) -> None:
     with pytest.raises(GitError) as raised:
         repo.run("show-ref", "--verify", "refs/heads/main", "refs/heads/nope")
@@ -106,7 +121,34 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
     assert repo.resolve("main") == repo.run("rev-parse", "HEAD")
     assert repo.resolve("no-such-branch") is None
-    assert repo.resolve("--all") is None  # a name, not an option
+
+
+def test_resolve_gives_none_for_an_object_the_repository_lacks(repo: Git) -> None:
+    # A submodule's commit, which is in the submodule's repository, not this one.
+    repo.run("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "add mod")
+
+    assert repo.resolve("0123" * 10) is None
+    assert repo.resolve("HEAD:mod") is None
+    assert repo.resolve("HEAD:a") == repo.run("rev-parse", "HEAD:a")
+
+
+def test_resolve_gives_none_for_a_name_git_exits_on(repo: Git) -> None:
+    # main has no upstream: git cat-file exits rather than saying @{u} names nothing.
+    assert repo.resolve("main@{u}") is None
+
+
+def test_resolve_gives_none_for_a_name_that_isnt_one_line(repo: Git) -> None:
+    assert repo.resolve("HEAD\nHEAD") is None
+    assert repo.resolve("HEAD\r") is None
+    assert repo.resolve("HEAD\0") is None
+    assert repo.resolve("") is None
+
+
+def test_resolve_takes_a_name_that_looks_like_an_option_as_a_name(repo: Git) -> None:
+    repo.run("update-ref", "refs/tags/-x", "HEAD")
+
+    assert repo.resolve("-x") == repo.run("rev-parse", "HEAD")
 
 
 def test_resolve_raises_for_what_isnt_a_name_naming_nothing(tmp_path: Path) -> None:
@@ -124,22 +166,57 @@ def test_var_gives_gits_value_for_a_variable(repo: Git) -> None:
     assert ident.startswith("Test <test@example.com> ")
 
 
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "",  # unable to auto-detect email address, unless this machine's name gives one
+        "[user]\n\tuseConfigOnly = true\n",  # no email was given
+        "[user]\n\tuseConfigOnly = true\n\temail = a@example.com\n",  # no name was given
+        "[user]\n\tname =\n\temail = a@example.com\n",  # empty ident name
+    ],
+)
 def test_var_gives_none_when_git_has_no_value_for_it(
-    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: str
 ) -> None:
     for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "EMAIL"):
         monkeypatch.delenv(name, raising=False)
-    (tmp_path / "config").write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
+    (tmp_path / "config").write_text(identity, encoding="utf-8")
     anonymous = Git(repo.directory, env={"GIT_CONFIG_GLOBAL": str(tmp_path / "config")})
+    if (
+        not identity
+        and anonymous.process("var", "GIT_AUTHOR_IDENT", capture_output=True).returncode == 0
+    ):
+        pytest.skip("git finds an email address from this machine's name")
 
     assert anonymous.var("GIT_AUTHOR_IDENT") is None
+
+
+def test_var_raises_for_what_isnt_a_missing_value(repo: Git) -> None:
     with pytest.raises(GitError):
-        anonymous.var("NO_SUCH_VARIABLE")
+        repo.var("NO_SUCH_VARIABLE")
+    with (Path(repo.directory) / ".git" / "config").open("a", encoding="utf-8") as f:
+        f.write("[core\n")
+    with pytest.raises(GitError, match="bad config line"):
+        repo.var("GIT_AUTHOR_IDENT")
 
 
-def test_ok_says_whether_it_succeeded(repo: Git) -> None:
-    assert repo.ok("rev-parse", "--verify", "main")
-    assert not repo.ok("rev-parse", "--verify", "no-such-branch")
+def test_ok_answers_yes_for_exit_0_and_no_for_exit_1(repo: Git) -> None:
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
+    (Path(repo.directory) / "a").write_bytes(b"changed\n")
+
+    assert repo.ok("merge-base", "--is-ancestor", "HEAD~1", "HEAD")
+    assert not repo.ok("merge-base", "--is-ancestor", "HEAD", "HEAD~1")
+    assert repo.ok("diff", "--quiet", "--cached")
+    assert not repo.ok("diff", "--quiet")
+    assert not repo.ok("config", "--get", "no.such-key")
+
+
+def test_ok_raises_for_a_failure(repo: Git) -> None:
+    with pytest.raises(UnknownRevisionError) as raised:
+        repo.ok("merge-base", "--is-ancestor", "no-such-branch", "HEAD")
+
+    assert raised.value.returncode == 128
+    assert "no-such-branch" in raised.value.stderr
 
 
 def test_input_and_output_keep_their_line_endings(repo: Git) -> None:
