@@ -35,6 +35,10 @@ def test_a_directory_that_isnt_there(tmp_path: Path) -> None:
         Git(tmp_path / "missing").run("status")
 
 
+# A full object id, of an object the repository doesn't have.
+MISSING = "0123" * 10
+
+
 @pytest.mark.parametrize(
     "args",
     [
@@ -42,6 +46,18 @@ def test_a_directory_that_isnt_there(tmp_path: Path) -> None:
         ("log", "no-such-branch", "--"),  # bad revision
         ("rev-parse", "--verify", "no-such-branch"),  # Needed a single revision
         ("merge-base", "no-such-branch", "HEAD"),  # Not a valid object name
+        ("log", MISSING),  # bad object
+        ("rev-list", MISSING),
+        ("show", MISSING),
+        ("diff", MISSING),
+        ("branch", "new", "no-such-branch"),  # not a valid object name: '...'
+        ("commit-tree", "no-such-branch"),  # not a valid object name
+        ("switch", "no-such-branch"),  # invalid reference
+        ("worktree", "add", "../worktree", "no-such-branch"),
+        ("rebase", "no-such-branch"),  # invalid upstream
+        ("merge", "no-such-branch"),  # not something we can merge
+        ("merge-tree", "--write-tree", "main", "no-such-branch"),
+        ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
     ],
 )
 def test_a_revision_that_names_nothing(repo: Git, args: tuple[str, ...]) -> None:

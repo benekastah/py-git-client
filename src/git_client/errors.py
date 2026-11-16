@@ -99,7 +99,10 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
         # "ambiguous argument 'x': unknown revision or path not in the working tree", but not
         # "ambiguous argument 'x': both revision and filename", which names something.
         re.compile(
-            "unknown revision|bad revision '|Needed a single revision|Not a valid object name"
+            "unknown revision|bad revision '|Needed a single revision|^fatal: bad object "
+            "|(?i:not a valid object name)|invalid reference: |invalid upstream '"
+            "| - not something we can merge|Failed to resolve '.*' as a valid ref",
+            re.MULTILINE,
         ),
     ),
 )
