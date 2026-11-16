@@ -25,15 +25,24 @@ EnvValue: TypeAlias = str | bytes
 filesystem (bytes, in its encoding)."""
 
 
+# How much of a command line a GitError's message shows: a long one (thousands of paths, say)
+# would bury what git said.
+MAX_COMMAND_IN_MESSAGE = 200
+
+
 class GitError(RuntimeError):
     """A git command failed. `command` is git's arguments, `returncode` its exit status and
-    `stderr` what it printed there."""
+    `stderr` what it printed there. The message shows at most MAX_COMMAND_IN_MESSAGE
+    characters of the command line, ending with "…" when cut; `command` keeps all of it."""
 
     def __init__(self, args: Sequence[Arg], returncode: int, stderr: str) -> None:
         self.command = [os.fsdecode(arg) for arg in args]
         self.returncode = returncode
         self.stderr = stderr
-        super().__init__(f"git {' '.join(self.command)} failed ({returncode}):\n{stderr.strip()}")
+        line = " ".join(self.command)
+        if len(line) > MAX_COMMAND_IN_MESSAGE:
+            line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
+        super().__init__(f"git {line} failed ({returncode}):\n{stderr.strip()}")
 
     def __reduce__(self) -> tuple[type[Self], tuple[list[str], int, str], dict[str, object]]:
         # So it can cross from a worker process: the default would call __init__ with only the

@@ -50,6 +50,16 @@ def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
     assert "no-such-branch" in raised.value.stderr
 
 
+def test_a_failures_message_cuts_a_long_command_short() -> None:
+    error = GitError(["log", "--", *(f"file{i}" for i in range(100))], 1, "boom")
+
+    first_line = str(error).splitlines()[0]
+    assert first_line.startswith("git log -- file0 file1 ")
+    assert first_line.endswith("… failed (1):")
+    assert len(first_line) == len("git ") + 200 + len(" failed (1):")
+    assert len(error.command) == 102
+
+
 def test_ok_says_whether_it_succeeded(repo: Git) -> None:
     assert repo.ok("rev-parse", "--verify", "main")
     assert not repo.ok("rev-parse", "--verify", "no-such-branch")
