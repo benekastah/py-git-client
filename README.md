@@ -228,7 +228,7 @@ git hooks in `git_hooks/`. On Windows, run `dev.py` with `py` (`py dev.py instal
 `dev.py` runs the same way on Linux, macOS and Windows:
 
 ```sh
-python3 dev.py check       # every check: static, then tests
+python3 dev.py check       # every check: static, then tests (even if static failed)
 python3 dev.py static      # Ruff's formatter and linter, and basedpyright in strict mode
 python3 dev.py tests       # the tests, in parallel (arguments go to pytest, e.g. -k name)
 python3 dev.py coverage    # the tests under coverage.py, and the lines they don't run
@@ -240,8 +240,8 @@ does both for the files you commit, and the pre-push hook runs the static checks
 (`dev.py static`) before every push.
 
 Dependencies are locked in `uv.lock`. `dev.py` installs from it with uv, and updates it when
-`pyproject.toml`'s dependencies change; commit both. Without uv, `dev.py` installs with pip,
-which doesn't read the lock.
+`pyproject.toml`'s dependencies change, and says so when it does; commit both. Without uv,
+`dev.py` installs with pip, which doesn't read the lock.
 
 ### Releasing
 
