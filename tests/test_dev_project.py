@@ -86,6 +86,7 @@ GITHUB_ORIGIN = "https://github.com/example/repo.git"
         "ssh://git@github.com:22/example/repo.git",
         "https://GitHub.com/example/repo",
         "https://user@github.com/example/repo.git",
+        "https://github.com:443/example/repo",
     ],
 )
 def test_github_repo_reads_owner_and_name(url: str) -> None:
