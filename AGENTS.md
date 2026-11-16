@@ -20,6 +20,7 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - `tests/`: the tests, against real repositories, through the `git_client.testing` plugin (see
   `tests/conftest.py`).
 - `dev.py`: setting up a clone and running the checks, on every system (see the README).
+- `dev_project.py`: this project's commands for `dev.py`: `release` (see the README).
 
 ## Rules for this project
 
@@ -31,7 +32,8 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
   their uv.lock.
 - **Versions.** A change that could break git-stack, git-recommit or move-forward increments
-  the patch version. Each version is released as a git tag, `vX.Y.Z`, as often as needed.
+  the patch version. Each version is released as a git tag, `vX.Y.Z`, as often as needed,
+  with `python3 dev.py release X.Y.Z` (see the README).
   `main` always carries the next version to release: after releasing 0.0.1, it moves to 0.0.2.
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
