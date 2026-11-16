@@ -214,11 +214,25 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
 ]
+template-dev = [
+    { name = "basedpyright" },
+    { name = "coverage" },
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+]
 
 [package.metadata]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "basedpyright", specifier = ">=1.40.2" },
+    { name = "coverage", specifier = ">=7.17.3" },
+    { name = "pytest", specifier = ">=9.2.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "ruff", specifier = ">=0.17.5" },
+]
+template-dev = [
     { name = "basedpyright", specifier = ">=1.40.2" },
     { name = "coverage", specifier = ">=7.17.3" },
     { name = "pytest", specifier = ">=9.2.0" },

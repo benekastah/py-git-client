@@ -248,7 +248,7 @@ which doesn't read the lock.
 Versions are 0.0.N. `main` always carries the next version to release, in `pyproject.toml`;
 PRs never change it themselves. Release whenever a change should reach git-stack,
 git-recommit or move-forward (a change that could break one is simply released as the next
-patch version; see AGENTS.md). Once CI has passed on `main`'s latest commit, release its
+patch version; see PROJECT_AGENTS.md). Once CI has passed on `main`'s latest commit, release its
 version:
 
 ```sh
@@ -282,7 +282,8 @@ with [Copier](https://copier.readthedocs.io/). To bring in the template's later 
 uvx copier update --defaults
 ```
 
-It merges them with your changes, marking conflicts as git does. It never touches this
-README, AGENTS.md or `.github/workflows/check.yml`, which are this project's own. `dev.py` is
-the template's: add commands and install steps in `dev_project.py` instead (see `dev.py`'s
-docstring).
+It merges them with your changes, marking conflicts as git does. It never changes this
+README, PROJECT_AGENTS.md or `.github/workflows/check.yml` once written (though it writes one
+again if it's gone): they're this project's own. `dev.py`, AGENTS.md and CLAUDE.md are the
+template's: add commands and install steps in `dev_project.py` instead (see `dev.py`'s
+docstring), and this project's own rules for agents in PROJECT_AGENTS.md.
