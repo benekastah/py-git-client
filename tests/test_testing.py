@@ -393,6 +393,26 @@ def test_repoints_every_url_of_a_repository_however_deep(
     assert Path(work.run("config", "remote.byhand.url")) == copy / "up #1.git"
 
 
+def make_file_url_remotes(directory: Path) -> None:
+    Git(directory).run("init", "--quiet", "--bare", str(directory / "origin.git"))
+    Git(directory).run("init", "--quiet", str(directory / "work"))
+    work = Git(directory / "work")
+    work.run("remote", "add", "origin", (directory / "origin.git").as_uri())
+    work.run("remote", "add", "outside", (directory.parent / "elsewhere.git").as_uri())
+
+
+def test_repoints_a_file_url_into_the_template(
+    repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    repo_templates.build("file-urls", make_file_url_remotes)
+    copy = repo_templates.copy("file-urls", tmp_path / "copy")
+
+    work = Git(copy / "work")
+    assert work.run("config", "remote.origin.url") == (copy / "origin.git").as_uri()
+    outside = (repo_templates.root / "elsewhere.git").as_uri()
+    assert work.run("config", "remote.outside.url") == outside
+
+
 def test_a_template_keeps_no_sample_hooks(repo_templates: RepoTemplates, tmp_path: Path) -> None:
     repo_templates.build("origin-and-clone", make_origin_and_clone)
 

@@ -126,7 +126,7 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   git's sample hooks (`hooks/*.sample`), which every copy would copy: building takes many
   git processes, copying takes none for a repository without remotes. One with
   remotes takes a `git config` for each remote's `url` or `pushurl` that points inside the
-  template, to point it at the copy's (for a key with several values, one to clear it and
+  template (a path, or a `file://` URL), to point it at the copy's (for a key with several values, one to clear it and
   one per value). Submodules and linked worktrees aren't repointed. A copy's index keeps the
   template's stat data: the first command that refreshes the index (`git status`, `git diff`)
   makes it match the copy's files, but until then plumbing that doesn't (`git diff-index

@@ -17,6 +17,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,10 +259,10 @@ def _repositories(root: Path) -> Iterator[Path]:
 
 def _repoint_remotes(source: Path, dest: Path) -> None:
     """In each repository under `dest` (copied from `source`), point every remote URL (`url`
-    and `pushurl`) that's a path under `source` at the same path under `dest`. The URLs are
-    read from the config file (not from files it includes), and each that moves is set
-    through `git config` rather than by editing the file, where git escapes backslashes
-    (Windows' paths): one process for a key with one value, and for one with several, one to
+    and `pushurl`) that's a path under `source`, or a `file://` URL of one, at the same path
+    under `dest`. The URLs are read from the config file (not from files it includes), and
+    each that moves is set through `git config` rather than by editing the file, where git
+    escapes backslashes (Windows' paths): one process for a key with one value, and for one with several, one to
     clear it and one per value. Submodules aren't repointed (their remote, in
     `.git/modules/<name>/config`, and the superproject's `submodule.<name>.url` still name
     the template), nor linked worktrees (whose `gitdir:` is an absolute path into the
@@ -336,11 +338,16 @@ def _config_value(raw: str) -> str:
 
 
 def _moved(url: str, source: Path, dest: Path) -> str:
-    """url, if it's a path under source, as the same path under dest; else url as it is."""
+    """url, if it's a path under source, or a `file://` URL of one, as the same path (or URL)
+    under dest; else url as it is."""
+    parsed = urllib.parse.urlsplit(url)
+    is_file_url = parsed.scheme.lower() == "file"
+    path = Path(urllib.request.url2pathname(parsed.path)) if is_file_url else Path(url)
     try:
-        return (dest / Path(url).relative_to(source)).as_posix()
+        moved = dest / path.relative_to(source)
     except ValueError:
         return url
+    return moved.as_uri() if is_file_url else moved.as_posix()
 
 
 @pytest.fixture(scope="session")
