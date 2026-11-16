@@ -310,6 +310,8 @@ def test_patch_ids_reads_the_object_format_once_per_client(repo: Git) -> None:
 
 
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
+    # Which would have git write one\r\n as one\n.
+    repo.run("config", "core.autocrlf", "true")
     contents = [b"one\r\n", b"", b"three\n"]
 
     ids = hash_blobs(repo, contents)
@@ -335,6 +337,7 @@ def test_update_refs_makes_every_change(repo: Git) -> None:
     )
 
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main", "refs/heads/new"}
+    assert repo.run("reflog", "-1", "--format=%gs", "refs/heads/new") == "tidy"
 
 
 def test_update_refs_makes_none_if_any_cant_be_made(repo: Git) -> None:
