@@ -4,7 +4,8 @@ commands a tool runs.
 
 Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 ["git_client.testing"]`) or with `-p git_client.testing`, for its fixtures (`git_config`,
-`git_config_text`, `repo_templates`, `git_calls`). It imports pytest, so only tests should import it.
+`git_config_text`, `repo_templates`, `git_calls`, `fresh_find_git`). It imports pytest, so
+only tests should import it.
 """
 
 import functools
@@ -313,6 +314,16 @@ def repo_templates(
     """Repositories built once per session, under the session's git config, and copied for
     each test (see RepoTemplates)."""
     return RepoTemplates(tmp_path_factory.mktemp("repo-templates"), git_client_isolation)
+
+
+@pytest.fixture
+def fresh_find_git() -> Iterator[None]:
+    """find_git as if nothing had called it yet, for a test that changes what it would find
+    (e.g. PATH, or a project's variable); after the test, it forgets that test's answer
+    too."""
+    find_git.cache_clear()
+    yield
+    find_git.cache_clear()
 
 
 @pytest.fixture

@@ -147,6 +147,9 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
   ```
+- **`fresh_find_git`**: `find_git` caches its answer for the whole process; a test that
+  changes what it would find (PATH, or your tool's variable) asks for this fixture, which
+  clears the cache before and after it.
 - **`FakeGit`**, for unit tests of the git commands your code runs, without a process: give it
   responses, run your code with it, and check what it ran. Assert the commands where they're
   the behavior (what's pushed, deleted or rewritten); otherwise give realistic output and
