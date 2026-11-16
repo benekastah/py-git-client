@@ -70,6 +70,32 @@ def make_origin_and_clone(directory: Path) -> None:
     clone.run("push", "--quiet", "origin", "main")
 
 
+GITHUB_ORIGIN = "https://github.com/example/repo.git"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/example/repo.git",
+        "https://github.com/example/repo",
+        "git@github.com:example/repo.git",
+        "git@github.com:example/repo",
+        "ssh://git@github.com/example/repo.git",
+    ],
+)
+def test_github_repo_reads_owner_and_name(url: str) -> None:
+    assert dev_project.github_repo(url) == "example/repo"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["/srv/repo.git", "https://gitlab.com/example/repo.git", "https://github.com/example"],
+)
+def test_github_repo_refuses_other_urls(url: str) -> None:
+    with pytest.raises(ReleaseError, match="isn't a GitHub repository"):
+        dev_project.github_repo(url)
+
+
 class FakeGitHub:
     """Stands in for what dev_project asks of gh and uv, which would reach the network: the CI
     status of a commit, the PRs opened, and the lock files updated."""
@@ -80,11 +106,13 @@ class FakeGitHub:
         self.prs: list[tuple[str, str, str]] = []
         self.locked: list[Path] = []
 
-    def ci_status(self, repo: Path, sha: str) -> str:
+    def ci_status(self, repo: Path, github: str, sha: str) -> str:
+        assert github == "example/repo"
         self.asked.append(sha)
         return self.status
 
-    def open_pr(self, worktree: Path, branch: str, title: str, body: str) -> str:
+    def open_pr(self, worktree: Path, github: str, branch: str, title: str, body: str) -> str:
+        assert github == "example/repo"
         self.prs.append((branch, title, body))
         return f"https://github.com/example/pull/{len(self.prs)}"
 
@@ -106,10 +134,13 @@ def github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
 @pytest.fixture
 def repos(repo_templates: RepoTemplates, tmp_path: Path) -> Path:
     """A copy of make_origin_and_clone's repositories, with a commit in clone that origin
-    hasn't got, which a release mustn't tag."""
+    hasn't got, which a release mustn't tag. clone's origin is a GitHub URL, example/repo,
+    which git rewrites to origin.git."""
     repo_templates.build("origin-and-clone", make_origin_and_clone)
     directory = repo_templates.copy("origin-and-clone", tmp_path / "repos")
     clone = Git(directory / "clone")
+    clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
+    clone.run("config", f"url.{(directory / 'origin.git').as_posix()}.insteadOf", GITHUB_ORIGIN)
     (directory / "clone" / "local").write_bytes(b"local\n")
     clone.run("add", "local")
     clone.run("commit", "--quiet", "-m", "not pushed")
@@ -187,7 +218,7 @@ def test_release_refuses_until_ci_passed(
 def test_release_says_how_to_finish_when_the_next_version_fails(
     repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail(worktree: Path, branch: str, title: str, body: str) -> str:
+    def fail(worktree: Path, github: str, branch: str, title: str, body: str) -> str:
         raise ReleaseError("gh pr create failed")
 
     monkeypatch.setattr(dev_project, "open_pr", fail)
@@ -222,4 +253,13 @@ def test_release_refuses_a_next_version_branch_on_origin(repos: Path, github: Fa
     Git(repos / "origin.git").run("branch", "start-0.0.2", "main")
     with pytest.raises(ReleaseError, match="start-0.0.2.* exists on origin"):
         dev_project.publish(repos / "clone", "0.0.1")
+    assert Git(repos / "origin.git").run("tag") == ""
+
+
+def test_release_refuses_an_origin_not_on_github(repos: Path, github: FakeGitHub) -> None:
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.url", (repos / "origin.git").as_posix())
+    with pytest.raises(ReleaseError, match="isn't a GitHub repository"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert github.asked == []
     assert Git(repos / "origin.git").run("tag") == ""

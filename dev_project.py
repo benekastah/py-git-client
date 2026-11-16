@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parent
 CI_CHECK = "CI passed"
 """The check main's ruleset requires, which says every CI job passed."""
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+GITHUB_URL = re.compile(
+    r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?"
+)
 PROJECT_VERSION = re.compile(r'^(version\s*=\s*")[^"]*(")', re.MULTILINE)
 
 
@@ -36,6 +40,14 @@ def next_version(version: str) -> str:
     """The version after `version`: its patch version, incremented."""
     major, minor, patch = parse_version(version)
     return f"{major}.{minor}.{patch + 1}"
+
+
+def github_repo(url: str) -> str:
+    """ "OWNER/REPO", from a GitHub repository's URL (https or ssh)."""
+    match = GITHUB_URL.fullmatch(url)
+    if match is None:
+        raise ReleaseError(f"origin ({url}) isn't a GitHub repository")
+    return "/".join(match.groups())
 
 
 def pyproject_version(pyproject: str) -> str:
@@ -71,8 +83,8 @@ def _git(repo: Path, *args: str, stdin: str | None = None) -> str:
     return _run(["git", "-C", str(repo), *args], repo, stdin)
 
 
-def ci_status(repo: Path, sha: str) -> str:
-    """How GitHub Actions' "CI passed" check ended on commit `sha` of origin: "success" or
+def ci_status(repo: Path, github: str, sha: str) -> str:
+    """How GitHub Actions' "CI passed" check ended on commit `sha` of `github` (OWNER/REPO): "success" or
     another conclusion (e.g. "failure"), "pending" while it runs or waits, "missing" if it
     hasn't started."""
     output = _run(
@@ -81,7 +93,7 @@ def ci_status(repo: Path, sha: str) -> str:
             "api",
             "--method",
             "GET",
-            f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+            f"repos/{github}/commits/{sha}/check-runs",
             "-f",
             f"check_name={CI_CHECK}",
         ],
@@ -96,9 +108,9 @@ def ci_status(repo: Path, sha: str) -> str:
     return latest["conclusion"] or "missing"
 
 
-def open_pr(worktree: Path, branch: str, title: str, body: str) -> str:
-    """Open a PR from `branch` into main, and return its URL."""
-    args = ["gh", "pr", "create", "--base", "main", "--head", branch]
+def open_pr(worktree: Path, github: str, branch: str, title: str, body: str) -> str:
+    """Open a PR from `branch` into main on `github` (OWNER/REPO), and return its URL."""
+    args = ["gh", "pr", "create", "--repo", github, "--base", "main", "--head", branch]
     output = _run([*args, "--title", title, "--body", body], worktree)
     return output.splitlines()[-1]
 
@@ -114,6 +126,9 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
     URL. Refuses, before changing anything, unless `version` is origin/main's
     pyproject.toml version, has no tag yet, and CI passed on that commit."""
     parse_version(version)
+    # gh is told the repository: left to itself, it may pick another remote (e.g. upstream).
+    # The URL as configured, not as insteadOf rewrites it, names the repository.
+    github = github_repo(_git(repo, "config", "--get", "remote.origin.url"))
     tag = f"v{version}"
     _git(repo, "fetch", "--quiet", "origin")
     if _git(repo, "ls-remote", "--tags", "origin", f"refs/tags/{tag}"):
@@ -129,7 +144,7 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
     if current != version:
         raise ReleaseError(f"pyproject.toml's version is {current} on origin/main, not {version}")
     sha = _git(repo, "rev-parse", "origin/main^{commit}")
-    status = ci_status(repo, sha)
+    status = ci_status(repo, github, sha)
     if status == "pending":
         raise ReleaseError(f"{CI_CHECK} hasn't finished on origin/main ({sha}); wait for it")
     if status == "missing":
@@ -143,7 +158,7 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
         _git(repo, "tag", "--delete", tag)  # so that a rerun isn't refused for it
         raise
     try:
-        return tag, _start_next_version(repo, version)
+        return tag, _start_next_version(repo, github, version)
     except ReleaseError as error:
         upcoming = next_version(version)
         raise ReleaseError(
@@ -159,7 +174,7 @@ def _next_version_branch(released: str) -> str:
     return f"start-{next_version(released)}"
 
 
-def _start_next_version(repo: Path, released: str) -> str:
+def _start_next_version(repo: Path, github: str, released: str) -> str:
     """Open a PR moving main's version on from `released`, from a temporary worktree (main's
     ruleset requires CI, so the change can't be pushed to main itself); returns its URL."""
     upcoming = next_version(released)
@@ -197,7 +212,7 @@ def _start_next_version(repo: Path, released: str) -> str:
         _git(worktree, "add", "pyproject.toml", "uv.lock")
         _git(worktree, "commit", "--quiet", "--file", "-", stdin=message)
         _git(worktree, "push", "--quiet", "origin", branch)
-        return open_pr(worktree, branch, title, body)
+        return open_pr(worktree, github, branch, title, body)
     finally:
         subprocess.run(
             ["git", "-C", str(repo), "worktree", "remove", "--force", str(worktree)],

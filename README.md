@@ -230,7 +230,7 @@ release it:
 python3 dev.py release 0.0.1
 ```
 
-It needs git, uv and gh (logged in). After fetching origin, it refuses unless the version is
+It needs git, uv and gh (logged in), and `origin` on GitHub. After fetching origin, it refuses unless the version is
 `pyproject.toml`'s on `origin/main`, neither its tag nor the next version's branch
 (`start-X.Y.Z+1`) exists yet, locally or on origin, and the "CI passed" check succeeded on `origin/main`'s latest commit (if it's still running, wait and run
 it again). Then it tags that commit (not your checkout's) `vX.Y.Z`, pushes the tag, and, in a
