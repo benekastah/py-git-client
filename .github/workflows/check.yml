@@ -94,7 +94,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv run --no-project python dev.py tests
 
-  # The one check a ruleset on main should require, so changing the jobs doesn't change what's
+  # The one check main's ruleset requires, so changing the jobs doesn't change what's
   # required. It runs even if a check failed (a skipped required check would count as
   # passing), and fails unless every check passed, or docs alone changed.
   passed:

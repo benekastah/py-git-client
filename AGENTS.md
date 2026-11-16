@@ -45,7 +45,7 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   in strict mode, then the tests. `python3 dev.py coverage` shows what the tests don't run.
   The pre-commit hook formats and lint-fixes staged files; the pre-push hook runs every
   check before a push to `main`. PRs are squash-merged, so the check must pass on a PR's
-  last commit.
+  last commit; and CI must pass on it too: main's ruleset requires the "CI passed" check.
 - **Tests keep to themselves**: no network, and not the user's real config, home directory
   or other state; use `tmp_path`, and give programs the tests start a config that reaches
   nothing.
