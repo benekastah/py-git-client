@@ -6,7 +6,8 @@ the shape of the code or a rule here changes.
 
 ## Shape of the code
 
-- `src/git_client/client.py`: `Git`, which runs every git process, and `find_git`.
+- `src/git_client/client.py`: `ReadOnlyGit`, which runs every git process (only commands that
+  read), `Git`, which extends it to run any, and `find_git`.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
@@ -34,9 +35,10 @@ the shape of the code or a rule here changes.
   next version (the release command opens that PR), so a change that could break git-stack,
   git-recommit or move-forward is simply released as the next patch version. PRs never change
   the version themselves.
-- **Every git process starts through `Git`** (`process`, or `popen` for one that answers
-  requests), so the way git is started stays the quickest each system allows. Never pass a
-  working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
+- **Every git process starts through `ReadOnlyGit`** (`process`, or `popen` for one that
+  answers requests; `Git` inherits both), so the way git is started stays the quickest each
+  system allows, and a ReadOnlyGit refuses what could write. Never pass a working directory
+  (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.

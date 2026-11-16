@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import OBJECT_ID, Git, batch_line, check_names_nothing, object_header
+from git_client.client import OBJECT_ID, ReadOnlyGit, batch_line, check_names_nothing, object_header
 from git_client.errors import GitError, UnknownRevisionError
 
 _COMMAND = ("cat-file", "--batch-command")
@@ -40,7 +40,7 @@ class CatFile:
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
     """
 
-    def __init__(self, git: Git) -> None:
+    def __init__(self, git: ReadOnlyGit) -> None:
         self.git = git
         self._process: subprocess.Popen[bytes] | None = None
         # Whether the process has answered a request.

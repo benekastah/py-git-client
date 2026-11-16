@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, config, find_git
+from git_client import CatFile, Git, ReadOnlyGit, config, find_git
 from git_client.testing import FakeGit, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -243,6 +243,14 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
         ["cat-file", "--batch-command"],
         ["log", "-1", "--format=%s"],
     ]
+
+
+def test_git_calls_records_a_read_only_clients_processes_too(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    ReadOnlyGit(repo.directory).run("log", "-1")
+
+    assert git_calls == [["log", "-1"]]
 
 
 @pytest.fixture
