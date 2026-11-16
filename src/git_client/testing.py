@@ -399,16 +399,19 @@ def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     calls: list[list[str]] = []
     process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
 
+    def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
+        git.command(*args)  # raises ReadOnlyError, starting nothing, for one it refuses
+        if not _setting_up.get():
+            calls.append([os.fsdecode(arg) for arg in args])
+
     def recording_process(
         self: ReadOnlyGit, *args: Arg, **kwargs: Any
     ) -> subprocess.CompletedProcess[bytes]:
-        if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+        record(self, args)
         return process(self, *args, **kwargs)
 
     def recording_popen(self: ReadOnlyGit, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
-        if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+        record(self, args)
         return popen(self, *args, **kwargs)
 
     monkeypatch.setattr(ReadOnlyGit, "process", recording_process)

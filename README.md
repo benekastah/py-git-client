@@ -98,7 +98,9 @@ those commands no timeout, so git stays in the tool's group and gets the signal 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git`, and runs only commands that read. Anything else raises `ReadOnlyError`
 before git starts. `Git` extends it, so a function that only reads can take a `ReadOnlyGit`,
-and be given either; `CatFile`, `config`, `refs` and `patch_ids` do.
+and be given either; `CatFile`, `config`, `refs` and `patch_ids` do. A parameter typed
+`ReadOnlyGit` says what the function asks of git, not that the client can't write: the
+promise is the client's, so make a `ReadOnlyGit` to have it.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
@@ -117,10 +119,12 @@ It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
 `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
 reads (`--get`, `--list`, `get`, ...) and `worktree list`. It doesn't run `diff`, which writes
 the index when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't),
-or take options that write: `--output`, and describe's `--dirty` and `--broken`. Of git's
-options before the command, it takes only those that name no config, repository or program
-(e.g. `--no-pager`, not `-c`), and `env` may set only the locale, `TZ`, and which repository,
-index and paths git reads (e.g. `GIT_DIR`, `GIT_INDEX_FILE`).
+or take options that write: `--output`, and describe's `--dirty` and `--broken`. It checks
+every argument, after `--` too (which can be another option's value), and `config`'s action
+must come first. Of git's options before the command, it takes only those that name no
+config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
+locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`). In a partial clone,
+it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.44 ignores).
 
 That covers what the tool asks git to do. What the repository's config tells git to run can
 still write (e.g. a diff driver's textconv with `cachetextconv`, a filter such as git-lfs's,

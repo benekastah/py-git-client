@@ -101,7 +101,8 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
 def patch_ids(git: ReadOnlyGit, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
-    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. Whatever
+    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros; a
+    ReadOnlyGit doesn't run `diff` (see there), so give it `log` or `show`. Whatever
     the user's config says, each command shows changes in the whole repository (not only
     under `git.directory`, as diff.relative would) and in every submodule, none through a
     textconv, with git's usual a/ and b/ prefixes, and checks no signatures; and `log` and

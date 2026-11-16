@@ -58,7 +58,6 @@ def stale(repo: Git) -> Path:
         ("diff-tree", "-p", "HEAD"),
         ("for-each-ref",),
         ("log", "-p", "--stat"),
-        ("log", "--oneline", "--", "--output=out"),  # after --, a path, not an option
         ("ls-files", "-m"),
         ("ls-tree", "HEAD"),
         ("merge-base", "HEAD", "HEAD"),
@@ -87,7 +86,9 @@ def test_a_read_only_client_runs_what_only_reads_and_writes_nothing(
     assert files(stale.parent) == before
 
 
-def test_a_writable_clients_status_writes_the_index_a_read_only_ones_doesnt(stale: Path) -> None:
+def test_status_writes_a_stale_index_without_a_read_only_clients_environment(
+    stale: Path,
+) -> None:
     before = files(stale.parent)
 
     Git(stale).run("status")
@@ -102,6 +103,10 @@ def test_a_writable_clients_status_writes_the_index_a_read_only_ones_doesnt(stal
         ("describe", "--always", "--dirty"),  # likewise
         ("describe", "--always", "--dirt"),  # git takes an unambiguous abbreviation
         ("log", "-1", "--output=out"),
+        # Each of these ends what git takes as options only as another option's value.
+        ("log", "-1", "--grep", "--end-of-options", "--output=out"),
+        ("describe", "--always", "--match", "--", "--dirty"),
+        ("config", "--file", "--list", "a.b", "c"),  # writes a file named --list
     ],
 )
 def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
@@ -128,6 +133,7 @@ def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
         ("config", "a.b", "c"),
         ("config", "--unset", "user.name"),
         ("config", "--get", "user.name", "--ad"),
+        ("config", "--list", "-ze"),  # -e, bundled
         ("config", "set", "a.b", "c"),
         ("worktree", "add", "x"),
     ],
@@ -145,6 +151,7 @@ def test_a_read_only_client_refuses_any_other_command_without_starting_git(
         ({"GIT_CONFIG_PARAMETERS": "'core.fsmonitor'='x'"}, {}),
         ({}, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "c"}),
         ({}, {"GIT_EXTERNAL_DIFF": "x"}),
+        ({}, {"GIT_DIR": "elsewhere"}),
         ({}, {"HOME": "elsewhere"}),  # a global config of its own
         ({}, {"GIT_OPTIONAL_LOCKS": "1"}),
     ],
@@ -162,7 +169,7 @@ def test_a_read_only_client_refuses_an_environment_that_could_make_git_write(
 
 
 def test_a_read_only_client_takes_an_environment_that_only_says_what_to_read(repo: Git) -> None:
-    git = ReadOnlyGit(".", env={"GIT_DIR": os.path.join(repo.directory, ".git")})
+    git = ReadOnlyGit(repo.directory, env={"GIT_LITERAL_PATHSPECS": "1"})
 
     assert git.run("log", "-1", "--format=%s", env={"TZ": "UTC", "LC_TIME": "C"}) == "first"
 
@@ -177,3 +184,23 @@ def test_the_librarys_reads_take_a_read_only_client(repo: Git) -> None:
     assert config(git)["user.name"]
     assert len(patch_ids(git, ["log", "-p", "HEAD"])[0]) == 1
     assert git.resolve("HEAD") == head
+
+
+@pytest.mark.skipif(
+    tuple(int(part) for part in Git(".").run("version").split()[2].split(".")[:2]) < (2, 44),
+    reason="git before 2.44 ignores GIT_NO_LAZY_FETCH, and fetches",
+)
+def test_in_a_partial_clone_a_read_only_client_fetches_no_missing_object(repo: Git) -> None:
+    origin = Path(repo.directory)
+    repo.run("config", "uploadpack.allowFilter", "true")
+    blob = repo.run("rev-parse", "HEAD:a")
+    clone = origin.parent / "clone"
+    url = origin.as_uri()
+    Git(origin.parent).run("clone", "--quiet", "--no-checkout", "--filter=blob:none", url, "clone")
+    before = files(clone)
+
+    result = ReadOnlyGit(clone).process("cat-file", "-p", blob, capture_output=True)
+
+    assert result.returncode != 0
+    assert files(clone) == before
+    assert Git(clone).run("cat-file", "-p", blob) == "a"  # which a Git fetches
