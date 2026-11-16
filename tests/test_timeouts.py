@@ -90,6 +90,8 @@ import signal, sys
 from git_client import Git, GitTimeoutError
 # As the README says a tool should, so that git is stopped on the way out.
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+# As a tool started from a shell gets it, even if pytest was started with SIGINT ignored.
+signal.signal(signal.SIGINT, signal.default_int_handler)
 directory, timeout, terminal, *args = sys.argv[1:]
 if terminal == "terminal":
     import fcntl, termios
