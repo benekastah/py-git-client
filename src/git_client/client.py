@@ -21,7 +21,8 @@ Arg: TypeAlias = str | bytes
 """An argument to git: text (str), or a path in the filesystem (bytes, in its encoding)."""
 
 EnvValue: TypeAlias = str | bytes
-"""A value for git's environment: text (str), or a path in the filesystem (bytes)."""
+"""A value for git's environment: text (str, e.g. an author's name), or a path in the
+filesystem (bytes, in its encoding)."""
 
 
 class GitError(RuntimeError):
@@ -123,11 +124,22 @@ class Git:
         ]
 
     def environment(self, env: Mapping[str, EnvValue] | None = None) -> dict[str, str]:
-        """The environment for a command: ours, then this client's `env`, then `env`. A path
-        given as bytes becomes str with os.fsdecode, which Python turns back into the same
-        bytes as it starts git."""
+        """The environment for a command: ours, then this client's `env`, then `env`. Off
+        Windows, git gets each value as bytes, like `command`: text as UTF-8 (whatever the
+        locale's encoding), and a path given as bytes as it is. Each is given here as the str
+        that os.fsdecode makes of those bytes, which Python turns back into them as it starts
+        git."""
         added = {**self.env, **(env or {})}
-        return {**os.environ, **{key: os.fsdecode(value) for key, value in added.items()}}
+        return {
+            **os.environ,
+            **{key: self._environment_value(value) for key, value in added.items()},
+        }
+
+    @staticmethod
+    def _environment_value(value: EnvValue) -> str:
+        if isinstance(value, bytes):
+            return os.fsdecode(value)
+        return value if sys.platform == "win32" else os.fsdecode(encode(value))
 
     def process(
         self,

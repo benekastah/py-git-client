@@ -1,5 +1,6 @@
 import os
 import pickle
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -77,6 +78,24 @@ def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
     )
 
     assert client.run("log", "-2", "--format=%an") == "Command\nClient"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows passes the environment as str")
+def test_text_in_env_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> None:
+    # In a Python of its own, since the filesystem encoding is set as Python starts: ASCII,
+    # in the C locale, when Python neither coerces it nor uses UTF-8 mode. (Its command line
+    # is ASCII too, so the name is escaped there.)
+    script = (
+        "import sys; from git_client import Git; Git(sys.argv[1]).run('commit', '--quiet',"
+        " '--allow-empty', '-m', 'x', env={'GIT_AUTHOR_NAME': 'Zo\\u00eb \\u5f20'})"
+    )
+    subprocess.run(
+        [sys.executable, "-c", script, repo.directory],
+        env={**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0"},
+        check=True,
+    )
+
+    assert repo.run_bytes("log", "-1", "--format=%an") == "Zoë 张\n".encode()
 
 
 def test_runs_in_its_directory_wherever_we_are(
