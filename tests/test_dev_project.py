@@ -1,6 +1,7 @@
 """dev_project.py's `release`, against a local bare repository standing in for origin."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -345,3 +346,27 @@ def test_release_refuses_an_origin_not_on_github(repos: Path, github: FakeGitHub
         dev_project.publish(repos / "clone", "0.0.1")
     assert github.asked == []
     assert Git(repos / "origin.git").run("tag") == ""
+
+
+def test_release_says_how_to_finish_when_interrupted_after_the_tag(
+    repos: Path,
+    github: FakeGitHub,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def interrupt(worktree: Path) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dev_project, "uv_lock", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert re.search(r"(?s)pushed v0\.0\.1.*by hand", capsys.readouterr().err)
+    assert len(Git(repos / "clone").run("worktree", "list").splitlines()) == 1
+
+
+def test_release_drops_the_tag_it_couldnt_push(repos: Path, github: FakeGitHub) -> None:
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.pushurl", (repos / "missing.git").as_posix())
+    with pytest.raises(ReleaseError, match="push"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert clone.run("tag") == ""

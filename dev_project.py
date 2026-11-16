@@ -169,14 +169,19 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
         raise
     try:
         return tag, _start_next_version(repo, github, version)
-    except ReleaseError as error:
+    except BaseException as error:  # a Ctrl-C too: the tag is out, so say what's left
         upcoming = next_version(version)
-        raise ReleaseError(
-            f"pushed {tag}, but starting {upcoming} failed: {error}\n"
+        why = str(error) or type(error).__name__  # e.g. KeyboardInterrupt, which says nothing
+        message = (
+            f"pushed {tag}, but starting {upcoming} failed: {why}\n"
             f"To finish by hand: on a branch from origin/main, set pyproject.toml's version to"
             f" {upcoming}, run `uv lock`, commit, push, and open a PR into main (or, if"
             f" start-{upcoming} was pushed, just open its PR)."
-        ) from error
+        )
+        if isinstance(error, ReleaseError):
+            raise ReleaseError(message) from error
+        print(f"release: {message}", file=sys.stderr)
+        raise
 
 
 def _next_version_branch(released: str) -> str:
