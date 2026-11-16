@@ -55,23 +55,24 @@ def github_repo(url: str) -> str:
     return "/".join(match.groups())
 
 
-def origin_urls(repo: Path) -> tuple[str, str]:
-    """The URLs git fetches origin from and pushes it to, after its URL rewriting (insteadOf,
-    pushInsteadOf). The tests replace it: their origin is a local repository standing in for
-    GitHub."""
-    fetch = _git(repo, "remote", "get-url", "origin")
-    return fetch, _git(repo, "remote", "get-url", "--push", "origin")
+def origin_urls(repo: Path) -> list[str]:
+    """Every URL git fetches origin from or pushes it to (it pushes to all of them), after
+    its URL rewriting (insteadOf, pushInsteadOf). The tests replace it: their origin is a
+    local repository standing in for GitHub."""
+    fetch = _git(repo, "remote", "get-url", "--all", "origin").splitlines()
+    return fetch + _git(repo, "remote", "get-url", "--push", "--all", "origin").splitlines()
 
 
 def origin_github_repo(repo: Path) -> str:
     """OWNER/REPO of `repo`'s origin on github.com, which gh is told (left to itself, it may
-    pick another remote, e.g. upstream). Refuses unless git both fetches from and pushes to
-    that repository, so that CI is checked where the tag goes."""
-    fetch_url, push_url = origin_urls(repo)
-    fetch, push = github_repo(fetch_url), github_repo(push_url)
-    if push.lower() != fetch.lower():
-        raise ReleaseError(f"origin fetches from {fetch} but pushes to {push}")
-    return fetch
+    pick another remote, e.g. upstream). Refuses unless every URL git fetches from or pushes
+    to names that one repository, so that CI is checked where the tag goes."""
+    named = [github_repo(url) for url in origin_urls(repo)]
+    others = sorted({name for name in named if name.lower() != named[0].lower()})
+    if others:
+        listed = ", ".join([named[0], *others])
+        raise ReleaseError(f"origin's URLs name more than one repository: {listed}")
+    return named[0]
 
 
 def pyproject_version(pyproject: str) -> str:

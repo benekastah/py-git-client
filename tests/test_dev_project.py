@@ -198,9 +198,9 @@ class FakeGitHub:
         self.asked: list[str] = []
         self.prs: list[tuple[str, str, str]] = []
         self.locked: list[Path] = []
-        self.urls: tuple[str, str] = (GITHUB_ORIGIN, GITHUB_ORIGIN)
+        self.urls = [GITHUB_ORIGIN]
 
-    def origin_urls(self, repo: Path) -> tuple[str, str]:
+    def origin_urls(self, repo: Path) -> list[str]:
         """origin's fetch and push URLs: example/repo on GitHub, for which the tests' local
         bare repository stands in."""
         return self.urls
@@ -354,7 +354,7 @@ def test_release_refuses_a_next_version_branch_on_origin(repos: Path, github: Fa
 
 
 def test_release_refuses_an_origin_not_on_github(repos: Path, github: FakeGitHub) -> None:
-    github.urls = ("/srv/repo.git", "/srv/repo.git")
+    github.urls = ["/srv/repo.git"]
     with pytest.raises(ReleaseError, match="only github.com is supported"):
         dev_project.publish(repos / "clone", "0.0.1")
     assert github.asked == []
@@ -421,7 +421,7 @@ def test_origin_github_repo_refuses_pushing_elsewhere(repos: Path) -> None:
     clone = Git(repos / "clone")
     clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
     clone.run("config", "remote.origin.pushurl", "git@github.com:other/repo.git")
-    with pytest.raises(ReleaseError, match="pushes to other/repo"):
+    with pytest.raises(ReleaseError, match="more than one repository.*other/repo"):
         dev_project.origin_github_repo(repos / "clone")
 
 
@@ -430,7 +430,7 @@ def test_origin_github_repo_follows_pushinsteadof(repos: Path) -> None:
     clone.run("config", "remote.origin.url", "gh:example/repo")
     clone.run("config", "url.https://github.com/.insteadOf", "gh:")
     clone.run("config", "url.git@github.com:other/.pushInsteadOf", "gh:example/")
-    with pytest.raises(ReleaseError, match="pushes to other/repo"):
+    with pytest.raises(ReleaseError, match="more than one repository.*other/repo"):
         dev_project.origin_github_repo(repos / "clone")
 
 
@@ -450,3 +450,22 @@ def test_release_keeps_a_next_version_branch_it_didnt_create(
     with pytest.raises(ReleaseError, match="already exists"):
         dev_project.publish(repos / "clone", "0.0.1")
     assert Git(repos / "clone").ok("rev-parse", "--verify", "--quiet", "refs/heads/start-0.0.2")
+
+
+@pytest.mark.parametrize("key", ["remote.origin.url", "remote.origin.pushurl"])
+def test_origin_github_repo_refuses_a_second_url_elsewhere(repos: Path, key: str) -> None:
+    # git fetches from the first URL but pushes to every one.
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.url", GITHUB_ORIGIN)
+    if key == "remote.origin.pushurl":
+        clone.run("config", key, GITHUB_ORIGIN)
+    clone.run("config", "--add", key, "git@github.com:other/repo.git")
+    with pytest.raises(ReleaseError, match="more than one repository.*other/repo"):
+        dev_project.origin_github_repo(repos / "clone")
+
+
+def test_origin_github_repo_ignores_case(repos: Path) -> None:
+    clone = Git(repos / "clone")
+    clone.run("config", "remote.origin.url", "https://github.com/Example/Repo")
+    clone.run("config", "remote.origin.pushurl", "git@github.com:example/repo.git")
+    assert dev_project.origin_github_repo(repos / "clone") == "Example/Repo"

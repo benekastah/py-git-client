@@ -231,8 +231,8 @@ version:
 python3 dev.py release 0.0.1
 ```
 
-It needs git, uv and gh (logged in). origin's fetch and push URLs, after git's URL rewriting
-(`insteadOf`, `pushInsteadOf`), must both be the same github.com repository. After fetching
+It needs git, uv and gh (logged in). Every one of origin's fetch and push URLs, after git's
+URL rewriting (`insteadOf`, `pushInsteadOf`), must name the same github.com repository. After fetching
 origin, it refuses unless the version is `pyproject.toml`'s on `origin/main`, neither its tag nor the
 next version's branch (`start-X.Y.Z+1`) exists yet, locally or on origin, and every GitHub
 Actions run of the "CI passed" check succeeded on `origin/main`'s latest commit (if one is
