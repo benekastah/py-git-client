@@ -121,7 +121,12 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
     assert repo.resolve("main") == repo.run("rev-parse", "HEAD")
     assert repo.resolve("no-such-branch") is None
-    assert repo.resolve("--all") is None  # a name, not an option
+
+
+def test_resolve_takes_a_name_that_looks_like_an_option_as_a_name(repo: Git) -> None:
+    repo.run("update-ref", "refs/tags/-x", "HEAD")
+
+    assert repo.resolve("-x") == repo.run("rev-parse", "HEAD")
 
 
 def test_resolve_raises_for_what_isnt_a_name_naming_nothing(tmp_path: Path) -> None:
