@@ -33,6 +33,7 @@ from git_client import CatFile, Git, RefUpdate, config, refs, update_refs
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
 # a tool names its own variable so its users can choose, e.g. git itself, for speed.
+# Raises FileNotFoundError if there's neither.
 git = Git("path/to/repo", env_var="MY_TOOL_GIT")
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure

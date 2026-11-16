@@ -48,7 +48,9 @@ def find_git(env_var: str | None = None) -> str:
         return configured
     found = on_path("git")
     if found is None:
-        raise FileNotFoundError("git isn't in any directory on PATH")
+        raise FileNotFoundError(
+            "git isn't in any directory on PATH" + (f"; ${env_var} can name it" if env_var else "")
+        )
     return found
 
 
@@ -88,8 +90,9 @@ class Git:
     """Runs git in `directory`, as `git -C <directory>` does.
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
-    variable (e.g. `GIT_STACK_GIT`) so its users can choose. `env` is added to the
-    environment of every command.
+    variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
+    FileNotFoundError if there's no git to find. `env` is added to the environment of every
+    command.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.

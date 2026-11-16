@@ -35,7 +35,8 @@ class CatFile:
     It sees refs and objects as they are when asked, even when other processes have changed
     them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
     no upstream), git cat-file exits rather than saying they name nothing; then that name
-    resolves to nothing, and the next request starts another process.
+    resolves to nothing, and the next request starts another process. Any request raises
+    GitError if git is too old for `--batch-command` (before 2.36).
     """
 
     def __init__(self, git: Git) -> None:
@@ -84,7 +85,7 @@ class CatFile:
     def read(self, object_id: str) -> tuple[str, bytes]:
         """The type and content of the object with this full id (as `git cat-file <type>
         <id>` prints it: a commit's headers and message exactly as they are). Raises
-        GitError if there's no such object."""
+        GitError if there's no such object, or if git is too old for this (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         with self._lock:
@@ -100,7 +101,8 @@ class CatFile:
 
     def _request(self, command: bytes) -> list[bytes] | None:
         """Send command, and return the first line of the reply, split, or None if the process
-        stopped (the next request starts another). Hold the lock."""
+        stopped (the next request starts another). Raises GitError if it stopped with a usage
+        error, as a git older than 2.36 does at --batch-command. Hold the lock."""
         if self._process is None:
             # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name that's
             # both a branch and a tag), as rev-parse --quiet doesn't.
