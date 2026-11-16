@@ -60,6 +60,13 @@ def test_a_failures_message_cuts_a_long_command_short() -> None:
     assert len(error.command) == 102
 
 
+def test_a_failure_keeps_what_git_printed_to_stdout(repo: Git) -> None:
+    with pytest.raises(GitError) as raised:
+        repo.run("show-ref", "--verify", "refs/heads/main", "refs/heads/nope")
+
+    assert raised.value.stdout.startswith(repo.run("rev-parse", "main"))
+
+
 def test_ok_says_whether_it_succeeded(repo: Git) -> None:
     assert repo.ok("rev-parse", "--verify", "main")
     assert not repo.ok("rev-parse", "--verify", "no-such-branch")
@@ -183,14 +190,15 @@ def test_passthrough_sends_gits_output_where_its_told(repo: Git, tmp_path: Path)
 
 def test_a_git_error_survives_pickling(repo: Git) -> None:
     with pytest.raises(GitError) as raised:
-        repo.run("switch", "no-such-branch")
+        repo.run("show-ref", "--verify", "refs/heads/main", "refs/heads/nope")
 
     copy = pickle.loads(pickle.dumps(raised.value))
 
-    assert (copy.command, copy.returncode, copy.stderr) == (
+    assert (copy.command, copy.returncode, copy.stderr, copy.stdout) == (
         raised.value.command,
         raised.value.returncode,
         raised.value.stderr,
+        raised.value.stdout,
     )
 
 

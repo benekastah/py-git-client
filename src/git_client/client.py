@@ -31,23 +31,31 @@ MAX_COMMAND_IN_MESSAGE = 200
 
 
 class GitError(RuntimeError):
-    """A git command failed. `command` is git's arguments, `returncode` its exit status and
-    `stderr` what it printed there. The message shows at most MAX_COMMAND_IN_MESSAGE
+    """A git command failed. `command` is git's arguments, `returncode` its exit status, and
+    `stderr` and `stdout` what it printed there (stdout only from `Git.run` and
+    `Git.run_bytes`, e.g. the report of a command that printed one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE
     characters of the command line, ending with "…" when cut; `command` keeps all of it."""
 
-    def __init__(self, args: Sequence[Arg], returncode: int, stderr: str) -> None:
+    def __init__(self, args: Sequence[Arg], returncode: int, stderr: str, stdout: str = "") -> None:
         self.command = [os.fsdecode(arg) for arg in args]
         self.returncode = returncode
         self.stderr = stderr
+        self.stdout = stdout
         line = " ".join(self.command)
         if len(line) > MAX_COMMAND_IN_MESSAGE:
             line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
         super().__init__(f"git {line} failed ({returncode}):\n{stderr.strip()}")
 
-    def __reduce__(self) -> tuple[type[Self], tuple[list[str], int, str], dict[str, object]]:
+    def __reduce__(
+        self,
+    ) -> tuple[type[Self], tuple[list[str], int, str, str], dict[str, object]]:
         # So it can cross from a worker process: the default would call __init__ with only the
         # message. Its class and __dict__ keep a subclass, and notes added with add_note.
-        return (type(self), (self.command, self.returncode, self.stderr), self.__dict__)
+        return (
+            type(self),
+            (self.command, self.returncode, self.stderr, self.stdout),
+            self.__dict__,
+        )
 
 
 @functools.cache
@@ -203,7 +211,7 @@ class Git:
         Raises GitError if it fails."""
         result = self.process(*args, capture_output=True, input=input, env=env)
         if result.returncode != 0:
-            raise GitError(args, result.returncode, decode(result.stderr))
+            raise GitError(args, result.returncode, decode(result.stderr), decode(result.stdout))
         return result.stdout
 
     def run(
