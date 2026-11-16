@@ -13,16 +13,33 @@ from git_client.batch import (
     update_refs,
 )
 from git_client.cat_file import CatFile, ObjectInfo
-from git_client.client import CLOSE_FDS, Git, GitError, decode, encode, find_git
+from git_client.client import (
+    CLIENT_TIMEOUT,
+    CLOSE_FDS,
+    Arg,
+    EnvValue,
+    Git,
+    GitError,
+    GitTimeoutError,
+    Timeout,
+    decode,
+    encode,
+    find_git,
+)
 
 __all__ = [
+    "CLIENT_TIMEOUT",
     "CLOSE_FDS",
+    "Arg",
     "CatFile",
+    "EnvValue",
     "Git",
     "GitError",
+    "GitTimeoutError",
     "ObjectInfo",
     "Ref",
     "RefUpdate",
+    "Timeout",
     "config",
     "config_key",
     "decode",

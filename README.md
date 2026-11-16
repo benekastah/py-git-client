@@ -35,10 +35,12 @@ from git_client import CatFile, Git, RefUpdate, config, config_key, refs, update
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
 # a tool names its own variable so its users can choose, e.g. git itself, for speed.
 # Raises FileNotFoundError if there's neither.
-git = Git("path/to/repo", env_var="MY_TOOL_GIT")
+git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (the default): none
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure
 git.ok("merge-base", "--is-ancestor", "a", "b")  # True or False
+git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
+# git is stopped and GitTimeoutError raised
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing

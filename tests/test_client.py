@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, GitError, find_git
+from git_client import Git, GitError, GitTimeoutError, find_git
 
 
 @pytest.fixture
@@ -65,6 +65,35 @@ def test_a_failure_keeps_what_git_printed_to_stdout(repo: Git) -> None:
         repo.run("show-ref", "--verify", "refs/heads/main", "refs/heads/nope")
 
     assert raised.value.stdout.startswith(repo.run("rev-parse", "main"))
+
+
+@pytest.fixture
+def waiting(repo: Git) -> Git:
+    """repo, with aliases that run past a timeout of 0.2s: `git wait`, for 1s, and `git
+    pause`, for 0.5s."""
+    # Not much longer: on Windows, a timeout waits for what git started (here, sh and Python)
+    # to let go of its output.
+    for alias, seconds in (("wait", 1), ("pause", 0.5)):
+        sleep = f'"{Path(sys.executable).as_posix()}" -c "import time; time.sleep({seconds})"'
+        repo.run("config", f"alias.{alias}", f"!{sleep}")
+    return repo
+
+
+def test_a_command_past_the_clients_timeout_raises(waiting: Git) -> None:
+    with pytest.raises(GitTimeoutError) as raised:
+        Git(waiting.directory, timeout=0.2).run("wait")
+
+    assert raised.value.command == ["wait"]
+    assert raised.value.returncode is None
+
+
+def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
+    client = Git(waiting.directory, timeout=0.2)
+
+    with pytest.raises(GitTimeoutError):
+        waiting.ok("wait", timeout=0.2)
+    assert client.run("pause", timeout=None) == ""
+    assert client.passthrough("pause", timeout=10)
 
 
 def test_ok_says_whether_it_succeeded(repo: Git) -> None:

@@ -1,12 +1,13 @@
 """Running git: finding it once, starting it the quickest way each system allows, and passing
 text and paths to it as git expects them."""
 
+import enum
 import functools
 import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from typing import IO, Self, TypeAlias
+from typing import IO, Final, Literal, Self, TypeAlias
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -31,12 +32,15 @@ MAX_COMMAND_IN_MESSAGE = 200
 
 
 class GitError(RuntimeError):
-    """A git command failed. `command` is git's arguments, `returncode` its exit status, and
-    `stderr` and `stdout` what it printed there (stdout only from `Git.run` and
-    `Git.run_bytes`, e.g. the report of a command that printed one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE
-    characters of the command line, ending with "…" when cut; `command` keeps all of it."""
+    """A git command failed. `command` is git's arguments, `returncode` its exit status (None
+    if it didn't exit: see GitTimeoutError), and `stderr` and `stdout` what it printed there
+    (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
+    one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE characters of the
+    command line, ending with "…" when cut; `command` keeps all of it."""
 
-    def __init__(self, args: Sequence[Arg], returncode: int, stderr: str, stdout: str = "") -> None:
+    def __init__(
+        self, args: Sequence[Arg], returncode: int | None, stderr: str, stdout: str = ""
+    ) -> None:
         self.command = [os.fsdecode(arg) for arg in args]
         self.returncode = returncode
         self.stderr = stderr
@@ -44,11 +48,12 @@ class GitError(RuntimeError):
         line = " ".join(self.command)
         if len(line) > MAX_COMMAND_IN_MESSAGE:
             line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
-        super().__init__(f"git {line} failed ({returncode}):\n{stderr.strip()}")
+        status = "timed out" if returncode is None else returncode
+        super().__init__(f"git {line} failed ({status}):\n{stderr.strip()}")
 
     def __reduce__(
         self,
-    ) -> tuple[type[Self], tuple[list[str], int, str, str], dict[str, object]]:
+    ) -> tuple[type[Self], tuple[list[str], int | None, str, str], dict[str, object]]:
         # So it can cross from a worker process: the default would call __init__ with only the
         # message. Its class and __dict__ keep a subclass, and notes added with add_note.
         return (
@@ -56,6 +61,23 @@ class GitError(RuntimeError):
             (self.command, self.returncode, self.stderr, self.stdout),
             self.__dict__,
         )
+
+
+class GitTimeoutError(GitError):
+    """git ran past its timeout (see Git), and was stopped. Its returncode is None."""
+
+
+class ClientTimeout(enum.Enum):
+    """CLIENT_TIMEOUT's type."""
+
+    CLIENT = enum.auto()
+
+
+CLIENT_TIMEOUT: Final = ClientTimeout.CLIENT
+"""A command's timeout when it's given none of its own: the client's (see Git)."""
+
+Timeout: TypeAlias = float | None | Literal[ClientTimeout.CLIENT]
+"""A command's timeout, in seconds: None for none, or (the default) the client's."""
 
 
 @functools.cache
@@ -109,7 +131,8 @@ class Git:
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
     FileNotFoundError if there's no git to find. `env` is added to the environment of every
-    command.
+    command. `timeout` is how many seconds a command may run (None: as long as it takes),
+    unless given its own; one that runs longer is stopped, and raises GitTimeoutError.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
@@ -122,10 +145,12 @@ class Git:
         program: str | None = None,
         env_var: str | None = None,
         env: Mapping[str, EnvValue] | None = None,
+        timeout: float | None = None,
     ) -> None:
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
+        self.timeout = timeout
         self._object_id_length: int | None = None
 
     def object_id_length(self) -> int:
@@ -174,23 +199,34 @@ class Git:
         input: bytes | None = None,
         stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
-        """Run git and return the finished process, whatever its exit status."""
-        return subprocess.run(
-            self.command(*args),
-            capture_output=capture_output,
-            stdout=None if capture_output else stdout,
-            input=input,
-            env=self.environment(env),
-            close_fds=CLOSE_FDS,
-            check=False,
-        )
+        """Run git and return the finished process, whatever its exit status. Raises
+        GitTimeoutError if it runs past its timeout (see Git). Every git process but `popen`'s
+        starts here, so a subclass can override this to change how each runs (e.g. to make
+        every command fail once the tool is shutting down)."""
+        try:
+            return subprocess.run(
+                self.command(*args),
+                capture_output=capture_output,
+                stdout=None if capture_output else stdout,
+                input=input,
+                env=self.environment(env),
+                close_fds=CLOSE_FDS,
+                check=False,
+                timeout=self.timeout if timeout is CLIENT_TIMEOUT else timeout,
+            )
+        except subprocess.TimeoutExpired as expired:
+            raise GitTimeoutError(
+                args, None, decode(expired.stderr or b""), decode(expired.stdout or b"")
+            ) from None
 
     def popen(
         self, *args: Arg, env: Mapping[str, EnvValue] | None = None
     ) -> subprocess.Popen[bytes]:
         """Start git with pipes for its stdin and stdout (its stderr goes nowhere), for a
-        process that answers requests until its stdin closes (e.g. `cat-file --batch`)."""
+        process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
+        has no timeout."""
         return subprocess.Popen(
             self.command(*args),
             stdin=subprocess.PIPE,
@@ -205,37 +241,52 @@ class Git:
         )
 
     def run_bytes(
-        self, *args: Arg, input: bytes | None = None, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        input: bytes | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bytes:
         """Run git and return its stdout as it is (e.g. a file's content, or a patch).
         Raises GitError if it fails."""
-        result = self.process(*args, capture_output=True, input=input, env=env)
+        result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
         if result.returncode != 0:
             raise GitError(args, result.returncode, decode(result.stderr), decode(result.stdout))
         return result.stdout
 
     def run(
-        self, *args: Arg, input: str | None = None, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        input: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> str:
         """Run git and return its stdout as text, stripped. Raises GitError if it fails.
 
         Input and output pass as bytes, so line endings stay as they are: text mode would
         write each \\n as \\r\\n on Windows.
         """
-        return decode(
-            self.run_bytes(*args, input=None if input is None else encode(input), env=env)
-        ).strip()
+        encoded = None if input is None else encode(input)
+        return decode(self.run_bytes(*args, input=encoded, env=env, timeout=timeout)).strip()
 
-    def ok(self, *args: Arg, env: Mapping[str, EnvValue] | None = None) -> bool:
-        """Run git, discarding its output, and say whether it succeeded."""
-        return self.process(*args, capture_output=True, env=env).returncode == 0
+    def ok(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> bool:
+        """Run git, discarding its output, and say whether it succeeded. Raises
+        GitTimeoutError, rather than say no, if it runs past its timeout."""
+        return self.process(*args, capture_output=True, env=env, timeout=timeout).returncode == 0
 
     def passthrough(
         self,
         *args: Arg,
         stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bool:
         """Run git with its output going to ours (stdout to `stdout`, if given, e.g. stderr
-        when ours is for JSON), and say whether it succeeded."""
-        return self.process(*args, stdout=stdout, env=env).returncode == 0
+        when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
+        than say no, if it runs past its timeout."""
+        return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0

@@ -6,9 +6,13 @@ from typing import IO
 import pytest
 
 from git_client import (
+    CLIENT_TIMEOUT,
+    Arg,
+    EnvValue,
     Git,
     GitError,
     RefUpdate,
+    Timeout,
     config,
     config_key,
     hash_blobs,
@@ -16,7 +20,6 @@ from git_client import (
     refs,
     update_refs,
 )
-from git_client.client import Arg, EnvValue
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -271,10 +274,16 @@ class CountingGit(Git):
         input: bytes | None = None,
         stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         self.started += 1
         return super().process(
-            *args, capture_output=capture_output, input=input, stdout=stdout, env=env
+            *args,
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            env=env,
+            timeout=timeout,
         )
 
 
