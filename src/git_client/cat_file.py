@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import Git, GitError, encode
+from git_client.client import Git, encode
+from git_client.errors import GitError
 
 OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 """A full object id: SHA-1 or SHA-256."""

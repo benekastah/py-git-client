@@ -5,7 +5,8 @@ import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from git_client.client import Git, GitError, decode, encode
+from git_client.client import Git, decode, encode
+from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
 # (diff.relative, submodule.<name>.ignore) or change them (color, an external diff, textconv,

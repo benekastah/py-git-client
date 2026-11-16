@@ -8,6 +8,7 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 ## Shape of the code
 
 - `src/git_client/client.py`: `Git`, which runs every git process, and `find_git`.
+- `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/__init__.py`: the public API; anything not exported there is private.
@@ -24,6 +25,9 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
 - **Real git, not mocks, in the tests:** what this library promises is how git behaves.
+- **Errors are the library's own**, never subprocess's: which `GitError` a failure raises is
+  read from git's message (in English: commands whose output is read run with `LC_ALL=C`),
+  and each message matched is one a test makes real git print.
 
 ## Tests and checks
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, GitError, GitTimeoutError, find_git
+from git_client import Git, GitError, GitTimeoutError, UnknownRevisionError, find_git
 
 
 @pytest.fixture
@@ -160,7 +160,7 @@ def german(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("german")
 def test_captured_messages_are_in_english_whatever_the_users_language(repo: Git) -> None:
-    with pytest.raises(GitError) as raised:
+    with pytest.raises(UnknownRevisionError) as raised:
         repo.run("rev-parse", "--verify", "no-such-branch")
 
     assert "Needed a single revision" in raised.value.stderr

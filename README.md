@@ -61,10 +61,29 @@ update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; o
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
 filesystem's encoding; text, as str, which reaches git as UTF-8 whatever the locale's
-encoding. Both go for arguments and for values in `env`. Output is decoded as UTF-8 with surrogateescape, so bytes
-that aren't UTF-8 survive a round trip through `encode`. Commands whose output the library
-reads run with `LC_ALL=C`, so git's messages are in English whatever the user's language;
-`passthrough`, whose output is the user's, keeps their locale.
+encoding. Both go for arguments and for values in `env`. Output is decoded as UTF-8 with
+surrogateescape, so bytes that aren't UTF-8 survive a round trip through `encode`. Commands
+whose output the library reads run with `LC_ALL=C`, so git's messages are in English
+whatever the user's language; `passthrough`, whose output is the user's, keeps their locale.
+
+### Errors
+
+`run` and `run_bytes` raise a `GitError` when git fails, with its `command`, `returncode`,
+`stderr` and `stdout`. For the failures a tool may want to handle, the library reads what git
+said and raises a subclass:
+
+| Error | When |
+| --- | --- |
+| `NotARepositoryError` | There's no repository at the client's directory. |
+| `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
+| `ConfigLockedError` | Another process has the config file locked; a write can be tried again. |
+| `RemoteError` | A remote can't be reached or read from, or has no such repository. |
+| `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
+| `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
+| `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
+
+Any other failure is a plain `GitError`. `ok` and `passthrough` say whether git succeeded
+instead, but raise `GitTimeoutError` past a timeout.
 
 ## Development
 

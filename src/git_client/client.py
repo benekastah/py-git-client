@@ -6,8 +6,10 @@ import functools
 import os
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
-from typing import IO, Final, Literal, Self, TypeAlias
+from collections.abc import Mapping
+from typing import IO, Final, Literal, TypeAlias
+
+from git_client.errors import GitTimeoutError, error_for
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -24,47 +26,6 @@ Arg: TypeAlias = str | bytes
 EnvValue: TypeAlias = str | bytes
 """A value for git's environment: text (str, e.g. an author's name), or a path in the
 filesystem (bytes, in its encoding)."""
-
-
-# How much of a command line a GitError's message shows: a long one (thousands of paths, say)
-# would bury what git said.
-MAX_COMMAND_IN_MESSAGE = 200
-
-
-class GitError(RuntimeError):
-    """A git command failed. `command` is git's arguments, `returncode` its exit status (None
-    if it didn't exit: see GitTimeoutError), and `stderr` and `stdout` what it printed there
-    (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
-    one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE characters of the
-    command line, ending with "…" when cut; `command` keeps all of it."""
-
-    def __init__(
-        self, args: Sequence[Arg], returncode: int | None, stderr: str, stdout: str = ""
-    ) -> None:
-        self.command = [os.fsdecode(arg) for arg in args]
-        self.returncode = returncode
-        self.stderr = stderr
-        self.stdout = stdout
-        line = " ".join(self.command)
-        if len(line) > MAX_COMMAND_IN_MESSAGE:
-            line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
-        status = "timed out" if returncode is None else returncode
-        super().__init__(f"git {line} failed ({status}):\n{stderr.strip()}")
-
-    def __reduce__(
-        self,
-    ) -> tuple[type[Self], tuple[list[str], int | None, str, str], dict[str, object]]:
-        # So it can cross from a worker process: the default would call __init__ with only the
-        # message. Its class and __dict__ keep a subclass, and notes added with add_note.
-        return (
-            type(self),
-            (self.command, self.returncode, self.stderr, self.stdout),
-            self.__dict__,
-        )
-
-
-class GitTimeoutError(GitError):
-    """git ran past its timeout (see Git), and was stopped. Its returncode is None."""
 
 
 class ClientTimeout(enum.Enum):
@@ -254,10 +215,12 @@ class Git:
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bytes:
         """Run git and return its stdout as it is (e.g. a file's content, or a patch).
-        Raises GitError if it fails."""
+        Raises GitError if it fails: a subclass (e.g. UnknownRevisionError) for a failure the
+        library knows from what git said."""
         result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
         if result.returncode != 0:
-            raise GitError(args, result.returncode, decode(result.stderr), decode(result.stdout))
+            stderr, stdout = decode(result.stderr), decode(result.stdout)
+            raise error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
         return result.stdout
 
     def run(
@@ -267,7 +230,8 @@ class Git:
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> str:
-        """Run git and return its stdout as text, stripped. Raises GitError if it fails.
+        """Run git and return its stdout as text, stripped. Raises GitError if it fails, as
+        `run_bytes` does.
 
         Input and output pass as bytes, so line endings stay as they are: text mode would
         write each \\n as \\r\\n on Windows.
