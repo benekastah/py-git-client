@@ -218,12 +218,12 @@ def _start_next_version(repo: Path, github: str, released: str) -> str:
     branch = _next_version_branch(released)
     title = f"Start version {upcoming}, after releasing {released}"
     message = (
-        f"{title}\n\nmain always carries the next version to release (see AGENTS.md), so that"
+        f"{title}\n\nmain always carries the next version to release (see PROJECT_AGENTS.md), so that"
         f" what lands from now on is released as {upcoming}, never as {released} again.\n"
     )
     body = (
         f"Opened by `python3 dev.py release {released}`, after it tagged v{released}.\n\n"
-        f"main always carries the next version to release (see AGENTS.md). Merge this like any"
+        f"main always carries the next version to release (see PROJECT_AGENTS.md). Merge this like any"
         f" other PR once CI passes.\n"
     )
     scratch = Path(tempfile.mkdtemp(prefix="release-"))
