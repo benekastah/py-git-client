@@ -188,7 +188,13 @@ class RepoTemplates:
 
     def copy(self, name: str, dest: Path) -> Path:
         """Copy the repositories `build` made for `name` to `dest` (symlinks as symlinks),
-        pointing remotes that named one of them at its copy. Returns `dest`."""
+        pointing remotes that named one of them at its copy. Returns `dest`.
+
+        A copy's index keeps the template's stat data, which no longer matches its files: the
+        first command that refreshes the index (e.g. `git status`, `git diff`) makes it match,
+        but plumbing that doesn't (`git diff-index HEAD`, `git diff-files`) reports every file
+        as modified until then. A test of a tool that uses such plumbing runs `git
+        update-index -q --refresh` first."""
         source = self.root / name
         shutil.copytree(source, dest, symlinks=True)
         _repoint_remotes(source, dest)
