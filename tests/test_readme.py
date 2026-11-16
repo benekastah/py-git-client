@@ -47,7 +47,6 @@ def test_the_readmes_python_examples_run(
         pytest.skip(f"{version}: the README's examples need git 2.36 or newer")
     repo_templates.build("readme", make_readme_repository)
     monkeypatch.chdir(repo_templates.copy("readme", tmp_path / "copy"))
-    monkeypatch.delenv("MY_TOOL_GIT", raising=False)  # which an example sets
     blocks = re.findall(r"```python\n(.*?)```", README.read_text(encoding="utf-8"), re.DOTALL)
     names = {
         **vars(git_client),
@@ -58,8 +57,15 @@ def test_the_readmes_python_examples_run(
         "publish": publish,
     }
 
-    for block in blocks:
-        exec(textwrap.dedent(block), dict(names))  # noqa: S102 (the README's own code)
+    # An example sets os.environ["MY_TOOL_GIT"], as a conftest would, which later tests in
+    # this process mustn't see.
+    environ = os.environ.copy()
+    try:
+        for block in blocks:
+            exec(textwrap.dedent(block), dict(names))  # noqa: S102 (the README's own code)
+    finally:
+        os.environ.clear()
+        os.environ.update(environ)
 
     # The last thing "Using it" does.
     assert Git(Path("path", "to", "repo")).resolve("refs/heads/old") is None
