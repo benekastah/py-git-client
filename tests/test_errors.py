@@ -82,6 +82,23 @@ def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> N
     assert type(raised.value) is GitError
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("merge-base", "HEAD", "HEAD^{tree}"),  # Not a valid commit name
+        ("cherry", "HEAD", "HEAD^{tree}"),  # unknown commit
+        ("reset", "HEAD^{tree}"),  # Could not parse object
+        ("rebase", "--onto", "HEAD^{tree}", "HEAD"),  # Does not point to a valid commit
+    ],
+)
+def test_a_name_of_the_wrong_type_is_another_failure(repo: Git, args: tuple[str, ...]) -> None:
+    # "object <id> is a tree, not a commit", then what git says of a name that names nothing.
+    with pytest.raises(GitError) as raised:
+        repo.run(*args)
+
+    assert type(raised.value) is GitError
+
+
 def test_a_locked_config_file(repo: Git) -> None:
     (Path(repo.directory) / ".git" / "config.lock").write_bytes(b"")
 

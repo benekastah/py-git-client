@@ -63,7 +63,8 @@ class NotARepositoryError(GitError):
 
 
 class UnknownRevisionError(GitError):
-    """A revision (a commit, a ref, an object id) that names nothing."""
+    """A revision (a commit, a ref, an object id) that names nothing: not one that names an
+    object of the wrong type (e.g. a tree where git wants a commit), a plain GitError."""
 
 
 class ConfigLockedError(GitError):
@@ -122,6 +123,11 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 )
 
 
+# What git says first of a name that names an object of the wrong type (e.g. a tree where it
+# wants a commit), before what it says of a name that names nothing.
+_WRONG_TYPE = re.compile(r"^error: object \S+ is a \w+, not an? \w+$", re.MULTILINE)
+
+
 def error_for(stderr: str, stdout: str) -> type[GitError]:
     """The GitError for a command that failed, saying stderr and stdout (in English)."""
     for error, says in _STDOUT_SAYS:
@@ -129,5 +135,7 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
             return error
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
+            if error is UnknownRevisionError and _WRONG_TYPE.search(stderr):
+                return GitError  # it names something
             return error
     return GitError
