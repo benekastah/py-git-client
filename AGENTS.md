@@ -12,7 +12,8 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
-  git config, the real git, repository templates, and `FakeGit`. It may import pytest; nothing
+  git config and isolation, the real git, repository templates, fixtures (`git_calls`,
+  `fresh_find_git`, `outside_any_repository`), and `FakeGit`. It may import pytest; nothing
   else in `src/` may.
 - `src/git_client/__init__.py`: the public API; anything not exported there (or in `testing`)
   is private.

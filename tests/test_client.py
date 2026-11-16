@@ -2,7 +2,6 @@ import os
 import pickle
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,14 +14,6 @@ from git_client import (
     UnknownRevisionError,
     find_git,
 )
-
-
-@pytest.fixture
-def fresh_find_git() -> Iterator[None]:
-    """find_git, without what earlier tests found."""
-    find_git.cache_clear()
-    yield
-    find_git.cache_clear()
 
 
 @pytest.mark.usefixtures("fresh_find_git")

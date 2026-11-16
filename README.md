@@ -94,17 +94,44 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
 `git_client.testing` is a pytest plugin. Load it in your top `conftest.py`
 (`pytest_plugins = ["git_client.testing"]`) or with `-p git_client.testing`:
 
-- **Every test's git gets a config of its own** (the `git_config` fixture, automatic): an
+- **Every test's git gets a config of its own** (automatic; `git_config` is its file): an
   identity, `main` as the first branch, no background maintenance (which would otherwise start
-  a process after each commit), and no global ignore or attributes file. The user's and the
-  system's config don't reach it, nor do git's variables that would win over it (e.g.
-  `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook
-  running the tests would pass on; see `GIT_ENVIRONMENT_VARIABLES`).
-- **Repositories built once per session, copied for each test** (`repo_templates`): building
-  takes many git processes, copying takes none for a repository without remotes. One with
-  remotes takes one `git config` to list its URLs and, for each that points inside the
-  template (`url` and `pushurl`), one to clear it and one per value, to point it at the
-  copy's. Submodules and linked worktrees aren't repointed.
+  a process after each commit), and no global ignore or attributes file. What a test writes
+  there (`git config --global`) no other test sees. The user's and the system's config don't
+  reach it, nor do git's variables that would win over it (e.g. `GIT_DIR`, `GIT_INDEX_FILE`,
+  `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook running the tests would pass on,
+  or `GIT_DEFAULT_HASH`, which would make sha256 repositories; see
+  `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git gets
+  `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
+  `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
+  `GIT_TERMINAL_PROMPT=0` (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are
+  cleared, so no program asks either): see `GIT_SETTINGS`. A test that needs
+  another protocol widens it in a fixture of its own:
+
+  ```python
+  @pytest.fixture
+  def ssh_remotes(monkeypatch: pytest.MonkeyPatch) -> None:
+      monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file:ssh")  # and GIT_SSH_COMMAND, a fake ssh
+  ```
+
+  To add config entries, override the session-scoped `git_config_text` fixture:
+
+  ```python
+  @pytest.fixture(scope="session")
+  def git_config_text() -> str:
+      return TEST_GIT_CONFIG + "[commit]\n\tgpgSign = false\n"
+  ```
+- **Repositories built once per session, copied for each test** (`repo_templates`), under
+  the session's config rather than the config of the test that asks first, and without
+  git's sample hooks (`hooks/*.sample`), which every copy would copy: building takes many
+  git processes, copying takes none for a repository without remotes. One with remotes takes
+  a `git config` for each remote's `url` or `pushurl` that points inside the template (a
+  path, or a `file://` URL), to point it at the copy's (for a key with several values, one
+  to clear it and one per value). Submodules and linked worktrees aren't repointed. A copy's
+  index keeps the template's stat data: the first command that refreshes the index (`git
+  status`, `git diff`) makes it match the copy's files, but until then plumbing that doesn't
+  (`git diff-index HEAD`, `git diff-files`) reports every file as modified, so a test of a
+  tool that uses it runs `git update-index -q --refresh` first.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:
@@ -118,7 +145,35 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
       return Git(repo_templates.copy("origin-and-clone", tmp_path / "repos") / "clone")
   ```
 - **`real_git()`**: git itself, from `git --exec-path`, rather than a wrapper or launcher that
-  starts another process for each.
+  starts another process for each. The plugin runs it for its own git (repointing a copy's
+  remotes), but your tool runs `find_git`'s: point your tool's variable at it in your top
+  `conftest.py`, at import, before anything calls `find_git`, which caches its answer:
+
+  ```python
+  os.environ["MY_TOOL_GIT"] = real_git()
+  ```
+- **`git_calls`**: the arguments of each git process a `Git` starts during the test, while
+  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
+  plugin's own, building and copying templates, whatever order the fixtures come in:
+
+  ```python
+  def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:
+      status(clone)  # your code
+      assert git_calls == [["status", "--porcelain=v2"]]
+  ```
+- **`outside_any_repository`**: runs a test from an empty directory where git finds no
+  repository, so a git run without a directory (a `Git()` your code forgot to give one)
+  fails rather than change the repository the tests were started in. To run every test that
+  way, ask for it from an autouse fixture in your top `conftest.py`:
+
+  ```python
+  @pytest.fixture(autouse=True)
+  def _outside_any_repository(outside_any_repository: Path) -> None:
+      pass
+  ```
+- **`fresh_find_git`**: `find_git` caches its answer for the whole process; a test that
+  changes what it would find (PATH, or your tool's variable) asks for this fixture, which
+  clears the cache before and after it.
 - **`FakeGit`**, for unit tests of the git commands your code runs, without a process: give it
   responses, run your code with it, and check what it ran. Assert the commands where they're
   the behavior (what's pushed, deleted or rewritten); otherwise give realistic output and

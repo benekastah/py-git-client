@@ -1,5 +1,5 @@
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO
 
@@ -161,27 +161,39 @@ def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> N
     assert nothing == []
 
 
-def topic_changing(repo: Git, path: str) -> list[list[str]]:
-    """Commit a change to `path` on a new branch, topic, and give patch_ids' commands for
-    it: its log, and a diff."""
-    file = Path(repo.directory) / path
-    file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_bytes(b"before\n")
-    repo.run("add", path)
-    repo.run("commit", "--quiet", "-m", f"add {path}")
-    repo.run("switch", "--quiet", "-c", "topic")
-    file.write_bytes(b"after\n")
-    repo.run("commit", "--quiet", "-am", f"change {path}")
-    return [["log", "-p", "main..topic"], ["diff", "main", "topic"]]
+# The repo_from fixture's type (see conftest.py).
+RepoFrom = Callable[[str, Callable[[Git], None]], Git]
+
+# patch_ids' commands for topic_changing's topic: its log, and a diff.
+TOPIC = [["log", "-p", "main..topic"], ["diff", "main", "topic"]]
 
 
-def test_patch_ids_sees_the_whole_worktree_whatever_diff_relative_says(repo: Git) -> None:
+def topic_changing(repo_from: RepoFrom, path: str) -> Git:
+    """A repository with a commit of `path` on main, and a change to it on a new branch,
+    topic (see TOPIC)."""
+
+    def change(repo: Git) -> None:
+        file = Path(repo.directory) / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"before\n")
+        repo.run("add", path)
+        repo.run("commit", "--quiet", "-m", f"add {path}")
+        repo.run("switch", "--quiet", "-c", "topic")
+        file.write_bytes(b"after\n")
+        repo.run("commit", "--quiet", "-am", f"change {path}")
+
+    return repo_from(f"topic-changing-{path}", change)
+
+
+def test_patch_ids_sees_the_whole_worktree_whatever_diff_relative_says(
+    repo_from: RepoFrom,
+) -> None:
+    repo = topic_changing(repo_from, "top")
     (Path(repo.directory) / "sub").mkdir()
-    commands = topic_changing(repo, "top")
-    expected = patch_ids(repo, *commands)
+    expected = patch_ids(repo, *TOPIC)
     repo.run("config", "diff.relative", "true")
 
-    assert patch_ids(Git(Path(repo.directory) / "sub"), *commands) == expected
+    assert patch_ids(Git(Path(repo.directory) / "sub"), *TOPIC) == expected
     assert all(expected)
 
 
@@ -214,35 +226,35 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
     ],
 )
 def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
-    repo: Git, key: str, value: str
+    repo_from: RepoFrom, key: str, value: str
 ) -> None:
-    commands = topic_changing(repo, "b")
-    expected = patch_ids(repo, *commands)
+    repo = topic_changing(repo_from, "b")
+    expected = patch_ids(repo, *TOPIC)
     repo.run("config", key, value)
 
-    assert patch_ids(repo, *commands) == expected
+    assert patch_ids(repo, *TOPIC) == expected
 
 
-def test_patch_ids_takes_pathspec_magic(repo: Git) -> None:
+def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:
     # A path as git reports it, from the top of the worktree, given from a subdirectory.
+    repo = topic_changing(repo_from, "top")
     (Path(repo.directory) / "sub").mkdir()
-    commands = topic_changing(repo, "top")
     sub = Git(Path(repo.directory) / "sub")
 
-    [patches] = patch_ids(sub, [*commands[0], "--", ":(top,literal)top"])
+    [patches] = patch_ids(sub, [*TOPIC[0], "--", ":(top,literal)top"])
 
     assert [commit for _, commit in patches] == [repo.run("rev-parse", "topic")]
 
 
-def test_patch_ids_runs_no_textconv(repo: Git) -> None:
-    commands = topic_changing(repo, "b.txt")
-    expected = patch_ids(repo, *commands)
+def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "b.txt")
+    expected = patch_ids(repo, *TOPIC)
     (Path(repo.directory) / ".git" / "info" / "attributes").write_text(
         "*.txt diff=mine\n", encoding="utf-8"
     )
     repo.run("config", "diff.mine.textconv", "no-such-textconv")
 
-    assert patch_ids(repo, *commands) == expected
+    assert patch_ids(repo, *TOPIC) == expected
 
 
 def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
@@ -319,8 +331,12 @@ def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
     assert [repo.run_bytes("cat-file", "blob", blob) for blob in ids] == contents
 
 
-def test_hash_blobs_of_nothing_is_nothing(repo: Git) -> None:
+def test_nothing_to_do_starts_no_git(repo: Git, git_calls: list[list[str]]) -> None:
     assert hash_blobs(repo, []) == []
+    assert patch_ids(repo) == []
+    update_refs(repo, [])
+
+    assert git_calls == []
 
 
 def test_update_refs_makes_every_change(repo: Git) -> None:
