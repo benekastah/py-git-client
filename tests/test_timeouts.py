@@ -86,8 +86,10 @@ def index_lock(repo: Git) -> Path:
 COMMIT = ("commit", "--quiet", "-a", "-m", "changed")
 
 TOOL = """\
-import sys
+import signal, sys
 from git_client import Git, GitTimeoutError
+# As the README says a tool should, so that git is stopped on the way out.
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 directory, timeout, terminal, *args = sys.argv[1:]
 if terminal == "terminal":
     import fcntl, termios
@@ -203,6 +205,23 @@ def test_without_a_terminal_an_interrupt_stops_git_and_lets_it_clean_up(
     output, _ = tool.communicate(timeout=10)
 
     assert output == "interrupted\n"
+    assert not index_lock(repo).exists()
+    assert not hook.outlived_git()
+
+
+@NO_TERMINAL_ON_WINDOWS
+def test_without_a_terminal_sigterm_to_the_tools_group_stops_git_on_the_way_out(
+    repo: Git, hook: Hook, tmp_path: Path
+) -> None:
+    tool = without_terminal(tmp_path, repo, 60, *COMMIT)
+    hook.wait_until_started()
+
+    # As `timeout` or a CI runner sends it: to the tool's group, which git, in a group of its
+    # own, isn't in. TOOL turns it into SystemExit.
+    os.killpg(tool.pid, signal.SIGTERM)
+    tool.communicate(timeout=10)
+
+    assert tool.returncode == 143
     assert not index_lock(repo).exists()
     assert not hook.outlived_git()
 

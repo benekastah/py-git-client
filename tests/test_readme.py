@@ -4,6 +4,8 @@ that they run, not the values their comments give, and the blocks that only defi
 
 import os
 import re
+import signal
+import sys
 import textwrap
 from pathlib import Path
 
@@ -57,17 +59,21 @@ def test_the_readmes_python_examples_run(
         "Path": Path,
         "pytest": pytest,
         "publish": publish,
+        "signal": signal,
+        "sys": sys,
     }
 
-    # An example sets os.environ["MY_TOOL_GIT"], as a conftest would, which later tests in
-    # this process mustn't see.
+    # Examples set os.environ["MY_TOOL_GIT"], as a conftest would, and a SIGTERM handler, as a
+    # tool would, which later tests in this process mustn't see.
     environ = os.environ.copy()
+    on_sigterm = signal.getsignal(signal.SIGTERM)
     try:
         for block in blocks:
             exec(textwrap.dedent(block), dict(names))  # noqa: S102 (the README's own code)
     finally:
         os.environ.clear()
         os.environ.update(environ)
+        signal.signal(signal.SIGTERM, on_sigterm)
 
     # The last thing "Using it" does.
     assert Git(Path("path", "to", "repo")).resolve("refs/heads/old") is None

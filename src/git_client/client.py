@@ -258,6 +258,16 @@ class Git:
     password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
     Windows, git and what it started are killed (taskkill /T), with no chance to clean up.
 
+    A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
+    from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
+    tool without stopping it, so git and its hooks run on. A tool should turn SIGTERM into
+    an exception in its main thread, e.g. `signal.signal(signal.SIGTERM, lambda *_:
+    sys.exit(143))`: any exception that reaches a running command stops git as an interrupt
+    does.
+
+    Every command is given its directory with `-C` rather than as a working directory, which
+    would keep Python from using posix_spawn.
+
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
     """
