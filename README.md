@@ -34,7 +34,8 @@ from git_client import CatFile, Git, RefUpdate, config, config_key, refs, update
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
 # a tool names its own variable so its users can choose, e.g. git itself, for speed.
-# Raises FileNotFoundError if there's neither.
+# Raises FileNotFoundError if there's neither, and, on Windows, ValueError if the variable
+# names a batch file (.bat, .cmd), which cmd.exe runs, reading &, | and % in arguments.
 git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (the default): none
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure

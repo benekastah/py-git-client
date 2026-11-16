@@ -106,7 +106,8 @@ def test_a_locked_config_file(repo: Git) -> None:
     (Path(repo.directory) / ".git" / "config.lock").write_bytes(b"")
 
     with pytest.raises(ConfigLockedError):
-        repo.run("config", "x.y", "z")
+        # Without git's retries for a second first.
+        repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
 
 
 def test_a_local_file_git_cant_read_is_no_remote(repo: Git, tmp_path: Path) -> None:
@@ -150,7 +151,8 @@ def not_found() -> Iterator[str]:
             pass
 
     with http.server.HTTPServer(("127.0.0.1", 0), NotFound) as server:
-        thread = threading.Thread(target=server.serve_forever)
+        # Checking often whether it's been shut down, so the test ends soon after.
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
             yield f"http://127.0.0.1:{server.server_address[1]}/repo.git"

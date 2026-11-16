@@ -21,9 +21,11 @@ _PATCH_SETTINGS = (
     "--no-textconv",
 )
 
-# The commands that would run gpg on every commit they print (log.showSignature), and that
-# take an option against it (`git diff` doesn't).
+# The commands that print commits, and what patch_ids gives them besides: no gpg run on each
+# (log.showSignature), and each commit's full id at the start of a line, where patch-id looks
+# for it (log.abbrevCommit, format.pretty). `git diff` takes none of these.
 _SHOWING_COMMITS = {"log", "show"}
+_COMMIT_SETTINGS = ("--no-show-signature", "--no-abbrev-commit", "--pretty=medium")
 
 # The patch that patch_ids puts after each command's output, to mark where it ends.
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
@@ -102,7 +104,9 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
     in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. Whatever
     the user's config says, each command shows changes in the whole repository (not only
     under `git.directory`, as diff.relative would) and in every submodule, none through a
-    textconv, with git's usual a/ and b/ prefixes, and checks no signatures.
+    textconv, with git's usual a/ and b/ prefixes, and checks no signatures; and `log` and
+    `show` print each commit's full id, as patch-id needs (a command's own `--format` still
+    wins).
 
     Paths after `--` are pathspecs, relative to `git.directory`: mark a path git reported
     (from the top of the worktree, which may hold `*` or `:`) as `":(top,literal)" + path`.
@@ -120,7 +124,7 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
             # before it.
             patches.append(f"commit {'0' * length}")
         settings = (
-            (*_PATCH_SETTINGS, "--no-show-signature")
+            (*_PATCH_SETTINGS, *_COMMIT_SETTINGS)
             if command in _SHOWING_COMMITS
             else _PATCH_SETTINGS
         )

@@ -203,10 +203,22 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
     assert all(expected)
 
 
-def test_patch_ids_gives_the_same_ids_whatever_prefixes_the_config_asks_for(repo: Git) -> None:
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("diff.noprefix", "true"),
+        ("color.ui", "always"),
+        ("diff.external", "no-such-external-diff"),
+        ("log.abbrevCommit", "true"),
+        ("format.pretty", "format:%s"),
+    ],
+)
+def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
+    repo: Git, key: str, value: str
+) -> None:
     commands = topic_changing(repo, "b")
     expected = patch_ids(repo, *commands)
-    repo.run("config", "diff.noprefix", "true")
+    repo.run("config", key, value)
 
     assert patch_ids(repo, *commands) == expected
 
@@ -298,6 +310,8 @@ def test_patch_ids_reads_the_object_format_once_per_client(repo: Git) -> None:
 
 
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
+    # Which would have git write one\r\n as one\n.
+    repo.run("config", "core.autocrlf", "true")
     contents = [b"one\r\n", b"", b"three\n"]
 
     ids = hash_blobs(repo, contents)
@@ -323,6 +337,7 @@ def test_update_refs_makes_every_change(repo: Git) -> None:
     )
 
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main", "refs/heads/new"}
+    assert repo.run("reflog", "-1", "--format=%gs", "refs/heads/new") == "tidy"
 
 
 def test_update_refs_makes_none_if_any_cant_be_made(repo: Git) -> None:

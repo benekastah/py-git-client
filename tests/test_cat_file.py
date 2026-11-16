@@ -2,14 +2,23 @@ import gc
 import os
 import subprocess
 import sys
+import threading
+import time
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, GitError, NotARepositoryError, UnknownRevisionError
-from git_client.client import Arg, EnvValue
+from git_client import (
+    Arg,
+    CatFile,
+    EnvValue,
+    Git,
+    GitError,
+    NotARepositoryError,
+    UnknownRevisionError,
+)
 from git_client.testing import real_git
 
 
@@ -97,6 +106,33 @@ def test_a_broken_config_is_an_error_not_an_empty_answer(repo: Git) -> None:
 
     with CatFile(repo) as cat_file, pytest.raises(GitError, match="bad config line"):
         cat_file.resolve("HEAD")
+
+
+def test_threads_can_share_it(repo: Git) -> None:
+    expected: dict[str, str | None] = {
+        name: repo.run("rev-parse", name) for name in ("HEAD", "HEAD^{tree}", "HEAD:a")
+    }
+    expected["no-such-branch"] = None
+    wrong: list[tuple[str, str | None]] = []
+
+    def resolve_each(cat_file: CatFile) -> None:
+        for _ in range(50):
+            for name, object_id in expected.items():
+                if (found := cat_file.resolve(name)) != object_id:
+                    wrong.append((name, found))
+
+    with CatFile(repo) as cat_file:
+        threads = [
+            threading.Thread(target=resolve_each, args=(cat_file,), daemon=True) for _ in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 10
+        for thread in threads:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+
+    assert not any(thread.is_alive() for thread in threads)  # out of step, they'd hang
+    assert wrong == []
 
 
 def test_sees_refs_as_they_are_when_asked(repo: Git) -> None:
