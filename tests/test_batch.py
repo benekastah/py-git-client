@@ -95,6 +95,96 @@ def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> N
     assert nothing == []
 
 
+def topic_changing(repo: Git, path: str) -> list[list[str]]:
+    """Commit a change to `path` on a new branch, topic, and give patch_ids' commands for
+    it: its log, and a diff."""
+    file = Path(repo.directory) / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(b"before\n")
+    repo.run("add", path)
+    repo.run("commit", "--quiet", "-m", f"add {path}")
+    repo.run("switch", "--quiet", "-c", "topic")
+    file.write_bytes(b"after\n")
+    repo.run("commit", "--quiet", "-am", f"change {path}")
+    return [["log", "-p", "main..topic"], ["diff", "main", "topic"]]
+
+
+def test_patch_ids_sees_the_whole_worktree_whatever_diff_relative_says(repo: Git) -> None:
+    (Path(repo.directory) / "sub").mkdir()
+    commands = topic_changing(repo, "top")
+    expected = patch_ids(repo, *commands)
+    repo.run("config", "diff.relative", "true")
+
+    assert patch_ids(Git(Path(repo.directory) / "sub"), *commands) == expected
+    assert all(expected)
+
+
+def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
+    (Path(repo.directory) / ".gitmodules").write_text(
+        '[submodule "mod"]\n\tpath = mod\n\turl = ./mod\n', encoding="utf-8"
+    )
+    repo.run("add", ".gitmodules")
+    repo.run("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "add mod")
+    repo.run("switch", "--quiet", "-c", "topic")
+    repo.run("update-index", "--cacheinfo", f"160000,{'2' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "move mod")
+    commands = [["log", "-p", "main..topic"], ["diff", "main", "topic"]]
+    expected = patch_ids(repo, *commands)
+    repo.run("config", "submodule.mod.ignore", "all")
+
+    assert patch_ids(repo, *commands) == expected
+    assert all(expected)
+
+
+def test_patch_ids_gives_the_same_ids_whatever_prefixes_the_config_asks_for(repo: Git) -> None:
+    commands = topic_changing(repo, "b")
+    expected = patch_ids(repo, *commands)
+    repo.run("config", "diff.noprefix", "true")
+
+    assert patch_ids(repo, *commands) == expected
+
+
+def test_patch_ids_runs_no_textconv(repo: Git) -> None:
+    commands = topic_changing(repo, "b.txt")
+    expected = patch_ids(repo, *commands)
+    (Path(repo.directory) / ".git" / "info" / "attributes").write_text(
+        "*.txt diff=mine\n", encoding="utf-8"
+    )
+    repo.run("config", "diff.mine.textconv", "no-such-textconv")
+
+    assert patch_ids(repo, *commands) == expected
+
+
+def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
+    # A commit with a signature (not a real one: git runs gpg on it all the same).
+    unsigned = repo.run_bytes("cat-file", "commit", "HEAD")
+    headers, message = unsigned.split(b"\n\n", 1)
+    signature = b"gpgsig -----BEGIN PGP SIGNATURE-----\n \n x\n -----END PGP SIGNATURE-----"
+    signed = (
+        repo.run_bytes(
+            "hash-object",
+            "-t",
+            "commit",
+            "-w",
+            "--stdin",
+            input=headers + b"\n" + signature + b"\n\n" + message,
+        )
+        .decode()
+        .strip()
+    )
+    repo.run("config", "log.showSignature", "true")
+    repo.run("config", "gpg.program", "no-such-gpg")
+    trace = tmp_path / "trace"
+    traced = Git(repo.directory, env={"GIT_TRACE": str(trace)})
+
+    [[(_, commit)]] = patch_ids(traced, ["log", "-p", "-1", signed])
+    patch_ids(traced, ["show", signed])
+
+    assert commit == signed
+    assert "no-such-gpg" not in trace.read_text(encoding="utf-8")
+
+
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
     contents = [b"one\r\n", b"", b"three\n"]
 

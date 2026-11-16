@@ -7,6 +7,23 @@ from dataclasses import dataclass
 
 from git_client.client import Git, GitError, decode, encode
 
+# What patch_ids gives every command, against the user's config, which would drop patches
+# (diff.relative, submodule.<name>.ignore) or change them (color, an external diff, textconv,
+# diff.noprefix).
+_PATCH_SETTINGS = (
+    "--no-color",
+    "--no-ext-diff",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--no-relative",
+    "--ignore-submodules=none",
+    "--no-textconv",
+)
+
+# The commands that would run gpg on every commit they print (log.showSignature), and that
+# take an option against it (`git diff` doesn't).
+_SHOWING_COMMITS = {"log", "show"}
+
 # The patch that patch_ids puts after each command's output, to mark where it ends.
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
 
@@ -62,7 +79,10 @@ def object_id_length(git: Git) -> int:
 def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
-    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros.
+    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. Whatever
+    the user's config says, each command shows changes in the whole repository (not only
+    under `git.directory`, as diff.relative would) and in every submodule, none through a
+    textconv, with git's usual a/ and b/ prefixes, and checks no signatures.
 
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
@@ -76,9 +96,12 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
             # Without a commit line, patch-id would take the diff as part of the marker
             # before it.
             patches.append(f"commit {'0' * length}")
-        patches.append(
-            git.run("--literal-pathspecs", command, "--no-color", "--no-ext-diff", *rest)
+        settings = (
+            (*_PATCH_SETTINGS, "--no-show-signature")
+            if command in _SHOWING_COMMITS
+            else _PATCH_SETTINGS
         )
+        patches.append(git.run("--literal-pathspecs", command, *settings, *rest))
         patches.append(f"commit {i:0{length}x}\n\n{_END_MARKER_DIFF}")
     results: list[list[tuple[str, str]]] = [[]]
     for line in git.run("patch-id", "--stable", input="\n".join(patches) + "\n").splitlines():
