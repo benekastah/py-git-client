@@ -124,14 +124,14 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
 - **Repositories built once per session, copied for each test** (`repo_templates`), under
   the session's config rather than the config of the test that asks first, and without
   git's sample hooks (`hooks/*.sample`), which every copy would copy: building takes many
-  git processes, copying takes none for a repository without remotes. One with
-  remotes takes a `git config` for each remote's `url` or `pushurl` that points inside the
-  template (a path, or a `file://` URL), to point it at the copy's (for a key with several values, one to clear it and
-  one per value). Submodules and linked worktrees aren't repointed. A copy's index keeps the
-  template's stat data: the first command that refreshes the index (`git status`, `git diff`)
-  makes it match the copy's files, but until then plumbing that doesn't (`git diff-index
-  HEAD`, `git diff-files`) reports every file as modified, so a test of a tool that uses it
-  runs `git update-index -q --refresh` first.
+  git processes, copying takes none for a repository without remotes. One with remotes takes
+  a `git config` for each remote's `url` or `pushurl` that points inside the template (a
+  path, or a `file://` URL), to point it at the copy's (for a key with several values, one
+  to clear it and one per value). Submodules and linked worktrees aren't repointed. A copy's
+  index keeps the template's stat data: the first command that refreshes the index (`git
+  status`, `git diff`) makes it match the copy's files, but until then plumbing that doesn't
+  (`git diff-index HEAD`, `git diff-files`) reports every file as modified, so a test of a
+  tool that uses it runs `git update-index -q --refresh` first.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:

@@ -92,9 +92,9 @@ GIT_ENVIRONMENT_VARIABLES = (
 tests), since they win over any config: which repository to use and what's in it (those `git
 rev-parse --local-env-vars` lists), who's committing, extra config, GIT_TEMPLATE_DIR, which
 would copy a user's hooks into each new repository, the object and ref formats of a new
-repository (GIT_DEFAULT_HASH, GIT_DEFAULT_REF_FORMAT: e.g. sha256 ids), the user's editor for `rebase -i`, and
-the programs git runs to ask for a username or password (GIT_ASKPASS, then SSH_ASKPASS,
-which a desktop may set), even with GIT_TERMINAL_PROMPT=0."""
+repository (GIT_DEFAULT_HASH, GIT_DEFAULT_REF_FORMAT: e.g. sha256 ids), the user's editor for
+`rebase -i`, and the programs git runs to ask for a username or password (GIT_ASKPASS, then
+SSH_ASKPASS, which a desktop may set), even with GIT_TERMINAL_PROMPT=0."""
 
 GIT_SETTINGS = {"GIT_EDITOR": "true", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0"}
 """What the tests' git gets in its environment: an editor that leaves a message (or `rebase
@@ -262,11 +262,11 @@ def _repoint_remotes(source: Path, dest: Path) -> None:
     and `pushurl`) that's a path under `source`, or a `file://` URL of one, at the same path
     under `dest`. The URLs are read from the config file (not from files it includes), and
     each that moves is set through `git config` rather than by editing the file, where git
-    escapes backslashes (Windows' paths): one process for a key with one value, and for one with several, one to
-    clear it and one per value. Submodules aren't repointed (their remote, in
-    `.git/modules/<name>/config`, and the superproject's `submodule.<name>.url` still name
-    the template), nor linked worktrees (whose `gitdir:` is an absolute path into the
-    template)."""
+    escapes backslashes (Windows' paths): one process for a key with one value, and for one
+    with several, one to clear it and one per value. Submodules aren't repointed (their
+    remote, in `.git/modules/<name>/config`, and the superproject's `submodule.<name>.url`
+    still name the template), nor linked worktrees (whose `gitdir:` is an absolute path into
+    the template)."""
     for repo in _repositories(dest):
         if (repo / ".git").is_file():
             continue
