@@ -161,6 +161,39 @@ def test_each_test_has_a_config_of_its_own_with_the_projects_entries(
     result.assert_outcomes(passed=2)
 
 
+def test_outside_any_repository_runs_a_test_where_git_finds_none(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makepyfile(
+        """
+        from pathlib import Path
+
+        import pytest
+
+        from git_client import Git, NotARepositoryError
+
+
+        @pytest.mark.usefixtures("outside_any_repository")
+        def test_inside() -> None:
+            assert list(Path.cwd().iterdir()) == []
+            with pytest.raises(NotARepositoryError):
+                Git().run("rev-parse", "--git-dir")
+        """
+    )
+    # Its temporary directories in a repository, as they are with --basetemp in a project.
+    Git(pytester.path).run("init", "--quiet", "project")
+
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "git_client.testing",
+        "-p",
+        "no:xdist",
+        f"--basetemp={pytester.path / 'project' / 'tmp'}",
+    )
+
+    result.assert_outcomes(passed=1)
+
+
 def test_templates_build_under_the_sessions_config(
     repo_templates: RepoTemplates, tmp_path: Path
 ) -> None:

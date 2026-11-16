@@ -158,6 +158,16 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
   ```
+- **`outside_any_repository`**: runs a test from an empty directory where git finds no
+  repository, so a git run without a directory (a `Git()` your code forgot to give one)
+  fails rather than change the repository the tests were started in. To run every test that
+  way, ask for it from an autouse fixture in your top `conftest.py`:
+
+  ```python
+  @pytest.fixture(autouse=True)
+  def _outside_any_repository(outside_any_repository: Path) -> None:
+      pass
+  ```
 - **`fresh_find_git`**: `find_git` caches its answer for the whole process; a test that
   changes what it would find (PATH, or your tool's variable) asks for this fixture, which
   clears the cache before and after it.

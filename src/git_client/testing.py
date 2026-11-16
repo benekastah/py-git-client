@@ -4,8 +4,8 @@ commands a tool runs.
 
 Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 ["git_client.testing"]`) or with `-p git_client.testing`, for its fixtures (`git_config`,
-`git_config_text`, `repo_templates`, `git_calls`, `fresh_find_git`). It imports pytest, so
-only tests should import it.
+`git_config_text`, `repo_templates`, `git_calls`, `fresh_find_git`,
+`outside_any_repository`). It imports pytest, so only tests should import it.
 """
 
 import functools
@@ -325,6 +325,25 @@ def repo_templates(
     """Repositories built once per session, under the session's git config, and copied for
     each test (see RepoTemplates)."""
     return RepoTemplates(tmp_path_factory.mktemp("repo-templates"), git_client_isolation)
+
+
+@pytest.fixture
+def outside_any_repository(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Runs the test from an empty directory where git finds no repository, even if pytest's
+    temporary directories are in one (GIT_CEILING_DIRECTORIES stops it looking above), so a
+    git run without a directory (e.g. a `Git()` the code under test forgot to give one) fails
+    rather than change the repository the tests were started in. Opt-in: a project makes it
+    automatic with an autouse fixture of its own that asks for it. Returns the directory."""
+    directory = tmp_path_factory.mktemp("outside-any-repository")
+    ceilings = os.environ.get("GIT_CEILING_DIRECTORIES")
+    monkeypatch.setenv(
+        "GIT_CEILING_DIRECTORIES",
+        os.pathsep.join([str(directory.parent), *([ceilings] if ceilings else [])]),
+    )
+    monkeypatch.chdir(directory)
+    return directory
 
 
 @pytest.fixture
