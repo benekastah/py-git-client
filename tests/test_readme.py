@@ -1,4 +1,6 @@
-"""The README's Python examples, run as they're written, against a real repository."""
+"""The README's Python examples, run as they're written, against a real repository. It checks
+that they run, not the values their comments give, and the blocks that only define something
+(a fixture, a test) aren't called."""
 
 import os
 import re
