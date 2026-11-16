@@ -22,6 +22,9 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
     pytester: pytest.Pytester, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "from-the-users-template").write_text("", encoding="utf-8")
     (home / ".config" / "git").mkdir(parents=True)
     (home / ".config" / "git" / "ignore").write_text("ignored-by-user\n", encoding="utf-8")
     pytester.makepyfile(
@@ -38,6 +41,7 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             assert git.run("status", "--porcelain") == "?? ignored-by-user"
             git.run("add", "ignored-by-user")
             assert (tmp_path / ".git" / "index").is_file()
+            assert not (tmp_path / ".git" / "from-the-users-template").exists()
             git.run("commit", "--quiet", "--allow-empty", "-m", "first")
             assert git.run("log", "-1", "--format=%an %cn") == "Test Test"
         """
@@ -48,6 +52,7 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
         "GIT_AUTHOR_NAME": "From A Hook",
         "GIT_COMMITTER_NAME": "From A Hook",
         "GIT_INDEX_FILE": str(tmp_path / "hooks-index"),
+        "GIT_TEMPLATE_DIR": str(template),
     }.items():
         monkeypatch.setenv(name, value)
 

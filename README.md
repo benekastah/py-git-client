@@ -95,14 +95,14 @@ instead, but raise `GitTimeoutError` past a timeout.
 - **Every test's git gets a config of its own** (the `git_config` fixture, automatic): an
   identity, `main` as the first branch, no background maintenance (which would otherwise start
   a process after each commit), and no global ignore or attributes file. The user's and the
-  system's config don't reach it, nor do git's variables for which repository to use or who's
-  committing (e.g. `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_AUTHOR_NAME`, which a git hook running
-  the tests would pass on).
+  system's config don't reach it, nor do git's variables that would win over it (e.g.
+  `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_AUTHOR_NAME` and `GIT_TEMPLATE_DIR`, which a git hook
+  running the tests would pass on; see `GIT_ENVIRONMENT_VARIABLES`).
 - **Repositories built once per session, copied for each test** (`repo_templates`): building
   takes many git processes, copying takes none for a repository without remotes. One with
   remotes takes one `git config` to list its URLs and, for each that points inside the
   template (`url` and `pushurl`), one to clear it and one per value, to point it at the
-  copy's. Submodules and linked worktrees, whose `.git` is a file, aren't repointed.
+  copy's. Submodules and linked worktrees aren't repointed.
 
   ```python
   def make_origin_and_clone(directory: Path) -> None:

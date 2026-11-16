@@ -67,10 +67,10 @@ GIT_ENVIRONMENT_VARIABLES = (
     "GIT_SHALLOW_FILE",
     "GIT_TEMPLATE_DIR",
 )
-"""git's variables for which repository to use, what's in it and who's committing (those
-`git rev-parse --local-env-vars` lists, and more), which win over any config, and
-GIT_TEMPLATE_DIR, which would copy a user's hooks into each new repository: the tests' git
-mustn't inherit them, e.g. from a git hook that runs the tests."""
+"""git's variables that the tests' git mustn't inherit (e.g. from a git hook that runs the
+tests), since they win over any config: which repository to use and what's in it (those `git
+rev-parse --local-env-vars` lists), who's committing, extra config, and GIT_TEMPLATE_DIR,
+which would copy a user's hooks into each new repository."""
 
 
 @functools.cache
@@ -89,9 +89,8 @@ def real_git() -> str:
 @pytest.fixture(scope="session", autouse=True)
 def git_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """Every test's git gets the tests' own config (TEST_GIT_CONFIG) as its global config, no
-    system config, and none of git's variables for which repository to use or who's
-    committing (GIT_ENVIRONMENT_VARIABLES, and each GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n).
-    Yields the config file's path."""
+    system config, and none of GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or
+    GIT_CONFIG_VALUE_n. Yields the config file's path."""
     config = tmp_path_factory.mktemp("git-config") / "config"
     config.write_text(TEST_GIT_CONFIG, encoding="utf-8")
     counted = [n for n in os.environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))]
@@ -156,7 +155,8 @@ def _remove(directory: Path) -> None:
 def repositories(root: Path) -> Iterator[Path]:
     """Every repository under root, root included: each directory with a `.git` in it, and each
     bare repository (a directory with `HEAD`, `config` and `objects`). One whose `.git` is a
-    file (a submodule, or a linked worktree) is listed, but its `gitdir:` isn't followed."""
+    file (a submodule, or a linked worktree) is listed, but its `gitdir:` isn't followed, so a
+    submodule's own repository (under `.git/modules/`) isn't."""
     for directory, subdirectories, files in os.walk(root):
         if ".git" in subdirectories or ".git" in files:
             yield Path(directory)
@@ -173,8 +173,9 @@ def repoint_remotes(source: Path, dest: Path) -> None:
     config` rather than by editing the file, where git escapes backslashes (Windows' paths).
     A repository whose config names no remote starts no process; one that does starts one
     to list its URLs, then, for each that moves, one to clear it and one per value.
-    Submodules and linked worktrees (whose `.git` is a file) aren't repointed: their
-    `gitdir:` still names the template."""
+    Submodules aren't repointed (their remote, in `.git/modules/<name>/config`, and the
+    superproject's `submodule.<name>.url` still name the template), nor linked worktrees
+    (whose `gitdir:` is an absolute path into the template)."""
     for repo in repositories(dest):
         if (repo / ".git").is_file():
             continue
