@@ -145,6 +145,17 @@ def test_patch_ids_gives_the_same_ids_whatever_prefixes_the_config_asks_for(repo
     assert patch_ids(repo, *commands) == expected
 
 
+def test_patch_ids_takes_pathspec_magic(repo: Git) -> None:
+    # A path as git reports it, from the top of the worktree, given from a subdirectory.
+    (Path(repo.directory) / "sub").mkdir()
+    commands = topic_changing(repo, "top")
+    sub = Git(Path(repo.directory) / "sub")
+
+    [patches] = patch_ids(sub, [*commands[0], "--", ":(top,literal)top"])
+
+    assert [commit for _, commit in patches] == [repo.run("rev-parse", "topic")]
+
+
 def test_patch_ids_runs_no_textconv(repo: Git) -> None:
     commands = topic_changing(repo, "b.txt")
     expected = patch_ids(repo, *commands)

@@ -84,6 +84,9 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
     under `git.directory`, as diff.relative would) and in every submodule, none through a
     textconv, with git's usual a/ and b/ prefixes, and checks no signatures.
 
+    Paths after `--` are pathspecs, relative to `git.directory`: mark a path git reported
+    (from the top of the worktree, which may hold `*` or `:`) as `":(top,literal)" + path`.
+
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
     """
@@ -101,7 +104,7 @@ def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]
             if command in _SHOWING_COMMITS
             else _PATCH_SETTINGS
         )
-        patches.append(git.run("--literal-pathspecs", command, *settings, *rest))
+        patches.append(git.run(command, *settings, *rest))
         patches.append(f"commit {i:0{length}x}\n\n{_END_MARKER_DIFF}")
     results: list[list[tuple[str, str]]] = [[]]
     for line in git.run("patch-id", "--stable", input="\n".join(patches) + "\n").splitlines():
