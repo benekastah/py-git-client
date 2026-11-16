@@ -231,8 +231,8 @@ python3 dev.py release 0.0.1
 ```
 
 It needs git, uv and gh (logged in). After fetching origin, it refuses unless the version is
-`pyproject.toml`'s on `origin/main`, it has no tag yet, locally or on origin, and the "CI
-passed" check succeeded on `origin/main`'s latest commit (if it's still running, wait and run
+`pyproject.toml`'s on `origin/main`, neither its tag nor the next version's branch
+(`start-X.Y.Z+1`) exists yet, locally or on origin, and the "CI passed" check succeeded on `origin/main`'s latest commit (if it's still running, wait and run
 it again). Then it tags that commit (not your checkout's) `vX.Y.Z`, pushes the tag, and, in a
 temporary worktree, opens a PR moving `main` to the next patch version (`start-X.Y.Z+1`). That
 PR merges like any other, once CI passes. If opening it fails after the tag is pushed, the

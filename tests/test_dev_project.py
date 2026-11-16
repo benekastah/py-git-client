@@ -204,3 +204,22 @@ def test_release_command_names_a_missing_tool(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(dev_project.shutil, "which", which)
     with pytest.raises(SystemExit, match="needs gh"):
         dev_project.release(["0.0.1"])
+
+
+def test_release_refuses_and_keeps_a_local_next_version_branch(
+    repos: Path, github: FakeGitHub
+) -> None:
+    clone = Git(repos / "clone")
+    clone.run("branch", "start-0.0.2")
+    mine = clone.run("rev-parse", "start-0.0.2")
+    with pytest.raises(ReleaseError, match="start-0.0.2.* exists locally"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert clone.run("rev-parse", "start-0.0.2") == mine
+    assert Git(repos / "origin.git").run("tag") == ""
+
+
+def test_release_refuses_a_next_version_branch_on_origin(repos: Path, github: FakeGitHub) -> None:
+    Git(repos / "origin.git").run("branch", "start-0.0.2", "main")
+    with pytest.raises(ReleaseError, match="start-0.0.2.* exists on origin"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert Git(repos / "origin.git").run("tag") == ""

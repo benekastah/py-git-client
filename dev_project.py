@@ -120,6 +120,11 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
         raise ReleaseError(f"{tag} exists on origin")
     if _git(repo, "tag", "--list", tag):
         raise ReleaseError(f"{tag} exists locally")
+    branch = _next_version_branch(version)
+    if _git(repo, "branch", "--list", branch):
+        raise ReleaseError(f"{branch}, the next version's branch, exists locally")
+    if _git(repo, "ls-remote", "--heads", "origin", f"refs/heads/{branch}"):
+        raise ReleaseError(f"{branch}, the next version's branch, exists on origin")
     current = pyproject_version(_git(repo, "show", "origin/main:pyproject.toml"))
     if current != version:
         raise ReleaseError(f"pyproject.toml's version is {current} on origin/main, not {version}")
@@ -149,11 +154,16 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
         ) from error
 
 
+def _next_version_branch(released: str) -> str:
+    """The branch of the PR moving main on from `released`."""
+    return f"start-{next_version(released)}"
+
+
 def _start_next_version(repo: Path, released: str) -> str:
     """Open a PR moving main's version on from `released`, from a temporary worktree (main's
     ruleset requires CI, so the change can't be pushed to main itself); returns its URL."""
     upcoming = next_version(released)
-    branch = f"start-{upcoming}"
+    branch = _next_version_branch(released)
     title = f"Start version {upcoming}, after releasing {released}"
     message = (
         f"{title}\n\nmain always carries the next version to release (see AGENTS.md), so that"
@@ -166,6 +176,7 @@ def _start_next_version(repo: Path, released: str) -> str:
     )
     scratch = Path(tempfile.mkdtemp(prefix="release-"))
     worktree = scratch / "worktree"
+    created = False  # whether this run made the branch, and so may delete it
     try:
         _git(
             repo,
@@ -178,6 +189,7 @@ def _start_next_version(repo: Path, released: str) -> str:
             str(worktree),
             "origin/main",
         )
+        created = True
         pyproject = worktree / "pyproject.toml"
         text = pyproject.read_bytes().decode("utf-8")
         pyproject.write_bytes(set_pyproject_version(text, upcoming).encode("utf-8"))
@@ -192,9 +204,10 @@ def _start_next_version(repo: Path, released: str) -> str:
             capture_output=True,
             check=False,
         )
-        subprocess.run(
-            ["git", "-C", str(repo), "branch", "-D", branch], capture_output=True, check=False
-        )
+        if created:  # pushed by now, or nothing of value lost
+            subprocess.run(
+                ["git", "-C", str(repo), "branch", "-D", branch], capture_output=True, check=False
+            )
         shutil.rmtree(scratch, ignore_errors=True)
 
 
