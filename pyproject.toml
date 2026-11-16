@@ -1,6 +1,6 @@
 [project]
 name = "py-git-client"
-version = "0.0.1"
+version = "0.0.2"
 description = "Run git from Python with as few processes as possible: one way to start git, a long-lived cat-file, and batched reads and writes."
 readme = "README.md"
 license = "MIT"
