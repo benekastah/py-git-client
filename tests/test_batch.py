@@ -69,6 +69,13 @@ def test_refs_gives_each_refs_object_upstream_and_whether_head_is_on_it(
     assert found["refs/remotes/origin/HEAD"].symref == "refs/remotes/origin/main"
 
 
+def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:
+    # Python's splitlines would split this name too.
+    repo.run("branch", "a\u2028b")
+
+    assert set(refs(repo, "refs/heads/")) == {"refs/heads/main", "refs/heads/a\u2028b"}
+
+
 def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> None:
     repo.run("switch", "--quiet", "-c", "topic")
     for name in ("b", "c"):

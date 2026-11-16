@@ -59,13 +59,17 @@ class Ref:
 def refs(git: Git, *patterns: str) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
     refs if none), by full name, from one `git for-each-ref`."""
-    listing = git.run(
+    listing = git.run_bytes(
         "for-each-ref",
         "--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD)",
         *patterns,
     )
     found: dict[str, Ref] = {}
-    for line in listing.splitlines():
+    # Only at "\n", as git ends each: a ref name can hold what splitlines and strip take as
+    # line endings or space (e.g. U+2028).
+    for line in decode(listing).split("\n"):
+        if not line:
+            continue
         name, object_id, upstream, symref, head = line.split("\0")
         found[name] = Ref(name, object_id, upstream, symref, head == "*")
     return found
