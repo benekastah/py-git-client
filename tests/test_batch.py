@@ -209,6 +209,8 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
         ("diff.noprefix", "true"),
         ("color.ui", "always"),
         ("diff.external", "no-such-external-diff"),
+        ("log.abbrevCommit", "true"),
+        ("format.pretty", "format:%s"),
     ],
 )
 def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
