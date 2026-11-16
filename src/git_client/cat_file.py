@@ -14,6 +14,10 @@ from git_client.client import Git, GitError, encode
 OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 """A full object id: SHA-1 or SHA-256."""
 
+USAGE_ERROR = 129
+"""git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
+unlike the 128 of `cat-file` exiting on a name."""
+
 
 @dataclass(frozen=True)
 class ObjectInfo:
@@ -109,7 +113,12 @@ class CatFile:
         except OSError:
             reply = b""
         if not reply:
+            process = self._process
             self._stop()
+            if process.returncode == USAGE_ERROR:
+                raise GitError(
+                    ["cat-file", "--batch-command"], USAGE_ERROR, "git 2.36 or newer is needed"
+                )
             return None
         return reply.split()
 

@@ -1,6 +1,5 @@
 import os
 import pickle
-import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -8,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from git_client import Git, GitError, find_git
-from git_client.client import on_path
 
 
 @pytest.fixture
@@ -101,6 +99,7 @@ def test_a_path_given_as_bytes_reaches_git_as_it_is(repo: Git) -> None:
     assert repo.run_bytes("diff", "--cached", "--name-only", "-z") == name + b"\0"
 
 
+@pytest.mark.usefixtures("fresh_find_git")
 def test_find_git_never_takes_a_git_in_the_current_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -113,14 +112,27 @@ def test_find_git_never_takes_a_git_in_the_current_directory(
     monkeypatch.chdir(planted)
     monkeypatch.setenv("PATH", os.pathsep.join(["", ".", str(real)]))
 
-    assert on_path("git") == str(real / name)
+    assert find_git() == str(real / name)
 
 
-def test_passthrough_says_whether_it_succeeded(repo: Git) -> None:
-    assert repo.passthrough("rev-parse", "--quiet", "--verify", "main", stdout=subprocess.DEVNULL)
-    assert not repo.passthrough(
-        "rev-parse", "--quiet", "--verify", "no-such-branch", stdout=subprocess.DEVNULL
-    )
+@pytest.mark.usefixtures("fresh_find_git")
+def test_find_git_fails_rather_than_run_whatever_git_is_nearby(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", os.pathsep.join(["", "."]))
+
+    with pytest.raises(FileNotFoundError):
+        find_git()
+
+
+def test_passthrough_sends_gits_output_where_its_told(repo: Git, tmp_path: Path) -> None:
+    with (tmp_path / "out").open("wb") as out:
+        assert repo.passthrough("rev-parse", "--abbrev-ref", "HEAD", stdout=out)
+        assert not repo.passthrough(
+            "rev-parse", "--quiet", "--verify", "no-such-branch", stdout=out
+        )
+
+    assert (tmp_path / "out").read_bytes().strip() == b"main"
 
 
 def test_a_git_error_survives_pickling(repo: Git) -> None:
@@ -134,3 +146,17 @@ def test_a_git_error_survives_pickling(repo: Git) -> None:
         raised.value.returncode,
         raised.value.stderr,
     )
+
+
+class ToolError(GitError):
+    pass
+
+
+def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
+    error = ToolError(["status"], 1, "boom")
+    error.add_note("while checking the stack")
+
+    copy = pickle.loads(pickle.dumps(error))
+
+    assert type(copy) is ToolError
+    assert copy.__notes__ == ["while checking the stack"]

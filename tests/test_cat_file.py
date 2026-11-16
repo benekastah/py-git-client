@@ -1,8 +1,14 @@
+import gc
+import subprocess
+import sys
+import warnings
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from git_client import CatFile, Git, GitError
+from git_client.client import Arg, EnvValue
 
 
 def test_resolves_names_to_object_ids(repo: Git) -> None:
@@ -77,3 +83,37 @@ def test_works_in_a_sha256_repository(tmp_path: Path) -> None:
         assert len(blob) == 64
         assert cat_file.resolve(blob) == blob
         assert cat_file.read(blob) == ("blob", b"content\n")
+
+
+def test_stopping_leaves_no_pipe_open(repo: Git) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        cat_file = CatFile(repo)
+        cat_file.resolve("main@{u}")  # git exits, and the next request starts another
+        cat_file.resolve("main")
+        cat_file.close()
+        del cat_file
+        gc.collect()
+
+    assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
+
+
+class GitWithoutBatchCommand(Git):
+    """A git older than 2.36, whose cat-file exits with a usage error at --batch-command."""
+
+    def popen(
+        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+    ) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.exit(129)"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+
+
+def test_a_git_without_batch_command_is_an_error_not_an_empty_answer(repo: Git) -> None:
+    with (
+        CatFile(GitWithoutBatchCommand(repo.directory)) as cat_file,
+        pytest.raises(GitError, match="2.36"),
+    ):
+        cat_file.resolve("HEAD")

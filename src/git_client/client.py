@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from typing import IO, TypeAlias
+from typing import IO, Self, TypeAlias
 
 # Whether git's processes are started with close_fds. Not on Linux or macOS: Python opens its
 # own files non-inheritable (PEP 446), so there's nothing to close, and without close_fds (and
@@ -32,20 +32,24 @@ class GitError(RuntimeError):
         self.stderr = stderr
         super().__init__(f"git {' '.join(self.command)} failed ({returncode}):\n{stderr.strip()}")
 
-    def __reduce__(self) -> tuple[type["GitError"], tuple[list[str], int, str]]:
-        # So it can cross from a worker process: the default would call __init__ with only
-        # the message.
-        return (GitError, (self.command, self.returncode, self.stderr))
+    def __reduce__(self) -> tuple[type[Self], tuple[list[str], int, str], dict[str, object]]:
+        # So it can cross from a worker process: the default would call __init__ with only the
+        # message. Its class and __dict__ keep a subclass, and notes added with add_note.
+        return (type(self), (self.command, self.returncode, self.stderr), self.__dict__)
 
 
 @functools.cache
 def find_git(env_var: str | None = None) -> str:
     """The git to run: the program `$env_var` names, if that's set; else the git on PATH (a
-    wrapper such as git-ai included), by its full path, which posix_spawn needs; else "git".
-    Found once per process."""
+    wrapper such as git-ai included), by its full path, which posix_spawn needs. Found once per
+    process. Raises FileNotFoundError if there's none: running plain "git" would let the OS
+    look in the current directory, where a repository could hold a git of its own."""
     if env_var and (configured := os.environ.get(env_var)):
         return configured
-    return on_path("git") or "git"
+    found = on_path("git")
+    if found is None:
+        raise FileNotFoundError("git isn't in any directory on PATH")
+    return found
 
 
 def on_path(name: str) -> str | None:

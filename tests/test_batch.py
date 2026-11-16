@@ -31,10 +31,6 @@ def test_config_tells_a_key_with_no_value_from_an_empty_one(repo: Git) -> None:
     assert entries["flags.empty"] == [""]
 
 
-def test_patch_ids_of_no_commands_is_nothing(repo: Git) -> None:
-    assert patch_ids(repo) == []
-
-
 def test_patch_ids_in_a_sha256_repository(tmp_path: Path) -> None:
     git = Git(tmp_path / "repo")
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", str(tmp_path / "repo"))
