@@ -3,6 +3,7 @@ fails."""
 
 import http.server
 import socket
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -72,6 +73,18 @@ def test_a_remote_that_isnt_a_repository(repo: Git, tmp_path: Path) -> None:
         repo.run("ls-remote", str(tmp_path / "plain"))
 
 
+def test_a_remote_that_cant_be_read_from(repo: Git) -> None:
+    # An ssh that fails, as one that can't connect does: git says only that it couldn't read.
+    ssh = f'"{Path(sys.executable).as_posix()}" -c "import sys; sys.exit(255)"'
+
+    with pytest.raises(RemoteError):
+        repo.run(
+            "ls-remote",
+            "ssh://example.invalid/repo.git",
+            env={"GIT_SSH_COMMAND": ssh, "GIT_ALLOW_PROTOCOL": "ssh"},
+        )
+
+
 @pytest.fixture
 def not_found() -> Iterator[str]:
     """The URL of a server on this machine that has no repositories."""
@@ -134,6 +147,16 @@ def test_a_push_that_isnt_a_fast_forward(behind: Git) -> None:
 
     with pytest.raises(PushRejectedError):
         behind.run("push", "--quiet", "origin", "main")
+
+
+def test_a_push_the_remote_refuses(repo: Git, tmp_path: Path) -> None:
+    # A push to the branch checked out in a repository with a worktree: " ! [remote rejected]".
+    other = Git(tmp_path / "other")
+    repo.run("clone", "--quiet", repo.directory, other.directory)
+    other.run("commit", "--quiet", "--allow-empty", "-m", "theirs")
+
+    with pytest.raises(PushRejectedError):
+        other.run("push", "--quiet", "origin", "main")
 
 
 @pytest.fixture
