@@ -3,18 +3,23 @@ from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, RefUpdate, config, find_git, update_refs
+from git_client import CatFile, Git, config, find_git
 from git_client.testing import FakeGit, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
 
 
 def test_git_sees_the_tests_config_not_the_users(repo: Git, git_config: Path) -> None:
-    entries = config(repo)
-
-    assert entries["user.name"] == ["Test"]
-    assert entries["maintenance.auto"] == ["false"]
+    assert config(repo)["user.name"] == ["Test"]
     assert git_config.is_file()
+
+
+def test_git_starts_no_background_maintenance(repo: Git, tmp_path: Path) -> None:
+    traced = Git(repo.directory, env={"GIT_TRACE": str(tmp_path / "trace")})
+
+    traced.run("commit", "--quiet", "--allow-empty", "-m", "second")
+
+    assert "maintenance" not in (tmp_path / "trace").read_text(encoding="utf-8")
 
 
 def test_a_session_is_cut_off_from_the_users_git_setup(
@@ -26,6 +31,7 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
     (template / "from-the-users-template").write_text("", encoding="utf-8")
     (home / ".config" / "git").mkdir(parents=True)
     (home / ".config" / "git" / "ignore").write_text("ignored-by-user\n", encoding="utf-8")
+    (home / ".config" / "git" / "attributes").write_text("* diff=mine\n", encoding="utf-8")
     pytester.makepyfile(
         """
         import os
@@ -41,6 +47,7 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             git.run("init", "--quiet")
             (tmp_path / "ignored-by-user").write_text("x", encoding="utf-8")
             assert git.run("status", "--porcelain") == "?? ignored-by-user"
+            assert git.run("check-attr", "diff", "--", "a") == "a: diff: unspecified"
             git.run("add", "ignored-by-user")
             assert (tmp_path / ".git" / "index").is_file()
             assert not (tmp_path / ".git" / "from-the-users-template").exists()
@@ -54,7 +61,10 @@ def test_a_session_is_cut_off_from_the_users_git_setup(
             assert os.environ["GIT_TERMINAL_PROMPT"] == "0"
         """
     )
-    (tmp_path / "system-config").write_text("[user]\n\tname = From The System\n", encoding="utf-8")
+    # Which the tests' config doesn't set: commits would fail.
+    (tmp_path / "system-config").write_text(
+        "[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = no-such-gpg\n", encoding="utf-8"
+    )
     Git(tmp_path).run("init", "--quiet", "hooks-repository")
     for name, value in {
         "HOME": str(home),
@@ -225,6 +235,17 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
 
 def test_these_tests_run_the_real_git() -> None:
     assert find_git() == real_git()
+
+
+def test_real_git_is_the_git_on_path_if_gits_exec_path_has_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_EXEC_PATH", str(tmp_path))
+    real_git.cache_clear()
+    try:
+        assert real_git() == find_git()
+    finally:
+        real_git.cache_clear()
 
 
 def test_real_git_is_the_git_in_gits_exec_path() -> None:
@@ -405,13 +426,40 @@ def test_fake_git_answers_from_its_responses_and_records_each_command() -> None:
     ]
 
 
+def test_fake_git_answers_with_the_first_response_that_matches() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse", "--verify"], stdout="first\n")
+    git.respond(["rev-parse"], stdout="second\n")
+
+    assert git.run("rev-parse", "--verify", "HEAD") == "first"
+    assert git.run("rev-parse", "HEAD") == "second"
+
+
 def test_fake_git_records_what_was_sent_on_stdin() -> None:
     git = FakeGit()
     git.respond(["update-ref"])
 
-    update_refs(git, [RefUpdate("refs/heads/old", None, old="1" * 40)])
+    git.run("update-ref", "--stdin", input="delete refs/heads/old\n")
 
-    assert git.calls[-1].input == b"delete refs/heads/old\0" + b"1" * 40 + b"\0"
+    assert git.calls[-1].input == b"delete refs/heads/old\n"
+
+
+def test_fake_git_records_what_each_command_added_to_the_environment() -> None:
+    git = FakeGit()
+    git.env["GIT_AUTHOR_NAME"] = "Client"
+    git.respond(["commit"])
+
+    git.run("commit", "-m", "x", env={"GIT_AUTHOR_DATE": "2000-01-01T00:00:00"})
+
+    assert git.calls[-1].env == {
+        "GIT_AUTHOR_NAME": "Client",
+        "GIT_AUTHOR_DATE": "2000-01-01T00:00:00",
+    }
+
+
+def test_fake_git_cant_start_a_long_lived_git() -> None:
+    with CatFile(FakeGit()) as cat_file, pytest.raises(UnexpectedCommand, match="cat-file"):
+        cat_file.resolve("HEAD")
 
 
 def test_fake_git_fails_on_a_command_it_has_no_response_for() -> None:
