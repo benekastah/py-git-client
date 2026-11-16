@@ -67,6 +67,21 @@ def test_a_failures_message_cuts_a_long_command_short() -> None:
     assert len(error.command) == 102
 
 
+def test_a_failures_message_can_be_written_whatever_bytes_git_was_given() -> None:
+    # A path that isn't UTF-8, as decode gives it: its byte as a surrogate, which UTF-8 can't
+    # write.
+    error = GitError(["add", "caf\udce9"], 128, "fatal: pathspec 'caf\udce9' did not match\n")
+
+    assert str(error).encode("utf-8") == (
+        b"git add caf\\xe9 failed (128):\nfatal: pathspec 'caf\\xe9' did not match"
+    )
+    assert (error.command, error.stderr) == (
+        ["add", "caf\udce9"],
+        "fatal: pathspec 'caf\udce9' did not match\n",
+    )
+    assert str(GitError(["add", "\ud800"], 128, "")).startswith("git add \\ud800 failed")
+
+
 def test_a_failure_keeps_what_git_printed_to_stdout(repo: Git) -> None:
     with pytest.raises(GitError) as raised:
         repo.run("show-ref", "--verify", "refs/heads/main", "refs/heads/nope")

@@ -16,7 +16,9 @@ class GitError(RuntimeError):
     if it didn't exit: see GitTimeoutError), and `stderr` and `stdout` what it printed there
     (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
     one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE characters of the
-    command line, ending with "…" when cut; `command` keeps all of it."""
+    command line, ending with "…" when cut; `command` keeps all of it. It shows bytes that
+    aren't UTF-8 (in a path, say) escaped, as `\xe9`, so it can be written anywhere;
+    `command`, `stderr` and `stdout` keep them, as `decode` gives them."""
 
     def __init__(
         self, args: Sequence[str | bytes], returncode: int | None, stderr: str, stdout: str = ""
@@ -29,7 +31,7 @@ class GitError(RuntimeError):
         if len(line) > MAX_COMMAND_IN_MESSAGE:
             line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
         status = "timed out" if returncode is None else returncode
-        super().__init__(f"git {line} failed ({status}):\n{stderr.strip()}")
+        super().__init__(_printable(f"git {line} failed ({status}):\n{stderr.strip()}"))
 
     def __reduce__(
         self,
@@ -41,6 +43,15 @@ class GitError(RuntimeError):
             (self.command, self.returncode, self.stderr, self.stdout),
             self.__dict__,
         )
+
+
+def _printable(text: str) -> str:
+    """text, with the surrogates that stand for bytes that aren't UTF-8 (see `decode`) as
+    escapes (`\xe9`), and any other surrogate too (`\ud800`)."""
+    try:
+        return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 class GitTimeoutError(GitError):
