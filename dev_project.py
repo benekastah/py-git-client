@@ -19,8 +19,11 @@ GITHUB_ACTIONS_APP = 15368
 """GitHub Actions' app id, which reports CI_CHECK."""
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 GITHUB_URL = re.compile(
-    r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
-    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?"
+    r"(?:https://(?:[^@/]+@)?github\.com(?::443)?/"
+    r"|ssh://(?:[^@/]+@)?github\.com(?::22)?/"
+    r"|(?:[^@/:]+@)?github\.com:)"
+    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?",
+    re.IGNORECASE,
 )
 PROJECT_VERSION = re.compile(r'^(version\s*=\s*")[^"]*(")', re.MULTILINE)
 
@@ -45,11 +48,44 @@ def next_version(version: str) -> str:
 
 
 def github_repo(url: str) -> str:
-    """ "OWNER/REPO", from a GitHub repository's URL (https or ssh)."""
+    """OWNER/REPO, from the URL of a repository on github.com (https or ssh)."""
     match = GITHUB_URL.fullmatch(url)
     if match is None:
-        raise ReleaseError(f"origin ({url}) isn't a GitHub repository")
+        raise ReleaseError(f"origin ({url}) isn't on github.com; only github.com is supported")
     return "/".join(match.groups())
+
+
+def _origin_url_repo(repo: Path, push: bool) -> str:
+    """OWNER/REPO from the URL git uses to fetch from (or push to) origin, insteadOf applied,
+    so that an alias rewritten to github.com works. If that isn't on github.com, it's from
+    the URL as configured, which insteadOf may rewrite to a mirror or (in the tests) a local
+    repository standing in for it."""
+    used = _git(repo, "remote", "get-url", *(["--push"] if push else []), "origin")
+    try:
+        return github_repo(used)
+    except ReleaseError:
+        keys = ["remote.origin.pushurl", "remote.origin.url"] if push else ["remote.origin.url"]
+        for key in keys:
+            configured = subprocess.run(
+                ["git", "-C", str(repo), "config", "--get", key],
+                capture_output=True,
+                encoding="utf-8",
+                check=False,
+            ).stdout.strip()
+            if configured:
+                return github_repo(configured)
+        raise
+
+
+def origin_github_repo(repo: Path) -> str:
+    """OWNER/REPO of `repo`'s origin on github.com, which gh is told (left to itself, it may
+    pick another remote, e.g. upstream). Refuses unless origin is on github.com, and the tag
+    is pushed to the same repository whose CI is checked."""
+    fetch = _origin_url_repo(repo, push=False)
+    push = _origin_url_repo(repo, push=True)
+    if push.lower() != fetch.lower():
+        raise ReleaseError(f"origin fetches from {fetch} but pushes to {push}")
+    return fetch
 
 
 def pyproject_version(pyproject: str) -> str:
@@ -133,13 +169,11 @@ def uv_lock(worktree: Path) -> None:
 def publish(repo: Path, version: str) -> tuple[str, str]:
     """Release `version` from `repo`'s origin: tag origin/main's latest commit `vX.Y.Z` and
     push the tag, then open a PR moving main to the next version. Returns the tag and the PR's
-    URL. Refuses, before changing anything, unless origin is on GitHub, `version` is
+    URL. Refuses, before changing anything, unless origin is on github.com, `version` is
     origin/main's pyproject.toml version, neither its tag nor the next version's branch exists
     yet, and CI passed on that commit."""
     parse_version(version)
-    # gh is told the repository: left to itself, it may pick another remote (e.g. upstream).
-    # The URL as configured, not as insteadOf rewrites it, names the repository.
-    github = github_repo(_git(repo, "config", "--get", "remote.origin.url"))
+    github = origin_github_repo(repo)
     tag = f"v{version}"
     _git(repo, "fetch", "--quiet", "origin")
     if _git(repo, "ls-remote", "--tags", "origin", f"refs/tags/{tag}"):
