@@ -1,3 +1,6 @@
+import os
+import pickle
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -5,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from git_client import Git, GitError, find_git
+from git_client.client import on_path
 
 
 @pytest.fixture
@@ -95,3 +99,38 @@ def test_a_path_given_as_bytes_reaches_git_as_it_is(repo: Git) -> None:
     repo.run_bytes("add", "--", name)
 
     assert repo.run_bytes("diff", "--cached", "--name-only", "-z") == name + b"\0"
+
+
+def test_find_git_never_takes_a_git_in_the_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = "git.exe" if sys.platform == "win32" else "git"
+    planted, real = tmp_path / "repo", tmp_path / "bin"
+    for directory in (planted, real):
+        directory.mkdir()
+        (directory / name).write_bytes(b"")
+        (directory / name).chmod(0o755)
+    monkeypatch.chdir(planted)
+    monkeypatch.setenv("PATH", os.pathsep.join(["", ".", str(real)]))
+
+    assert on_path("git") == str(real / name)
+
+
+def test_passthrough_says_whether_it_succeeded(repo: Git) -> None:
+    assert repo.passthrough("rev-parse", "--quiet", "--verify", "main", stdout=subprocess.DEVNULL)
+    assert not repo.passthrough(
+        "rev-parse", "--quiet", "--verify", "no-such-branch", stdout=subprocess.DEVNULL
+    )
+
+
+def test_a_git_error_survives_pickling(repo: Git) -> None:
+    with pytest.raises(GitError) as raised:
+        repo.run("switch", "no-such-branch")
+
+    copy = pickle.loads(pickle.dumps(raised.value))
+
+    assert (copy.command, copy.returncode, copy.stderr) == (
+        raised.value.command,
+        raised.value.returncode,
+        raised.value.stderr,
+    )

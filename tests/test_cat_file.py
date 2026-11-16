@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from git_client import CatFile, Git, GitError
@@ -59,3 +61,19 @@ def test_reading_an_object_that_isnt_there_fails(repo: Git) -> None:
             cat_file.read("main")
         # And it's still in step.
         assert cat_file.read(repo.run("rev-parse", "HEAD:a")) == ("blob", b"a\n")
+
+
+def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:
+    with CatFile(repo) as cat_file:
+        assert cat_file.resolve("HEAD\0junk") is None
+
+
+def test_works_in_a_sha256_repository(tmp_path: Path) -> None:
+    git = Git(tmp_path / "repo")
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", str(tmp_path / "repo"))
+    blob = git.run("hash-object", "-w", "--stdin", input="content\n")
+
+    with CatFile(git) as cat_file:
+        assert len(blob) == 64
+        assert cat_file.resolve(blob) == blob
+        assert cat_file.read(blob) == ("blob", b"content\n")

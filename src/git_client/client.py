@@ -3,7 +3,6 @@ text and paths to it as git expects them."""
 
 import functools
 import os
-import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -33,6 +32,11 @@ class GitError(RuntimeError):
         self.stderr = stderr
         super().__init__(f"git {' '.join(self.command)} failed ({returncode}):\n{stderr.strip()}")
 
+    def __reduce__(self) -> tuple[type["GitError"], tuple[list[str], int, str]]:
+        # So it can cross from a worker process: the default would call __init__ with only
+        # the message.
+        return (GitError, (self.command, self.returncode, self.stderr))
+
 
 @functools.cache
 def find_git(env_var: str | None = None) -> str:
@@ -41,8 +45,27 @@ def find_git(env_var: str | None = None) -> str:
     Found once per process."""
     if env_var and (configured := os.environ.get(env_var)):
         return configured
-    found = shutil.which("git")
-    return os.path.abspath(found) if found else "git"
+    return on_path("git") or "git"
+
+
+def on_path(name: str) -> str | None:
+    """The full path of the program `name` in a directory on PATH, or None. Only absolute
+    directories count: an empty or relative entry means the current directory, and on Windows
+    shutil.which looks there first whatever PATH says, so a repository holding a git.exe (or
+    git.bat) would be run as git."""
+    extensions = (
+        (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+        if sys.platform == "win32"
+        else [""]
+    )
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not os.path.isabs(directory):
+            continue
+        for extension in extensions:
+            candidate = os.path.join(directory, name + extension.lower())
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
 
 
 def decode(output: bytes) -> str:
@@ -162,7 +185,7 @@ class Git:
     def passthrough(
         self,
         *args: Arg,
-        stdout: IO[bytes] | IO[str] | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
     ) -> bool:
         """Run git with its output going to ours (stdout to `stdout`, if given, e.g. stderr

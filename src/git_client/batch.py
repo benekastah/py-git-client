@@ -11,18 +11,18 @@ from git_client.client import Git, GitError, decode, encode
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
 
 
-def config(git: Git) -> dict[str, list[str]]:
+def config(git: Git) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
     included files), from one `git config --list`: each key, as git prints it (section and
     name in lower case, a subsection as written), with its values in the order git reads
-    them."""
-    entries: dict[str, list[str]] = {}
+    them. A key with no value at all (`[core]` then `bare`, which git reads as true) has None,
+    unlike one set to nothing (`bare =`, which git reads as false), which has ""."""
+    entries: dict[str, list[str | None]] = {}
     for entry in decode(git.run_bytes("config", "--list", "-z")).split("\0"):
         if entry:
-            # A key, then its value after a newline; a key with no value (`[core] bare`) has
-            # no newline.
-            key, _, value = entry.partition("\n")
-            entries.setdefault(key, []).append(value)
+            # A key, then its value after a newline; a key with no value has no newline.
+            key, newline, value = entry.partition("\n")
+            entries.setdefault(key, []).append(value if newline else None)
     return entries
 
 

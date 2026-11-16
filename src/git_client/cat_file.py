@@ -58,8 +58,9 @@ class CatFile:
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
         --verify` would find it, or None if it names nothing (or is ambiguous)."""
-        if not name or "\n" in name or "\r" in name:
-            # A line ending would put the process out of step with what's read back.
+        if not name or any(c in name for c in "\n\r\0"):
+            # A line ending would put the process out of step with what's read back, and git
+            # would read a name only up to a NUL.
             return None
         with self._lock:
             header = self._request(b"info " + encode(name))
@@ -121,4 +122,6 @@ class CatFile:
             with contextlib.suppress(OSError):
                 self._process.stdin.close()
         self._process.wait()
+        if self._process.stdout is not None:
+            self._process.stdout.close()
         self._process = None

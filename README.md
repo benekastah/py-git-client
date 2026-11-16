@@ -15,7 +15,8 @@ what git-stack, git-recommit and move-forward share for that:
   their upstreams, symbolic refs and HEAD (`refs`), patch ids for many commands (`patch_ids`),
   blobs (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 
-It has no dependencies of its own, and needs git and Python 3.11 or newer.
+It has no dependencies of its own, and needs Python 3.11 or newer and git 2.36 or newer (for
+`git cat-file --batch-command`).
 
 ## Installing
 
@@ -38,14 +39,17 @@ git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failu
 git.ok("merge-base", "--is-ancestor", "a", "b")  # True or False
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
-    head = cat_file.resolve("HEAD")  # an object id, or None
-    kind, content = cat_file.read(cat_file.resolve("HEAD:README.md"))
+    head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
+    readme = cat_file.resolve("HEAD:README.md")
+    if readme is not None:
+        kind, content = cat_file.read(readme)
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
 for ref in refs(git, "refs/heads/").values():
     print(ref.name, ref.object, ref.upstream, ref.head)
 
-update_refs(git, [RefUpdate("refs/heads/old", None, old=head)])  # all or none
+old = refs(git, "refs/heads/old")["refs/heads/old"].object
+update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
 ```
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the

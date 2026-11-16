@@ -20,6 +20,33 @@ def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
     assert entries["user.name"] == ["Test"]
 
 
+def test_config_tells_a_key_with_no_value_from_an_empty_one(repo: Git) -> None:
+    with (Path(repo.directory) / ".git" / "config").open("a", encoding="utf-8") as f:
+        f.write("[flags]\n\tbare\n\tempty =\n")
+
+    entries = config(repo)
+
+    # git reads the first as true and the second as false.
+    assert entries["flags.bare"] == [None]
+    assert entries["flags.empty"] == [""]
+
+
+def test_patch_ids_of_no_commands_is_nothing(repo: Git) -> None:
+    assert patch_ids(repo) == []
+
+
+def test_patch_ids_in_a_sha256_repository(tmp_path: Path) -> None:
+    git = Git(tmp_path / "repo")
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", str(tmp_path / "repo"))
+    (tmp_path / "repo" / "a").write_bytes(b"a\n")
+    git.run("add", "a")
+    git.run("commit", "--quiet", "-m", "first")
+
+    [patches] = patch_ids(git, ["log", "-p", "HEAD"])
+
+    assert [commit for _, commit in patches] == [git.run("rev-parse", "HEAD")]
+
+
 def test_refs_gives_each_refs_object_upstream_and_whether_head_is_on_it(
     repo: Git, tmp_path: Path
 ) -> None:
