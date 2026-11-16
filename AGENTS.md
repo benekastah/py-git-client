@@ -20,15 +20,22 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
 - `tests/`: the tests, against real repositories, through the `git_client.testing` plugin (see
   `tests/conftest.py`).
 - `dev.py`: setting up a clone and running the checks, on every system (see the README).
+- `dev_project.py`: this project's commands for `dev.py`: `release` (see the README).
 
 ## Rules for this project
 
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
-- **The API is a contract.** git-stack, git-recommit and move-forward build on it: a change
-  that could break one is a new major version, and the README's examples stay true
-  (`tests/test_readme.py` runs its Python blocks, with git 2.36 or newer, the oldest
-  supported).
+- **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
+  README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
+  or newer, the oldest supported). They depend on
+  `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
+  their uv.lock.
+- **Versions** are 0.0.N, each released as a git tag, `v0.0.N`, as often as needed, with
+  `python3 dev.py release 0.0.N` (see the README). After each release, `main` carries the
+  next version (the release command opens that PR), so a change that could break git-stack,
+  git-recommit or move-forward is simply released as the next patch version. PRs never change
+  the version themselves.
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.

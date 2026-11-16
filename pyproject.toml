@@ -1,6 +1,6 @@
 [project]
 name = "py-git-client"
-version = "0.1.0"
+version = "0.0.1"
 description = "Run git from Python with as few processes as possible: one way to start git, a long-lived cat-file, and batched reads and writes."
 readme = "README.md"
 license = "MIT"
@@ -35,7 +35,7 @@ per-file-target-version = { "dev.py" = "py311" }
 extend-select = ["I", "UP", "B", "C4", "SIM"]
 
 [tool.basedpyright]
-include = ["src", "tests", "dev.py"]
+include = ["src", "tests", "dev.py", "dev_project.py"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 
