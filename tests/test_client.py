@@ -226,6 +226,7 @@ def test_runs_in_its_directory_wherever_we_are(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows passes arguments as str")
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS refuses a file name that isn't UTF-8")
 def test_a_path_given_as_bytes_reaches_git_as_it_is(repo: Git) -> None:
     name = b"caf\xe9"
     (Path(repo.directory) / name.decode("utf-8", "surrogateescape")).write_bytes(b"x\n")
