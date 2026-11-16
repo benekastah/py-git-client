@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import OBJECT_ID, Git, batch_line, object_header
-from git_client.errors import GitError
+from git_client.client import OBJECT_ID, Git, batch_line, check_names_nothing, object_header
+from git_client.errors import GitError, UnknownRevisionError
+
+_COMMAND = ("cat-file", "--batch-command")
 
 USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
@@ -32,13 +34,17 @@ class CatFile:
     It sees refs and objects as they are when asked, even when other processes have changed
     them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
     no upstream), git cat-file exits rather than saying they name nothing; then that name
-    resolves to nothing, and the next request starts another process. Any request raises
-    GitError if git is too old for `--batch-command` (before 2.36).
+    resolves to nothing, and the next request starts another process. A process that exits
+    after answering others (killed, say) is started again for the request it exited at. Any
+    request raises GitError if git is too old for `--batch-command` (before 2.36), or if
+    git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
     """
 
     def __init__(self, git: Git) -> None:
         self.git = git
         self._process: subprocess.Popen[bytes] | None = None
+        # Whether the process has answered a request.
+        self._answered = False
         self._lock = threading.Lock()
 
     def __enter__(self) -> Self:
@@ -64,7 +70,7 @@ class CatFile:
         if line is None:
             return None
         with self._lock:
-            reply = self._request(b"info " + line)
+            reply = self._request(b"info " + line, name)
         header = None if reply is None else object_header(reply)
         return None if header is None else ObjectInfo(*header)
 
@@ -76,17 +82,17 @@ class CatFile:
     def read(self, object_id: str) -> tuple[str, bytes]:
         """The type and content of the object with this full id (as `git cat-file <type>
         <id>` prints it: a commit's headers and message exactly as they are). Raises
-        GitError if there's no such object, if git stops partway through it, or if git is
-        too old for this (see CatFile)."""
+        UnknownRevisionError if there's no such object, and GitError if git stops partway
+        through it, or can't read it at all (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         with self._lock:
-            reply = self._request(b"contents " + object_id.encode() + b"\n")
-            header = None if reply is None else object_header(reply)
+            reply = self._request(b"contents " + object_id.encode() + b"\n", object_id)
+            if reply is None:
+                raise GitError(_COMMAND, 1, f"cat-file exited at {object_id}")
+            header = object_header(reply)
             if header is None:
-                raise GitError(
-                    ["cat-file", "contents", object_id], 1, f"{object_id} isn't an object"
-                )
+                raise UnknownRevisionError(_COMMAND, 1, f"{object_id} missing")
             assert self._process is not None and self._process.stdout is not None
             _, kind, size = header
             content = self._process.stdout.read(size)
@@ -95,36 +101,46 @@ class CatFile:
                 # It stopped partway through (killed, say): what came is no object's content.
                 self._stop()
                 raise GitError(
-                    ["cat-file", "contents", object_id],
-                    1,
-                    f"cat-file stopped after {len(content)} of its {size} bytes",
+                    _COMMAND, 1, f"cat-file stopped after {len(content)} of its {size} bytes"
                 )
         return kind, content
 
-    def _request(self, command: bytes) -> bytes | None:
-        """Send command (a line), and return the first line of the reply, or None if the process
-        stopped (the next request starts another). Raises GitError if it stopped with a usage
-        error, as a git older than 2.36 does at --batch-command. Hold the lock."""
-        if self._process is None:
-            # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name that's
-            # both a branch and a tag), as rev-parse --quiet doesn't.
-            self._process = self.git.popen("cat-file", "--batch-command")
-        assert self._process.stdin is not None and self._process.stdout is not None
-        try:
-            self._process.stdin.write(command)
-            self._process.stdin.flush()
-            reply = self._process.stdout.readline()
-        except OSError:
-            reply = b""
-        if not reply:
-            process = self._process
+    def _request(self, command: bytes, name: str) -> bytes | None:
+        """Send command (a line, about `name`), and return the first line of the reply, or
+        None if git exits rather than answer, as it does on some names that name nothing (the
+        next request starts another process). A process that exits after answering others
+        (killed, say, or on this name) is started again, for one more try. Raises GitError if
+        a new process exits at its first request for another reason: a usage error, as a git
+        older than 2.36 gives at --batch-command, or what's wrong with the repository (e.g.
+        NotARepositoryError). Hold the lock."""
+        retried = False
+        while True:
+            if self._process is None:
+                # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name
+                # that's both a branch and a tag), as rev-parse --quiet doesn't.
+                self._process = self.git.popen(*_COMMAND)
+                self._answered = False
+            assert self._process.stdin is not None and self._process.stdout is not None
+            try:
+                self._process.stdin.write(command)
+                self._process.stdin.flush()
+                reply = self._process.stdout.readline()
+            except OSError:
+                reply = b""
+            if reply:
+                self._answered = True
+                return reply
+            process, answered = self._process, self._answered
             self._stop()
             if process.returncode == USAGE_ERROR:
-                raise GitError(
-                    ["cat-file", "--batch-command"], USAGE_ERROR, "git 2.36 or newer is needed"
-                )
+                raise GitError(_COMMAND, USAGE_ERROR, "git 2.36 or newer is needed")
+            if answered:
+                retried = True
+                continue
+            if not retried:
+                # It has answered nothing in this repository yet.
+                check_names_nothing(self.git, name)
             return None
-        return reply
 
     def _stop(self) -> None:
         """Stop the process, if one is running. Hold the lock."""

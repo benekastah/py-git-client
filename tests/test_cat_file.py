@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import CatFile, Git, GitError
+from git_client import CatFile, Git, GitError, NotARepositoryError, UnknownRevisionError
 from git_client.client import Arg, EnvValue
 
 
@@ -44,6 +44,56 @@ def test_keeps_answering_after_a_name_git_exits_on(repo: Git) -> None:
     with CatFile(repo) as cat_file:
         assert cat_file.resolve("main@{u}") is None
         assert cat_file.resolve("main") == repo.run("rev-parse", "main")
+        assert cat_file.resolve("main@{u}") is None
+        assert cat_file.resolve("main") == repo.run("rev-parse", "main")
+
+
+class StartsKeepingGit(Git):
+    """A Git that keeps each long-lived process it starts."""
+
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory)
+        self.started: list[subprocess.Popen[bytes]] = []
+
+    def popen(
+        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+    ) -> subprocess.Popen[bytes]:
+        self.started.append(super().popen(*args, env=env))
+        return self.started[-1]
+
+
+def test_a_process_that_stopped_between_requests_is_started_again(repo: Git) -> None:
+    git = StartsKeepingGit(repo.directory)
+
+    with CatFile(git) as cat_file:
+        cat_file.resolve("main")
+        git.started[-1].kill()  # by the OOM killer, say
+        git.started[-1].wait()
+
+        assert cat_file.resolve("main") == repo.run("rev-parse", "main")
+        assert cat_file.read(repo.run("rev-parse", "HEAD:a")) == ("blob", b"a\n")
+    assert len(git.started) == 2
+
+
+def test_a_directory_that_isnt_a_repository_is_an_error_not_an_empty_answer(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "plain").mkdir()
+    git = Git(tmp_path / "plain", env={"GIT_CEILING_DIRECTORIES": str(tmp_path)})
+
+    with CatFile(git) as cat_file:
+        with pytest.raises(NotARepositoryError):
+            cat_file.resolve("HEAD")
+        with pytest.raises(NotARepositoryError):
+            cat_file.read("0" * 40)
+
+
+def test_a_broken_config_is_an_error_not_an_empty_answer(repo: Git) -> None:
+    with (Path(repo.directory) / ".git" / "config").open("a", encoding="utf-8") as f:
+        f.write("[core\n")
+
+    with CatFile(repo) as cat_file, pytest.raises(GitError, match="bad config line"):
+        cat_file.resolve("HEAD")
 
 
 def test_sees_refs_as_they_are_when_asked(repo: Git) -> None:
@@ -68,7 +118,7 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
 
 def test_reading_an_object_that_isnt_there_fails(repo: Git) -> None:
     with CatFile(repo) as cat_file:
-        with pytest.raises(GitError):
+        with pytest.raises(UnknownRevisionError, match="0{40}"):
             cat_file.read("0" * 40)
         with pytest.raises(ValueError):
             cat_file.read("main")
