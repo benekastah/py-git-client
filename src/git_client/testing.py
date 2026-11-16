@@ -134,7 +134,7 @@ class RepoTemplates:
         one of them at its copy. Returns `dest`."""
         source = self.root / name
         shutil.copytree(source, dest)
-        repoint_remotes(source, dest)
+        _repoint_remotes(source, dest)
         return dest
 
 
@@ -152,7 +152,7 @@ def _remove(directory: Path) -> None:
         shutil.rmtree(directory, onerror=make_writable_and_retry)
 
 
-def repositories(root: Path) -> Iterator[Path]:
+def _repositories(root: Path) -> Iterator[Path]:
     """Every repository under root, root included: each directory with a `.git` in it, and each
     bare repository (a directory with `HEAD`, `config` and `objects`). One whose `.git` is a
     file (a submodule, or a linked worktree) is listed, but its `gitdir:` isn't followed, so a
@@ -167,7 +167,7 @@ def repositories(root: Path) -> Iterator[Path]:
             subdirectories.clear()
 
 
-def repoint_remotes(source: Path, dest: Path) -> None:
+def _repoint_remotes(source: Path, dest: Path) -> None:
     """In each repository under `dest` (copied from `source`), point every remote URL (`url`
     and `pushurl`) that's a path under `source` at the same path under `dest`, through `git
     config` rather than by editing the file, where git escapes backslashes (Windows' paths).
@@ -176,7 +176,7 @@ def repoint_remotes(source: Path, dest: Path) -> None:
     Submodules aren't repointed (their remote, in `.git/modules/<name>/config`, and the
     superproject's `submodule.<name>.url` still name the template), nor linked worktrees
     (whose `gitdir:` is an absolute path into the template)."""
-    for repo in repositories(dest):
+    for repo in _repositories(dest):
         if (repo / ".git").is_file():
             continue
         config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
