@@ -139,6 +139,14 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   ```
 - **`real_git()`**: git itself, from `git --exec-path`, rather than a wrapper or launcher that
   starts another process for each.
+- **`git_calls`**: the arguments of each git process a `Git` starts during the test, while
+  real git runs, to count a tool's processes or check the ones it starts:
+
+  ```python
+  def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:
+      status(clone)  # your code
+      assert git_calls == [["status", "--porcelain=v2"]]
+  ```
 - **`FakeGit`**, for unit tests of the git commands your code runs, without a process: give it
   responses, run your code with it, and check what it ran. Assert the commands where they're
   the behavior (what's pushed, deleted or rewritten); otherwise give realistic output and

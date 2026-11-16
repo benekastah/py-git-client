@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, RefUpdate, config, update_refs
+from git_client import CatFile, Git, RefUpdate, config, update_refs
 from git_client.testing import FakeGit, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -174,6 +174,21 @@ def test_templates_build_under_the_sessions_config(
 
     copy = repo_templates.copy("under-session-config", tmp_path / "copy") / "repo"
     assert Git(copy).run("log", "-1", "--format=%an") == "Test"
+
+
+def test_git_calls_records_each_git_process_and_lets_it_run(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+
+    assert repo.run("log", "-1", "--format=%s") == "second"
+    assert git_calls == [
+        ["commit", "--quiet", "--allow-empty", "-m", "second"],
+        ["cat-file", "--batch-command"],
+        ["log", "-1", "--format=%s"],
+    ]
 
 
 def test_real_git_is_the_git_in_gits_exec_path() -> None:

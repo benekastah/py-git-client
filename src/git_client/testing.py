@@ -4,7 +4,7 @@ commands a tool runs.
 
 Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 ["git_client.testing"]`) or with `-p git_client.testing`, for its fixtures (`git_config`,
-`git_config_text`, `repo_templates`). It imports pytest, so only tests should import it.
+`git_config_text`, `repo_templates`, `git_calls`). It imports pytest, so only tests should import it.
 """
 
 import functools
@@ -16,6 +16,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -261,6 +262,29 @@ def repo_templates(
     """Repositories built once per session, under the session's git config, and copied for
     each test (see RepoTemplates)."""
     return RepoTemplates(tmp_path_factory.mktemp("repo-templates"), git_client_isolation)
+
+
+@pytest.fixture
+def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """The arguments of each git process a `Git` starts from now on (through `process` or
+    `popen`; without `git -C <directory>`), in order, while git runs as it would: to count a
+    tool's processes, or check the ones it starts."""
+    calls: list[list[str]] = []
+    process, popen = Git.process, Git.popen
+
+    def recording_process(
+        self: Git, *args: Arg, **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        calls.append([os.fsdecode(arg) for arg in args])
+        return process(self, *args, **kwargs)
+
+    def recording_popen(self: Git, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
+        calls.append([os.fsdecode(arg) for arg in args])
+        return popen(self, *args, **kwargs)
+
+    monkeypatch.setattr(Git, "process", recording_process)
+    monkeypatch.setattr(Git, "popen", recording_popen)
+    return calls
 
 
 class UnexpectedCommand(AssertionError):
