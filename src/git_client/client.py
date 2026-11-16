@@ -98,6 +98,43 @@ def encode(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
+OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+"""A full object id: SHA-1 or SHA-256."""
+
+_OBJECT_ID_BYTES = re.compile(OBJECT_ID.pattern.encode())
+
+
+def batch_line(name: str) -> bytes | None:
+    """name as a line for `git cat-file`'s batch modes, or None if it can't name anything
+    there: empty, or with a line ending, which would put cat-file out of step with what's
+    read back (it would also take a name ending in \r as the name without it), or a NUL, up
+    to which alone git would read it."""
+    if not name or any(c in name for c in "\n\r\0"):
+        return None
+    return encode(name) + b"\n"
+
+
+def object_header(line: bytes) -> tuple[str, str, int] | None:
+    """The id, type and size in `git cat-file`'s header for an object (`<id> <type>
+    <size>`), or None for its answer for a name that names nothing (`<name> missing`, or
+    `ambiguous`, which with spaces in the name can be three words too)."""
+    parts = line.split()
+    if len(parts) != 3 or not _OBJECT_ID_BYTES.fullmatch(parts[0]) or not parts[2].isdigit():
+        return None
+    return parts[0].decode(), decode(parts[1]), int(parts[2])
+
+
+def check_names_nothing(git: "Git", name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> None:
+    """After `git cat-file` exited on `name`: return if that's only because the name names
+    nothing (cat-file exits on some, e.g. `@{u}` on a branch with no upstream), else raise
+    the GitError for what made it exit (e.g. NotARepositoryError, or a broken config), as
+    `git rev-parse --verify --quiet` finds it."""
+    args = ("rev-parse", "--verify", "--quiet", "--end-of-options", name)
+    result = git.process(*args, capture_output=True, stdout=subprocess.DEVNULL, timeout=timeout)
+    if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr):
+        raise error_from(args, result)
+
+
 def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
     """The GitError for a command that failed: a subclass for a failure the library knows from
     what git said (see errors.py)."""
@@ -283,14 +320,22 @@ class Git:
         return result.returncode == 0
 
     def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
-        """The id of the object `name` names (as `git rev-parse --verify`), or None if it
-        names nothing. Raises GitError for another failure (e.g. NotARepositoryError). For
-        many names, a CatFile takes one process for all of them."""
-        args = ("rev-parse", "--verify", "--quiet", "--end-of-options", name)
-        result = self.process(*args, capture_output=True, timeout=timeout)
-        if result.returncode == 1 and not result.stderr:
+        """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it
+        names nothing: as `git rev-parse --verify` finds it, but only if the repository has
+        that object (not for a full id it lacks, nor for a submodule's commit). Raises
+        GitError for another failure (e.g. NotARepositoryError). For many names, a CatFile
+        takes one process for all of them."""
+        line = batch_line(name)
+        if line is None:
             return None
-        return decode(self._stdout(args, result)).strip()
+        result = self.process(
+            "cat-file", "--batch-check", capture_output=True, input=line, timeout=timeout
+        )
+        if result.returncode != 0:
+            check_names_nothing(self, name, timeout=timeout)
+            return None
+        header = object_header(result.stdout)
+        return None if header is None else header[0]
 
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None

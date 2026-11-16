@@ -2,18 +2,14 @@
 without a process each."""
 
 import contextlib
-import re
 import subprocess
 import threading
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import Git, encode
+from git_client.client import OBJECT_ID, Git, encode
 from git_client.errors import GitError
-
-OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
-"""A full object id: SHA-1 or SHA-256."""
 
 USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),

@@ -123,6 +123,28 @@ def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
     assert repo.resolve("no-such-branch") is None
 
 
+def test_resolve_gives_none_for_an_object_the_repository_lacks(repo: Git) -> None:
+    # A submodule's commit, which is in the submodule's repository, not this one.
+    repo.run("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "add mod")
+
+    assert repo.resolve("0123" * 10) is None
+    assert repo.resolve("HEAD:mod") is None
+    assert repo.resolve("HEAD:a") == repo.run("rev-parse", "HEAD:a")
+
+
+def test_resolve_gives_none_for_a_name_git_exits_on(repo: Git) -> None:
+    # main has no upstream: git cat-file exits rather than saying @{u} names nothing.
+    assert repo.resolve("main@{u}") is None
+
+
+def test_resolve_gives_none_for_a_name_that_isnt_one_line(repo: Git) -> None:
+    assert repo.resolve("HEAD\nHEAD") is None
+    assert repo.resolve("HEAD\r") is None
+    assert repo.resolve("HEAD\0") is None
+    assert repo.resolve("") is None
+
+
 def test_resolve_takes_a_name_that_looks_like_an_option_as_a_name(repo: Git) -> None:
     repo.run("update-ref", "refs/tags/-x", "HEAD")
 
