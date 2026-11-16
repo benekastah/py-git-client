@@ -46,7 +46,7 @@ class GitError(RuntimeError):
 
 
 def _printable(text: str) -> str:
-    """text, with the surrogates that stand for bytes that aren't UTF-8 (see `decode`) as
+    r"""text, with the surrogates that stand for bytes that aren't UTF-8 (see `decode`) as
     escapes (`\xe9`), and any other surrogate too (`\ud800`)."""
     try:
         return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
