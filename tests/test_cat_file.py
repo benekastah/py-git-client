@@ -31,6 +31,12 @@ def test_a_name_that_names_nothing_resolves_to_none(repo: Git) -> None:
         assert cat_file.resolve("no-such-branch") is None
         assert cat_file.resolve("") is None
         assert cat_file.resolve("HEAD\nHEAD") is None
+        # git would take HEAD\r as HEAD.
+        assert cat_file.resolve("HEAD\r") is None
+        # "<name> missing", in three parts, the last two of which aren't a type and size.
+        assert cat_file.resolve("no-such branch") is None
+        # And again, with a byte that isn't UTF-8 (as decode gives a path).
+        assert cat_file.resolve("HEAD:\udce9 x") is None
 
 
 def test_keeps_answering_after_a_name_git_exits_on(repo: Git) -> None:

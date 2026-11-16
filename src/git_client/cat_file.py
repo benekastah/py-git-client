@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import OBJECT_ID, Git, encode
+from git_client.client import OBJECT_ID, Git, batch_line, object_header
 from git_client.errors import GitError
 
 USAGE_ERROR = 129
@@ -60,19 +60,13 @@ class CatFile:
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
         --verify` would find it, or None if it names nothing (or is ambiguous)."""
-        if not name or any(c in name for c in "\n\r\0"):
-            # A line ending would put the process out of step with what's read back, and git
-            # would read a name only up to a NUL.
+        line = batch_line(name)
+        if line is None:
             return None
         with self._lock:
-            header = self._request(b"info " + encode(name))
-        if header is None or len(header) != 3:
-            # "<name> missing" (or "ambiguous"), which splits in three if name has spaces.
-            return None
-        object_id, kind, size = (part.decode() for part in header)
-        if not OBJECT_ID.fullmatch(object_id) or not size.isdigit():
-            return None
-        return ObjectInfo(object_id, kind, int(size))
+            reply = self._request(b"info " + line)
+        header = None if reply is None else object_header(reply)
+        return None if header is None else ObjectInfo(*header)
 
     def resolve(self, name: str) -> str | None:
         """The id of the object `name` names, or None if it names nothing."""
@@ -87,13 +81,14 @@ class CatFile:
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         with self._lock:
-            header = self._request(b"contents " + object_id.encode())
-            if header is None or len(header) != 3:
+            reply = self._request(b"contents " + object_id.encode() + b"\n")
+            header = None if reply is None else object_header(reply)
+            if header is None:
                 raise GitError(
                     ["cat-file", "contents", object_id], 1, f"{object_id} isn't an object"
                 )
             assert self._process is not None and self._process.stdout is not None
-            size = int(header[2])
+            _, kind, size = header
             content = self._process.stdout.read(size)
             newline = self._process.stdout.read(1)
             if len(content) != size or newline != b"\n":
@@ -104,10 +99,10 @@ class CatFile:
                     1,
                     f"cat-file stopped after {len(content)} of its {size} bytes",
                 )
-        return header[1].decode(), content
+        return kind, content
 
-    def _request(self, command: bytes) -> list[bytes] | None:
-        """Send command, and return the first line of the reply, split, or None if the process
+    def _request(self, command: bytes) -> bytes | None:
+        """Send command (a line), and return the first line of the reply, or None if the process
         stopped (the next request starts another). Raises GitError if it stopped with a usage
         error, as a git older than 2.36 does at --batch-command. Hold the lock."""
         if self._process is None:
@@ -116,7 +111,7 @@ class CatFile:
             self._process = self.git.popen("cat-file", "--batch-command")
         assert self._process.stdin is not None and self._process.stdout is not None
         try:
-            self._process.stdin.write(command + b"\n")
+            self._process.stdin.write(command)
             self._process.stdin.flush()
             reply = self._process.stdout.readline()
         except OSError:
@@ -129,7 +124,7 @@ class CatFile:
                     ["cat-file", "--batch-command"], USAGE_ERROR, "git 2.36 or newer is needed"
                 )
             return None
-        return reply.split()
+        return reply
 
     def _stop(self) -> None:
         """Stop the process, if one is running. Hold the lock."""
