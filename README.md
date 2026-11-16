@@ -88,6 +88,11 @@ that reaches a running command stops git as an interrupt does:
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # 128 + SIGTERM, as a shell reports it
 ```
 
+Like Ctrl-C's `KeyboardInterrupt`, that exception is raised in the main thread alone, so it
+stops only a git the main thread runs. A tool that runs git in other threads stops them itself
+before it exits (e.g. they check a flag it sets, and it joins them), or gives their commands no
+timeout, so git stays in the tool's group.
+
 ### Errors
 
 `run` and `run_bytes` raise a `GitError` when git fails, with its `command`, `returncode`,

@@ -263,7 +263,10 @@ class Git:
     tool without stopping it, so git and its hooks run on. A tool should turn SIGTERM into
     an exception in its main thread, e.g. `signal.signal(signal.SIGTERM, lambda *_:
     sys.exit(143))`: any exception that reaches a running command stops git as an interrupt
-    does.
+    does. Like Ctrl-C's KeyboardInterrupt, it's raised in the main thread alone, so it stops
+    only a git the main thread runs: a tool that runs git in other threads stops them itself
+    before it exits (e.g. they check a flag it sets, and it joins them), or gives their
+    commands no timeout, so git stays in the tool's group.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
