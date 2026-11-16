@@ -147,6 +147,7 @@ class Terminal:
                     shown += os.read(self.master, 1024)
                 except OSError:  # Linux, once the tool has exited
                     break
+        assert text.encode() in shown, f"{text!r} not shown, only {shown!r}"
         return shown.decode()
 
 
@@ -183,6 +184,9 @@ def with_terminal(
 def test_without_a_terminal_a_timeout_stops_what_git_started(
     repo: Git, hook: Hook, tmp_path: Path
 ) -> None:
+    # A hook that ignores SIGINT, so only the kill that follows stops it.
+    ignoring = "import signal; signal.signal(signal.SIGINT, signal.SIG_IGN)\n" + HOOK
+    write_hook(repo, ignoring, hook.started, hook.release, hook.finished)
     tool = without_terminal(tmp_path, repo, 1, *COMMIT)
     hook.wait_until_started()
     assert index_lock(repo).exists()
@@ -278,9 +282,13 @@ def test_a_timeout_stops_git_and_what_it_started_on_windows(repo: Git, hook: Hoo
 ORPHAN = """\
 import subprocess, sys, time
 release = sys.argv[1]
-# A process that holds git's stderr (a hook's stdout and stderr), but that isn't in git's
-# process tree any more: its parent has exited.
-orphan = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'], stderr=sys.stderr)"
+# A process that holds git's stderr (a hook's stdout and stderr), but that stopping git's tree
+# doesn't stop: its parent has exited, and on Linux and macOS it's in a session of its own, as
+# a daemon would be, so it isn't in git's process group either.
+orphan = (
+    "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'],"
+    " stderr=sys.stderr, start_new_session=sys.platform != 'win32')"
+)
 subprocess.run([sys.executable, "-c", orphan], stderr=sys.stderr, check=True)
 deadline = time.monotonic() + 10
 while not __import__("os").path.exists(release) and time.monotonic() < deadline:
@@ -311,6 +319,10 @@ def test_a_timeout_stops_git_when_taskkill_cant_run(
 ) -> None:
     git = Git(repo.directory, env={"SYSTEMROOT": os.environ["SYSTEMROOT"]})
     monkeypatch.setenv("SYSTEMROOT", str(Path(repo.directory) / "no-such-windows"))
+    started = time.monotonic()
 
     with pytest.raises(GitTimeoutError):
         git.run(*COMMIT, timeout=1)
+
+    # Not the hook's 10 seconds, which git, if it weren't killed, would wait out.
+    assert time.monotonic() - started < 3.5
