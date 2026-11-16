@@ -31,10 +31,11 @@ the checks. Keep this file up to date when the shape of the code or a rule here 
   or newer, the oldest supported). They depend on
   `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
   their uv.lock.
-- **Versions.** A change that could break git-stack, git-recommit or move-forward increments
-  the patch version. Each version is released as a git tag, `vX.Y.Z`, as often as needed,
-  with `python3 dev.py release X.Y.Z` (see the README).
-  `main` always carries the next version to release: after releasing 0.0.1, it moves to 0.0.2.
+- **Versions** are 0.0.N, each released as a git tag, `v0.0.N`, as often as needed, with
+  `python3 dev.py release 0.0.N` (see the README). After each release, `main` carries the
+  next version (the release command opens that PR), so a change that could break git-stack,
+  git-recommit or move-forward is simply released as the next patch version. PRs never change
+  the version themselves.
 - **Every git process starts through `Git`** (`process`, or `popen` for one that answers
   requests), so the way git is started stays the quickest each system allows. Never pass a
   working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.

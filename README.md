@@ -221,22 +221,24 @@ which doesn't read the lock.
 
 ### Releasing
 
-Release whenever a change should reach git-stack, git-recommit or move-forward (each change
-that could break one increments the patch version; see AGENTS.md). `main` always carries the
-next version to release, in `pyproject.toml`; once CI has passed on `main`'s latest commit,
-release it:
+Versions are 0.0.N. `main` always carries the next version to release, in `pyproject.toml`;
+PRs never change it themselves. Release whenever a change should reach git-stack,
+git-recommit or move-forward (a change that could break one is simply released as the next
+patch version; see AGENTS.md). Once CI has passed on `main`'s latest commit, release its
+version:
 
 ```sh
 python3 dev.py release 0.0.1
 ```
 
-It needs git, uv and gh (logged in), and `origin` on GitHub. After fetching origin, it refuses unless the version is
-`pyproject.toml`'s on `origin/main`, neither its tag nor the next version's branch
-(`start-X.Y.Z+1`) exists yet, locally or on origin, and the "CI passed" check succeeded on `origin/main`'s latest commit (if it's still running, wait and run
-it again). Then it tags that commit (not your checkout's) `vX.Y.Z`, pushes the tag, and, in a
-temporary worktree, opens a PR moving `main` to the next patch version (`start-X.Y.Z+1`). That
-PR merges like any other, once CI passes. If opening it fails after the tag is pushed, the
-command says how to finish by hand.
+It needs git, uv and gh (logged in), and `origin` on GitHub. After fetching origin, it
+refuses unless the version is `pyproject.toml`'s on `origin/main`, neither its tag nor the
+next version's branch (`start-X.Y.Z+1`) exists yet, locally or on origin, and every GitHub
+Actions run of the "CI passed" check succeeded on `origin/main`'s latest commit (if one is
+still running, wait and run it again). Then it tags that commit (not your checkout's)
+`vX.Y.Z`, pushes the tag, and, in a temporary worktree, opens a PR moving `main` to the next
+patch version (`start-X.Y.Z+1`). That PR merges like any other, once CI passes. If anything
+stops it after the tag is pushed, the command says how to finish by hand.
 
 ### CI and dependencies
 
