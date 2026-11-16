@@ -133,8 +133,9 @@ def uv_lock(worktree: Path) -> None:
 def publish(repo: Path, version: str) -> tuple[str, str]:
     """Release `version` from `repo`'s origin: tag origin/main's latest commit `vX.Y.Z` and
     push the tag, then open a PR moving main to the next version. Returns the tag and the PR's
-    URL. Refuses, before changing anything, unless `version` is origin/main's
-    pyproject.toml version, has no tag yet, and CI passed on that commit."""
+    URL. Refuses, before changing anything, unless origin is on GitHub, `version` is
+    origin/main's pyproject.toml version, neither its tag nor the next version's branch exists
+    yet, and CI passed on that commit."""
     parse_version(version)
     # gh is told the repository: left to itself, it may pick another remote (e.g. upstream).
     # The URL as configured, not as insteadOf rewrites it, names the repository.
