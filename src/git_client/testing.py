@@ -262,10 +262,7 @@ def _remove(directory: Path) -> None:
         os.chmod(path, stat.S_IWRITE)
         remove(path)
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(directory, onexc=make_writable_and_retry)
-    else:
-        shutil.rmtree(directory, onerror=make_writable_and_retry)
+    shutil.rmtree(directory, onexc=make_writable_and_retry)
 
 
 def _repositories(root: Path) -> Iterator[Path]:

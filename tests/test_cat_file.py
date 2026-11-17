@@ -325,10 +325,6 @@ def test_works_in_a_sha256_repository(tmp_path: Path) -> None:
         assert cat_file.read(blob) == ("blob", b"content\n")
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info < (3, 12),
-    reason="os.set_blocking takes a pipe on Windows only from Python 3.12",
-)
 def test_its_process_holds_no_descriptor_of_ours_open(repo: Git) -> None:
     # One the tool inherited, say, or a pipe another thread was setting up for its process:
     # held by a cat-file that lives as long as the tool, it would never see EOF.

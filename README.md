@@ -22,7 +22,7 @@ what git-stack, git-recommit and move-forward share for that:
 - **No process at all** to find a checkout's common git directory (`git_common_dir`), read
   from its `.git` file or directory.
 
-It has no dependencies of its own, and needs Python 3.11 or newer and git 2.36 or newer (for
+It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`).
 
 ## Installing
