@@ -479,7 +479,9 @@ class FakeGit(Git):
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git. Like Git, it raises NotStartedError, recording nothing,
-    once its `stopping` says so.
+    once its `stopping` says so. Its `read_only()`, which shares its responses and records in
+    its `calls`, raises ReadOnlyError for what a ReadOnlyGit refuses, recording nothing: give
+    that to code that only reads, to check that it stays read-only.
 
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
@@ -545,6 +547,9 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
+        # As a git process would: for what its read_only() refuses, then once stopping.
+        self.command(*args)
+        self.environment(env)
         refuse_if_stopping(self, args)
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
@@ -561,6 +566,8 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
+        self.command(*args)
+        self.environment(env)
         refuse_if_stopping(self, args)
         raise UnexpectedCommand(
             f"FakeGit can't start a long-lived git {' '.join(map(os.fsdecode, args))}"

@@ -71,6 +71,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
   client's own class (a subclass's `process` still runs), sharing what git told the client
   about where things are, for a tool's paths that never write (#55).
+- `FakeGit().read_only()` refuses what a `ReadOnlyGit` refuses, while sharing the fake's
+  responses and `calls`, so a unit test can check that code stays read-only (#55).
 - A `ReadOnlyGit` runs more reads: `config` with options before its action (`--global`,
   `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
   --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`

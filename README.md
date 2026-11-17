@@ -419,6 +419,10 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
   assert git.commands[-1] == ["push", "origin", "main"]
   ```
 
+  For code that only reads, give it the fake's `read_only()`: it shares the fake's responses
+  and records in its `calls`, but raises `ReadOnlyError` for what a `ReadOnlyGit` refuses, so
+  the test fails if the code writes.
+
   If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
   so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
   calls `super().process`), run over its fake processes. Your constructor's arguments reach
