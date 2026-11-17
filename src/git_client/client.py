@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from typing import IO, Final, Literal, TypeAlias
+from typing import IO, ClassVar, Final, Literal, TypeAlias
 
 from git_client.errors import GitError, GitTimeoutError, error_for
 
@@ -139,7 +139,9 @@ def object_header(line: bytes) -> tuple[str, str, int] | None:
     return parts[0].decode(), decode(parts[1]), int(parts[2])
 
 
-def check_names_nothing(git: "Git", name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> None:
+def check_names_nothing(
+    git: "ReadOnlyGit", name: str, *, timeout: Timeout = CLIENT_TIMEOUT
+) -> None:
     """After `git cat-file` exited on `name`: return if that's only because the name names
     nothing (cat-file exits on some, e.g. `@{u}` on a branch with no upstream), else raise
     the GitError for what made it exit (e.g. NotARepositoryError, or a broken config), as
@@ -239,8 +241,190 @@ def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) 
     return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
 
 
-class Git:
-    """Runs git in `directory`, as `git -C <directory>` does.
+class ReadOnlyError(ValueError):
+    """A ReadOnlyGit refused a command, or an environment for one, that could write."""
+
+
+# The commands a ReadOnlyGit runs: none writes, with GIT_OPTIONAL_LOCKS=0 (without it, status
+# writes the index) and without _WRITING_OPTIONS. Not porcelain diff, which writes the index
+# whatever GIT_OPTIONAL_LOCKS says when it compares the worktree: its plumbing (diff-files,
+# diff-index, diff-tree) doesn't.
+_READING_COMMANDS = frozenset(
+    {
+        "blame",
+        "cat-file",
+        "check-attr",
+        "check-ignore",
+        "check-ref-format",
+        "count-objects",
+        "describe",
+        "diff-files",
+        "diff-index",
+        "diff-tree",
+        "for-each-ref",
+        "log",
+        "ls-files",
+        "ls-tree",
+        "merge-base",
+        "name-rev",
+        "patch-id",
+        "range-diff",
+        "rev-list",
+        "rev-parse",
+        "shortlog",
+        "show",
+        "show-ref",
+        "status",
+        "var",
+    }
+)
+
+# Options that make one of those write: a file (--output), or the index (describe's --dirty and
+# --broken, whatever GIT_OPTIONAL_LOCKS says). Most commands (not log's or diff's options) take
+# an unambiguous abbreviation of a long option (e.g. describe's --dirt), so those are refused
+# too.
+_WRITING_OPTIONS = ("--output", "--output-directory", "--dirty", "--broken")
+
+# What git's options before the command may be: none that names another config (-c),
+# repository or program.
+_READING_GIT_OPTIONS = frozenset(
+    {
+        "--no-pager",
+        "-P",
+        "--literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+        "--icase-pathspecs",
+        "--no-replace-objects",
+        "--no-optional-locks",
+    }
+)
+
+# `git config`'s actions that read, and those that write (refused, even with one that reads).
+_CONFIG_READS = frozenset(
+    {
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--get-color",
+        "--get-colorbool",
+        "--list",
+        "-l",
+    }
+)
+_CONFIG_WRITES = (
+    "--add",
+    "--replace-all",
+    "--unset",
+    "--unset-all",
+    "--rename-section",
+    "--remove-section",
+    "--edit",
+)
+
+# The variables a ReadOnlyGit may be given for git's environment, beyond the locale's (LC_*):
+# none that adds config (GIT_CONFIG_*, or HOME for another global config), names a program git
+# runs (GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, ...) or another repository (GIT_DIR, as --git-dir
+# isn't taken either: the client's directory says which).
+_READING_ENVIRONMENT = frozenset(
+    {
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+        "GIT_NO_REPLACE_OBJECTS",
+    }
+)
+
+
+# What a ReadOnlyGit's git gets, last: no optional locks (status would write the index), and no
+# fetching a missing object in a partial clone (which writes a pack; git before 2.45 ignores
+# this, and fetches, but for the security releases 2.39.4 to 2.44.1).
+_READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
+
+
+def _names(arg: str, option: str) -> bool:
+    """Whether git takes `arg` as `option`: it, or (for a long option) an abbreviation of it,
+    with or without a value after "="."""
+    name = arg.split("=", 1)[0]
+    if name == option:
+        return True
+    return name.startswith("--") and len(name) > 2 and option.startswith(name)
+
+
+def _refuse_writes(args: Sequence[Arg]) -> None:
+    """Raise ReadOnlyError unless `args` are a command a ReadOnlyGit runs."""
+    texts = [os.fsdecode(arg) for arg in args]
+    start = 0
+    while start < len(texts) and texts[start].startswith("-"):
+        if texts[start] not in _READING_GIT_OPTIONS:
+            raise ReadOnlyError(f"ReadOnlyGit doesn't take git's option {texts[start]}")
+        start += 1
+    if start == len(texts):
+        raise ReadOnlyError("ReadOnlyGit was given no command")
+    # Every argument is checked, even after "--" or "--end-of-options": either can be another
+    # option's value (`log --grep --end-of-options --output=x`), and git then reads on.
+    command, rest = texts[start], texts[start + 1 :]
+    if command == "config":
+        # Its action first: anywhere else, it can be another option's value (`config --file
+        # --list a.b c` writes a.b to a file named --list).
+        reads = rest[:1] in (["get"], ["list"]) or (bool(rest) and rest[0] in _CONFIG_READS)
+        writes = any(_names(arg, action) for arg in rest for action in _CONFIG_WRITES)
+        # -e (edit), even bundled with other short options (-ze): any short-option argument
+        # holding an "e" is refused, which takes in some that don't edit (e.g. -f<path>).
+        edits = any(arg[:1] == "-" and arg[1:2] != "-" and "e" in arg for arg in rest)
+        if not reads or writes or edits:
+            raise ReadOnlyError(f"ReadOnlyGit runs only a config that reads: {texts}")
+    elif command == "worktree":
+        if rest[:1] != ["list"]:
+            raise ReadOnlyError(f"ReadOnlyGit runs only worktree list: {texts}")
+    elif command not in _READING_COMMANDS:
+        raise ReadOnlyError(f"ReadOnlyGit doesn't run git {command}")
+    for arg in rest:
+        if any(_names(arg, option) for option in _WRITING_OPTIONS):
+            raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
+
+
+def _refuse_environment(env: Mapping[str, EnvValue]) -> None:
+    """Raise ReadOnlyError unless each of `env`'s variables is one a ReadOnlyGit takes."""
+    for key in env:
+        if key not in _READING_ENVIRONMENT and not key.startswith("LC_"):
+            raise ReadOnlyError(f"ReadOnlyGit doesn't take {key} for git's environment")
+
+
+class ReadOnlyGit:
+    """Runs git in `directory`, as `git -C <directory>` does, but only commands that read:
+    before it starts git, it raises ReadOnlyError for anything else, so a tool that only
+    reads can show that it does by making one. Git extends it to run any command, so a
+    function that only reads takes a ReadOnlyGit, and is given either: a parameter typed
+    ReadOnlyGit says what the function asks of git, not that the client can't write.
+
+    It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
+    `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`,
+    `log`, `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`,
+    `rev-list`, `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with
+    an action that reads (e.g. `--get`, `--list`, `get`), and `worktree list`; git's options
+    before them only if they name no config, repository or program (e.g. `--no-pager`, not
+    `-c`); and no `--output`, nor describe's `--dirty` or `--broken`, which write the index.
+    Not `diff`, which writes the index when it compares the worktree: `diff-index`,
+    `diff-files` and `diff-tree` don't. Each argument is checked, wherever it is (after `--`
+    too), and config's action must come first. Git gets GIT_OPTIONAL_LOCKS=0, so `status`
+    doesn't write the index either, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing
+    object isn't fetched (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it).
+    `env` (the client's or a command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ,
+    and which index and paths git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
+
+    That's what the tool asks for. What the repository's config tells git to run can still
+    write (e.g. a diff driver's textconv with cachetextconv, a filter like git-lfs's, or
+    core.fsmonitor), as can what the tool's own environment gives git.
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
@@ -274,6 +458,9 @@ class Git:
     would keep Python from using posix_spawn.
     """
 
+    # Whether it runs only commands that read (see ReadOnlyGit); Git's runs any.
+    _read_only: ClassVar[bool] = True
+
     def __init__(
         self,
         directory: str | os.PathLike[str] = ".",
@@ -300,7 +487,10 @@ class Git:
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
         text as git wrote it (whatever the locale's encoding, which with LC_ALL=C can't hold a
-        name that isn't ASCII), and paths in the filesystem's encoding."""
+        name that isn't ASCII), and paths in the filesystem's encoding. Raises ReadOnlyError
+        for a command a ReadOnlyGit doesn't run."""
+        if self._read_only:
+            _refuse_writes(args)
         if sys.platform == "win32":
             return [self.program, "-C", self.directory, *map(os.fsdecode, args)]
         return [
@@ -318,12 +508,17 @@ class Git:
         `env`. Off Windows, git gets each value as bytes, like `command`: text as UTF-8
         (whatever the locale's encoding), and a path given as bytes as it is. Each is given
         here as the str that os.fsdecode makes of those bytes, which Python turns back into
-        them as it starts git."""
+        them as it starts git. A ReadOnlyGit's sets GIT_OPTIONAL_LOCKS=0 and
+        GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a variable in `env` (or the
+        client's) that it doesn't take."""
         added = {**self.env, **(env or {})}
+        if self._read_only:
+            _refuse_environment(added)
         return {
             **os.environ,
             **({"LC_ALL": "C"} if english else {}),
             **{key: self._environment_value(value) for key, value in added.items()},
+            **(_READ_ONLY_ENVIRONMENT if self._read_only else {}),
         }
 
     @staticmethod
@@ -485,3 +680,12 @@ class Git:
         when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
         than say no, if it runs past its timeout."""
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0
+
+
+class Git(ReadOnlyGit):
+    """Runs any git command in `directory`, as `git -C <directory>` does: a ReadOnlyGit
+    without its limits on commands and their environment, nor the variables it sets for git
+    (GIT_OPTIONAL_LOCKS, GIT_NO_LAZY_FETCH). How it runs them, finds git and stops one past
+    its timeout is ReadOnlyGit's (see there)."""
+
+    _read_only: ClassVar[bool] = False

@@ -31,6 +31,7 @@ from git_client.client import (
     Arg,
     EnvValue,
     Git,
+    ReadOnlyGit,
     Timeout,
     decode,
     encode,
@@ -390,27 +391,31 @@ def fresh_find_git() -> Iterator[None]:
 
 @pytest.fixture
 def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """The arguments of each git process a `Git` starts during the test (through `process` or
-    `popen`; without `git -C <directory>`), in order, while git runs as it would: to count a
-    tool's processes, or check the ones it starts. It leaves out the plugin's own, building
-    and copying templates (see RepoTemplates), whichever fixture is set up first."""
+    """The arguments of each git process a `Git` or `ReadOnlyGit` starts during the test
+    (through `process` or `popen`; without `git -C <directory>`), in order, while git runs as
+    it would: to count a tool's processes, or check the ones it starts. It leaves out the
+    plugin's own, building and copying templates (see RepoTemplates), whichever fixture is
+    set up first."""
     calls: list[list[str]] = []
-    process, popen = Git.process, Git.popen
+    process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
+
+    def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
+        git.command(*args)  # raises ReadOnlyError, starting nothing, for one it refuses
+        if not _setting_up.get():
+            calls.append([os.fsdecode(arg) for arg in args])
 
     def recording_process(
-        self: Git, *args: Arg, **kwargs: Any
+        self: ReadOnlyGit, *args: Arg, **kwargs: Any
     ) -> subprocess.CompletedProcess[bytes]:
-        if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+        record(self, args)
         return process(self, *args, **kwargs)
 
-    def recording_popen(self: Git, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
-        if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+    def recording_popen(self: ReadOnlyGit, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
+        record(self, args)
         return popen(self, *args, **kwargs)
 
-    monkeypatch.setattr(Git, "process", recording_process)
-    monkeypatch.setattr(Git, "popen", recording_popen)
+    monkeypatch.setattr(ReadOnlyGit, "process", recording_process)
+    monkeypatch.setattr(ReadOnlyGit, "popen", recording_popen)
     return calls
 
 

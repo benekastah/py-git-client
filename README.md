@@ -93,6 +93,44 @@ stops only a git the main thread runs. A git another thread runs goes on until i
 times out, and is orphaned if the tool is killed first; to have it stopped with the tool, give
 those commands no timeout, so git stays in the tool's group and gets the signal itself.
 
+### Reading only
+
+A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
+arguments as `Git`, and runs only commands that read. Anything else raises `ReadOnlyError`
+before git starts. `Git` extends it, so a function that only reads can take a `ReadOnlyGit`,
+and be given either; `CatFile`, `config`, `refs` and `patch_ids` do. A parameter typed
+`ReadOnlyGit` says what the function asks of git, not that the client can't write: the
+promise is the client's, so make a `ReadOnlyGit` to have it.
+
+```python
+reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
+reader.run("log", "-1", "--format=%s")
+reader.run("status", "--porcelain")  # with GIT_OPTIONAL_LOCKS=0, so it doesn't write the index
+refs(reader, "refs/heads/")
+try:
+    reader.run("commit", "-m", "never")
+except ReadOnlyError:
+    pass
+```
+
+It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
+`count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`,
+`ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`, `rev-list`,
+`rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
+reads (`--get`, `--list`, `get`, ...) and `worktree list`. It doesn't run `diff`, which writes
+the index when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't),
+or take options that write: `--output`, and describe's `--dirty` and `--broken`. It checks
+every argument, after `--` too (which can be another option's value), and `config`'s action
+must come first. Of git's options before the command, it takes only those that name no
+config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
+locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`). In a partial clone,
+it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.45 ignores, but
+for the security releases 2.39.4 to 2.44.1).
+
+That covers what the tool asks git to do. What the repository's config tells git to run can
+still write (e.g. a diff driver's textconv with `cachetextconv`, a filter such as git-lfs's,
+or `core.fsmonitor`), as can what the tool's own environment gives git.
+
 ### Errors
 
 `run` and `run_bytes` raise a `GitError` when git fails, with its `command`, `returncode`,
@@ -176,9 +214,9 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
   ```python
   os.environ["MY_TOOL_GIT"] = real_git()
   ```
-- **`git_calls`**: the arguments of each git process a `Git` starts during the test, while
-  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
-  plugin's own, building and copying templates, whatever order the fixtures come in:
+- **`git_calls`**: the arguments of each git process a `Git` or `ReadOnlyGit` starts during the
+  test, while real git runs, to count a tool's processes or check the ones it starts. It leaves
+  out the plugin's own, building and copying templates, whatever order the fixtures come in:
 
   ```python
   def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:

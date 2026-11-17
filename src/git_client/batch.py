@@ -5,7 +5,7 @@ import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from git_client.client import Git, decode, encode
+from git_client.client import Git, ReadOnlyGit, decode, encode
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -31,7 +31,7 @@ _COMMIT_SETTINGS = ("--no-show-signature", "--no-abbrev-commit", "--pretty=mediu
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
 
 
-def config(git: Git) -> dict[str, list[str | None]]:
+def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
     included files), from one `git config --list`: each key, as git prints it (section and
     name in lower case, a subsection as written), with its values in the order git reads
@@ -69,7 +69,7 @@ class Ref:
     fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
 
 
-def refs(git: Git, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
+def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
     refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
     read, as `--format` names them without `%(...)` (e.g. "upstream:track",
@@ -98,10 +98,11 @@ def refs(git: Git, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]
     return found
 
 
-def patch_ids(git: Git, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
+def patch_ids(git: ReadOnlyGit, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
-    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. Whatever
+    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros; a
+    ReadOnlyGit doesn't run `diff` (see there), so give it `log` or `show`. Whatever
     the user's config says, each command shows changes in the whole repository (not only
     under `git.directory`, as diff.relative would) and in every submodule, none through a
     textconv, with git's usual a/ and b/ prefixes, and checks no signatures; and `log` and
