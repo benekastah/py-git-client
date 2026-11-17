@@ -77,7 +77,9 @@ class UnknownRevisionError(GitError):
 
 class ConfigLockedError(GitError):
     """Another process has the config file locked, and kept it so for as long as git
-    retries (core.configLockTimeout, a second by default); a write can be tried again."""
+    retries (core.configLockTimeout, a second by default); a write can be tried again. Only
+    for `git config`'s writes of keys: renaming or removing a section (e.g. `git branch -m`)
+    doesn't say why it couldn't lock the file, so it's a plain GitError."""
 
 
 class RemoteError(GitError):
@@ -111,7 +113,8 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
             "|repository '.*' not found"
         ),
     ),
-    (ConfigLockedError, re.compile("could not lock config file")),
+    # Not for another reason the lock file can't be made (e.g. "No such file or directory").
+    (ConfigLockedError, re.compile("could not lock config file .*: File exists$", re.MULTILINE)),
     # The second is -C's, for a directory that isn't there.
     (NotARepositoryError, re.compile("not a git repository|cannot change to '")),
     (
