@@ -20,6 +20,7 @@ from git_client import (
     EnvValue,
     Git,
     GitError,
+    GitTimeoutError,
     NotARepositoryError,
     UnknownRevisionError,
     WrongTypeError,
@@ -539,8 +540,8 @@ class GitThatAnswersOnce(Git):
     """A git whose cat-file answers the first request (and the one CatFile sends first, before
     it) with an object, then runs `then` (Python), whatever it's asked."""
 
-    def __init__(self, directory: str, then: str) -> None:
-        super().__init__(directory)
+    def __init__(self, directory: str, then: str, *, timeout: float | None = None) -> None:
+        super().__init__(directory, timeout=timeout)
         self.then = then
         self.started: list[subprocess.Popen[bytes]] = []
 
@@ -599,3 +600,20 @@ def test_closing_kills_a_process_that_doesnt_exit(
     cat_file.close()
 
     assert git.started[0].returncode not in (None, 0)
+
+
+@pytest.mark.parametrize(
+    "answer", ["", f"{'1' * 40} blob 100\n" + "x" * 10], ids=["nothing", "part of an object"]
+)
+def test_a_request_past_the_client_s_timeout_stops_the_process(repo: Git, answer: str) -> None:
+    then = f"sys.stdin.readline(); sys.stdout.write({answer!r}); sys.stdout.flush(); time.sleep(60)"
+    git = GitThatAnswersOnce(repo.directory, then, timeout=0.2)
+
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+        with pytest.raises(GitTimeoutError, match=f"{'1' * 40}: no answer within 0.2 seconds"):
+            cat_file.read("1" * 40)
+        assert git.started[0].poll() is not None
+        # Another process answers the next.
+        assert cat_file.resolve("HEAD") == "1" * 40
+    assert len(git.started) == 2

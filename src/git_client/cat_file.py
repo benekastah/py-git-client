@@ -2,12 +2,17 @@
 without a process each."""
 
 import contextlib
+import math
 import os
+import queue
+import select
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import IO, Literal, Self, get_args
@@ -29,6 +34,7 @@ from git_client.errors import (
     WRONG_TYPE,
     CorruptObjectError,
     GitError,
+    GitTimeoutError,
     UnknownRevisionError,
     WrongTypeError,
 )
@@ -74,7 +80,8 @@ class CatFile:
     resolves to nothing, and the next request starts another process. One that stopped
     between requests (killed, say) is started again for the request that finds it gone. A
     request interrupted once sent (e.g. by KeyboardInterrupt) kills the process, whose answer
-    would otherwise answer the next request, which starts another. Any
+    would otherwise answer the next request, which starts another; so does one that isn't
+    answered within the client's `timeout` (if it has one), raising GitTimeoutError. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config), and
     CorruptObjectError if an object git reads for it is damaged (e.g. a corrupt loose object),
@@ -92,10 +99,13 @@ class CatFile:
     def __init__(self, git: ReadOnlyGit, *, weak: bool = False) -> None:
         self._git: Callable[[], ReadOnlyGit | None] = weakref.ref(git) if weak else lambda: git
         self._process: subprocess.Popen[bytes] | None = None
+        self._output: _Output | None = None
         # Where its stderr goes (see _request).
         self._stderr: IO[bytes] | None = None
         # Stops the process when this is freed, or as it's asked to (see _stop).
-        self._stopper: weakref.finalize[[subprocess.Popen[bytes], IO[bytes]], CatFile] | None = None
+        self._stopper: (
+            weakref.finalize[[subprocess.Popen[bytes], _Output, IO[bytes]], CatFile] | None
+        ) = None
         self._lock = threading.Lock()
         # The client's `location` when the process started, where its ids are from, until its
         # first id has told the client its object id length there.
@@ -134,7 +144,7 @@ class CatFile:
         if line is None:
             return None
         with self._lock:
-            reply, _ = self._request(b"info " + line, name)
+            reply, _ = self._request(b"info " + line, name, self._deadline())
         header = object_header(reply)
         return None if header is None else ObjectInfo(*header)
 
@@ -153,7 +163,7 @@ class CatFile:
         if line is None:
             raise UnknownRevisionError(_COMMAND, 1, f"{name!r} names nothing")
         with self._lock:
-            reply, reason = self._request(b"info " + line, name)
+            reply, reason = self._request(b"info " + line, name, self._deadline())
         header = object_header(reply)
         if header is None:
             raise _failure(name, reply, reason)
@@ -173,20 +183,19 @@ class CatFile:
             raise ValueError(f"{type!r} isn't a type of object")
         name = object_id if type is None else f"{object_id}^{{{type}}}"
         with self._lock:
-            reply, reason = self._request(b"contents " + name.encode() + b"\n", name)
+            deadline = self._deadline()
+            reply, reason = self._request(b"contents " + name.encode() + b"\n", name, deadline)
             header = object_header(reply)
             if header is None:
                 if not reply:
                     raise GitError(_COMMAND, 1, reason or f"cat-file exited at {name}")
                 raise _failure(name, reply, reason)
-            assert self._process is not None and self._process.stdout is not None
+            output = self._output
+            assert output is not None
             _, kind, size = header
-            try:
-                content = self._process.stdout.read(size)
-                newline = self._process.stdout.read(1)
-            except BaseException:
-                self._kill()
-                raise
+            with self._exchange(name):
+                content = output.read(size, deadline)
+                newline = output.read(1, deadline)
             if len(content) != size or newline != b"\n":
                 # It stopped partway through (killed, or on a corrupt object in a pack): what
                 # came is no object's content.
@@ -199,7 +208,7 @@ class CatFile:
                 )
         return kind, content
 
-    def _request(self, command: bytes, name: str) -> tuple[bytes, str]:
+    def _request(self, command: bytes, name: str, deadline: float | None) -> tuple[bytes, str]:
         """Send command (a line, about `name`), and return the first line of the reply (empty
         if git exits rather than answer, as it does on some names that name nothing: the next
         request starts another process), and if that's no object's header, what git said of
@@ -223,8 +232,10 @@ class CatFile:
                 except BaseException:
                     file.close()
                     raise
+                assert self._process.stdout is not None
+                self._output = _Output(self._process.stdout)
                 self._stderr = file
-                self._stopper = weakref.finalize(self, _end, self._process, file)
+                self._stopper = weakref.finalize(self, _end, self._process, self._output, file)
                 # Not as Python exits, when a daemon thread may be in a request: the process
                 # gets EOF on its stdin then, and exits by itself.
                 self._stopper.atexit = False
@@ -232,23 +243,19 @@ class CatFile:
                 # What it said of earlier requests.
                 self._stderr.truncate(0)
                 self._stderr.seek(0)
-            process, stderr = self._process, self._stderr
-            assert stderr is not None
-            assert process.stdin is not None and process.stdout is not None
+            process, output, stderr = self._process, self._output, self._stderr
+            assert output is not None and stderr is not None
+            assert process.stdin is not None
             # Whether it has answered a request: _PROBE, for a new process.
             answered = not new
             reply = b""
-            try:
-                with contextlib.suppress(OSError):
-                    process.stdin.write(_PROBE + command if new else command)
-                    process.stdin.flush()
-                    if new:
-                        answered = bool(process.stdout.readline())
-                    if answered:
-                        reply = process.stdout.readline()
-            except BaseException:
-                self._kill()
-                raise
+            with self._exchange(name), contextlib.suppress(OSError):
+                process.stdin.write(_PROBE + command if new else command)
+                process.stdin.flush()
+                if new:
+                    answered = bool(output.readline(deadline))
+                if answered:
+                    reply = output.readline(deadline)
             if (header := object_header(reply)) is not None:
                 if self._where is not None and (git := self._git()) is not None:
                     learn_object_id_length(git, self._where, header[0])
@@ -273,10 +280,33 @@ class CatFile:
                 return reply, reason
             # It stopped some other way (killed, say), maybe before this request reached it.
 
+    def _deadline(self) -> float | None:
+        """When a request starting now must be answered by (time.monotonic()), as the
+        client's timeout says: None if it has none."""
+        seconds = self.git.timeout
+        return None if seconds is None else time.monotonic() + seconds
+
+    @contextlib.contextmanager
+    def _exchange(self, name: str) -> Generator[None]:
+        """Around writing a request about `name` to the process and reading its answer: if
+        that's interrupted (e.g. by KeyboardInterrupt), or the answer doesn't come by the
+        request's deadline (raising GitTimeoutError), kill the process (see _kill). Hold the
+        lock."""
+        try:
+            yield
+        except _PastDeadline:
+            self._kill()
+            raise GitTimeoutError(
+                _COMMAND, None, f"{name}: no answer within {self.git.timeout} seconds"
+            ) from None
+        except BaseException:
+            self._kill()
+            raise
+
     def _kill(self) -> None:
-        """Kill the process, after a request was interrupted (e.g. by KeyboardInterrupt) once
-        it was sent: the answer left unread would answer the next request, and the process,
-        writing it, might not exit. The next request starts another. Hold the lock."""
+        """Kill the process, after a request was sent but not answered: the answer left
+        unread would answer the next request, and the process, writing it, might not exit.
+        The next request starts another. Hold the lock."""
         if self._process is not None:
             self._process.kill()
         self._stop()
@@ -285,7 +315,7 @@ class CatFile:
         """Stop the process, if one is running. Hold the lock."""
         if self._stopper is not None:
             self._stopper()
-        self._process = self._stderr = self._stopper = None
+        self._process = self._output = self._stderr = self._stopper = None
 
 
 def _said(stderr: IO[bytes]) -> str:
@@ -310,7 +340,7 @@ def _failure(name: str, reply: bytes, reason: str) -> GitError:
     return error(_COMMAND, FATAL if not reply else 1, reason)
 
 
-def _end(process: subprocess.Popen[bytes], stderr: IO[bytes]) -> None:
+def _end(process: subprocess.Popen[bytes], output: _Output, stderr: IO[bytes]) -> None:
     """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
     used, rather than left for Python to warn of and reap. Closing its stdout stops one
     writing what nothing will read (git exits when a write fails); one that doesn't exit
@@ -319,11 +349,104 @@ def _end(process: subprocess.Popen[bytes], stderr: IO[bytes]) -> None:
         # It may have stopped already (on Windows, not always with a BrokenPipeError).
         with contextlib.suppress(OSError):
             process.stdin.close()
-    if process.stdout is not None:
-        process.stdout.close()
+    output.close()
     try:
         process.wait(_EXIT_WAIT)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
     stderr.close()
+
+
+class _PastDeadline(Exception):
+    """A request's answer didn't come by its deadline. Not TimeoutError, an OSError, which
+    CatFile takes for a process that stopped."""
+
+
+# How much of a process's output is read at a time, at most: what a pipe holds (on Linux).
+_CHUNK = 65536
+
+
+class _Output:
+    """A CatFile's process's stdout, read until a deadline (from time.monotonic(), or None
+    for none), past which a read raises _PastDeadline. Off Windows, it waits with poll. On
+    Windows, which can't poll a pipe, a thread of its own reads the pipe, and a read waits
+    for what it passes on: a read that waits on the pipe itself can't be stopped. Either
+    way, a request isn't kept waiting by what holds the pipe open once its process is killed
+    (e.g. the `git fetch` of a lazy fetch in a partial clone)."""
+
+    def __init__(self, pipe: IO[bytes]) -> None:
+        self._pipe = pipe
+        self._fd = pipe.fileno()
+        self._buffer = bytearray()
+        self._ended = False  # Whether the pipe is at its end.
+        # On Windows: what the thread has read, and whether to stop reading.
+        self._chunks: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._closed = False
+        if sys.platform == "win32":
+            threading.Thread(target=self._pass_on, name="CatFile output", daemon=True).start()
+        else:
+            self._poll = select.poll()
+            self._poll.register(self._fd, select.POLLIN)
+
+    def readline(self, deadline: float | None) -> bytes:
+        """The next line, with its newline: without one at the end of the output, which may
+        be empty."""
+        while (end := self._buffer.find(b"\n") + 1) == 0 and self._fill(deadline):
+            pass
+        return self._take(end or len(self._buffer))
+
+    def read(self, size: int, deadline: float | None) -> bytes:
+        """The next `size` bytes, or fewer at the end of the output."""
+        while len(self._buffer) < size and self._fill(deadline):
+            pass
+        return self._take(min(size, len(self._buffer)))
+
+    def close(self) -> None:
+        """Stop reading. On Windows, the thread closes the pipe once its read returns: closing
+        it under that read would wait for it."""
+        if sys.platform == "win32":
+            self._closed = True
+        else:
+            self._pipe.close()
+
+    def _take(self, size: int) -> bytes:
+        with memoryview(self._buffer) as view:
+            taken = view[:size].tobytes()
+        del self._buffer[:size]
+        return taken
+
+    def _fill(self, deadline: float | None) -> bool:
+        """Add what comes next to the buffer, by the deadline. False at the end."""
+        if self._ended:
+            return False
+        if sys.platform == "win32":
+            try:
+                chunk = self._chunks.get(timeout=_left(deadline))
+            except queue.Empty:
+                raise _PastDeadline from None
+        else:
+            left = _left(deadline)
+            if left is not None and not self._poll.poll(math.ceil(left * 1000)):
+                raise _PastDeadline
+            chunk = os.read(self._fd, _CHUNK)
+        self._buffer += chunk
+        self._ended = not chunk
+        return not self._ended
+
+    def _pass_on(self) -> None:
+        """On Windows, in a thread of its own: pass on what the pipe gives, then the empty
+        chunk of its end, until it ends or this is closed."""
+        try:
+            while not self._closed and (chunk := os.read(self._fd, _CHUNK)):
+                self._chunks.put(chunk)
+        except OSError:
+            pass
+        finally:
+            self._chunks.put(b"")
+            self._pipe.close()
+
+
+def _left(deadline: float | None) -> float | None:
+    """How many seconds are left until the deadline (at least 0), or None for none."""
+    return None if deadline is None else max(0.0, deadline - time.monotonic())
