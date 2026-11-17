@@ -267,8 +267,6 @@ said and raises a subclass:
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
-| `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
-| `NotStartedError` | git wasn't started: the client's `stopping` said so (its `returncode` is None). |
 
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
@@ -278,10 +276,19 @@ other). They still raise when git gives no answer: `GitTimeoutError` past a time
 refuses. Use `succeeds` where any failure of git's means no, and `ok` where a failure other
 than git's no should be reported.
 
-An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
-is git's exit status or, without one, `timed out` for a `GitTimeoutError`, `not started` for a
-`NotStartedError` and `no exit status` otherwise (e.g. a tool's own `GitError` for a command
-it refused).
+When git gives no answer, every call raises a `NoAnswerError`, which isn't a `GitError`, so
+`except GitError` never takes "git didn't answer" for "git said no" (catch
+`(GitError, NoAnswerError)` for both):
+
+| Error | When |
+| --- | --- |
+| `GitTimeoutError` | git ran past its timeout, and was stopped. |
+| `NotStartedError` | git wasn't started: the client's `stopping` said so. |
+
+It has a `GitError`'s attributes, its `returncode` None. An error's message starts
+`git <command> failed (<status>):`, then its `stderr`. The status is git's exit status or,
+without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStartedError` and
+`no exit status` otherwise (e.g. a tool's own `GitError` for a command it refused).
 
 ## Testing a tool that uses it
 

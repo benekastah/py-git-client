@@ -19,6 +19,7 @@ from git_client import (
     Git,
     GitError,
     GitTimeoutError,
+    NoAnswerError,
     NotARepositoryError,
     NotStartedError,
     ReadOnlyError,
@@ -193,6 +194,21 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
 def test_succeeds_raises_rather_than_say_no_past_a_timeout(waiting: Git) -> None:
     with pytest.raises(GitTimeoutError):
         waiting.succeeds("wait", timeout=0.2)
+
+
+@pytest.mark.parametrize("cause", ["timeout", "stopping"])
+def test_no_answer_from_git_isnt_a_git_error(waiting: Git, cause: str) -> None:
+    # So `except GitError`, for git's no, doesn't take "git didn't answer" for it.
+    if cause == "timeout":
+        git = Git(waiting.directory, timeout=0.2)
+    else:
+        git = Git(waiting.directory, stopping=lambda: True)
+
+    with pytest.raises(NoAnswerError):
+        try:
+            git.ok("wait")
+        except GitError:
+            pytest.fail("raised a GitError")
 
 
 def test_once_stopping_says_so_no_git_starts(repo: Git) -> None:

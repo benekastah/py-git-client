@@ -8,7 +8,8 @@ the shape of the code or a rule here changes.
 
 - `src/git_client/client.py`: `ReadOnlyGit`, which runs every git process (only commands that
   read), `Git`, which extends it to run any, and `find_git`.
-- `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises.
+- `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
+  `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.

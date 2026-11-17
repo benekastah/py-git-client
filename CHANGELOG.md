@@ -42,6 +42,14 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `CorruptObjectError` for a damaged object cat-file reads for the name, as `CatFile.resolve`
   does, where it gave None for a loose one (#54).
 
+- `GitTimeoutError` and `NotStartedError` are no longer `GitError`s, but `NoAnswerError`s,
+  so `except GitError` no longer takes "git didn't answer" for "git said no" (e.g. a
+  timed-out `git rev-parse @{upstream}` read as "no upstream", or a hang as defaults). Their
+  attributes and messages are as before. A tool that catches `GitError` to handle git's no
+  needs no change, and now lets these through; one that catches it to report any failure
+  (e.g. at its top level) catches `(GitError, NoAnswerError)`; and one that caught
+  `GitTimeoutError` or `NotStartedError` by name still does (#54).
+
 ### Added
 
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
