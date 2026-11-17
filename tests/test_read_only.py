@@ -12,11 +12,13 @@ from git_client import (
     Git,
     ReadOnlyError,
     ReadOnlyGit,
+    RefSnapshot,
     config,
     git_paths,
     patch_ids,
     refs,
 )
+from git_client.snapshot import ref_changes
 
 # A day well before any test runs, for a file's mtime: not racily clean (as a file changed in
 # the second the index was written would be), so git sees it changed since the index has it.
@@ -76,6 +78,21 @@ def stale(repo: Git) -> Path:
         ("var", "GIT_AUTHOR_IDENT"),
         ("worktree", "list"),
         ("--no-pager", "--literal-pathspecs", "log", "--", "a"),
+        # config's options before its action, and a lone key, which it gets.
+        ("config", "--type=bool", "core.bare"),
+        ("config", "--type", "bool", "--get", "core.bare"),
+        ("config", "--bool", "--local", "--get", "core.bare"),
+        ("config", "--int", "--default", "0", "--get", "no.such"),
+        ("config", "--default=x", "no.such"),
+        ("config", "--global", "--list"),
+        ("config", "-f", ".git/config", "--list"),
+        ("config", "--file=.git/config", "-z", "core.bare"),
+        ("config", "--show-origin", "--show-scope", "--get-regexp", "core"),
+        ("branch", "--show-current"),
+        ("symbolic-ref", "--quiet", "--short", "HEAD"),
+        ("remote",),
+        ("remote", "-v"),
+        ("remote", "get-url", "--push", "origin"),
     ],
 )
 def test_a_read_only_client_runs_what_only_reads_and_writes_nothing(
@@ -84,10 +101,14 @@ def test_a_read_only_client_runs_what_only_reads_and_writes_nothing(
     # Whatever the user's environment says: status writes the index unless this is 0.
     monkeypatch.setenv("GIT_OPTIONAL_LOCKS", "1")
     before = files(stale.parent)
+    # What only reads keeps refs, as RefSnapshot counts them.
+    snapshot = RefSnapshot(lambda: ref_changes.count())
+    kept = snapshot.get()
 
     ReadOnlyGit(stale).process(*args, capture_output=True)  # e.g. check-ignore exits 1
 
     assert files(stale.parent) == before
+    assert snapshot.get() == kept
 
 
 def test_status_writes_a_stale_index_without_a_read_only_clients_environment(
@@ -111,6 +132,9 @@ def test_status_writes_a_stale_index_without_a_read_only_clients_environment(
         ("log", "-1", "--grep", "--end-of-options", "--output=out"),
         ("describe", "--always", "--match", "--", "--dirty"),
         ("config", "--file", "--list", "a.b", "c"),  # writes a file named --list
+        ("config", "-f=x", "a.b", "c.d"),  # writes a.b to a file named =x
+        ("config", "-f", "x", "a.b", "c"),
+        ("config", "--type=bool", "a.b", "true"),
     ],
 )
 def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
@@ -140,6 +164,19 @@ def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
         ("config", "--list", "-ze"),  # -e, bundled
         ("config", "set", "a.b", "c"),
         ("worktree", "add", "x"),
+        ("config", "--global", "a.b", "c"),
+        ("config", "--global", "--add", "a.b", "c"),
+        ("config", "--type=bool", "--global", "--edit"),
+        ("config", "edit"),  # not a key: config's own action
+        ("config", "--no-such-option", "--list"),
+        ("branch", "topic"),
+        ("branch", "--show-current", "topic"),
+        ("symbolic-ref", "HEAD", "refs/heads/topic"),  # two names: it points HEAD at topic
+        ("symbolic-ref", "--delete", "HEAD"),
+        ("symbolic-ref", "-m", "why", "HEAD"),
+        ("remote", "add", "upstream", "url"),
+        ("remote", "set-url", "origin", "url"),
+        ("ls-remote", "."),  # may run credential helpers, which store what they're told
     ],
 )
 def test_a_read_only_client_refuses_any_other_command_without_starting_git(

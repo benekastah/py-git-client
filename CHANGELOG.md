@@ -36,6 +36,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   it waited as long as it took. Its `stderr` is what git said of the request, and a note
   names the request. A tool whose requests may take longer gives its CatFile a client with a
   longer timeout, or none (#53).
+- `patch_ids` runs a `diff` of two revisions (two arguments before `--`) as
+  `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no index: a `FakeGit`
+  answering it responds to `diff-tree`, and a path given as the second argument, without
+  `--`, is taken as a revision (#55).
+- `RefSnapshot` keeps what it read past `remote -v`, and past the `git config` reads a
+  `ReadOnlyGit` now runs (#55).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
@@ -65,6 +71,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
   client's own class (a subclass's `process` still runs), sharing what git told the client
   about where things are, for a tool's paths that never write (#55).
+- A `ReadOnlyGit` runs more reads: `config` with options before its action (`--global`,
+  `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
+  --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`
+  (#55).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).

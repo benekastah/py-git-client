@@ -26,6 +26,7 @@ from git_client.errors import (
     NotStartedError,
     error_for,
 )
+from git_client.reading import READING_COMMANDS, names, reading_form
 from git_client.snapshot import ref_changes
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
@@ -283,44 +284,10 @@ class ReadOnlyError(ValueError):
     """A ReadOnlyGit refused a command, or an environment for one, that could write."""
 
 
-# The commands a ReadOnlyGit runs: none writes, with GIT_OPTIONAL_LOCKS=0 (without it, status
-# writes the index) and without _WRITING_OPTIONS. Not porcelain diff, which writes the index
-# whatever GIT_OPTIONAL_LOCKS says when it compares the worktree: its plumbing (diff-files,
-# diff-index, diff-tree) doesn't.
-_READING_COMMANDS = frozenset(
-    {
-        "blame",
-        "cat-file",
-        "check-attr",
-        "check-ignore",
-        "check-ref-format",
-        "count-objects",
-        "describe",
-        "diff-files",
-        "diff-index",
-        "diff-tree",
-        "for-each-ref",
-        "log",
-        "ls-files",
-        "ls-tree",
-        "merge-base",
-        "name-rev",
-        "patch-id",
-        "range-diff",
-        "rev-list",
-        "rev-parse",
-        "shortlog",
-        "show",
-        "show-ref",
-        "status",
-        "var",
-    }
-)
-
-# Options that make one of those write: a file (--output), or the index (describe's --dirty and
-# --broken, whatever GIT_OPTIONAL_LOCKS says). Most commands (not log's or diff's options) take
-# an unambiguous abbreviation of a long option (e.g. describe's --dirt), so those are refused
-# too.
+# Options that make a command in READING_COMMANDS write: a file (--output), or the index
+# (describe's --dirty and --broken, whatever GIT_OPTIONAL_LOCKS says). Most commands (not log's
+# or diff's options) take an unambiguous abbreviation of a long option (e.g. describe's
+# --dirt), so those are refused too.
 _WRITING_OPTIONS = ("--output", "--output-directory", "--dirty", "--broken")
 
 # What git's options before the command may be: none that names another config (-c),
@@ -336,29 +303,6 @@ _READING_GIT_OPTIONS = frozenset(
         "--no-replace-objects",
         "--no-optional-locks",
     }
-)
-
-# `git config`'s actions that read, and those that write (refused, even with one that reads).
-_CONFIG_READS = frozenset(
-    {
-        "--get",
-        "--get-all",
-        "--get-regexp",
-        "--get-urlmatch",
-        "--get-color",
-        "--get-colorbool",
-        "--list",
-        "-l",
-    }
-)
-_CONFIG_WRITES = (
-    "--add",
-    "--replace-all",
-    "--unset",
-    "--unset-all",
-    "--rename-section",
-    "--remove-section",
-    "--edit",
 )
 
 # The variables a ReadOnlyGit may be given for git's environment, beyond the locale's (LC_*):
@@ -389,15 +333,6 @@ _READING_ENVIRONMENT = frozenset(
 _READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
 
 
-def _names(arg: str, option: str) -> bool:
-    """Whether git takes `arg` as `option`: it, or (for a long option) an abbreviation of it,
-    with or without a value after "="."""
-    name = arg.split("=", 1)[0]
-    if name == option:
-        return True
-    return name.startswith("--") and len(name) > 2 and option.startswith(name)
-
-
 def _refuse_writes(args: Sequence[Arg]) -> None:
     """Raise ReadOnlyError unless `args` are a command a ReadOnlyGit runs."""
     texts = [os.fsdecode(arg) for arg in args]
@@ -411,23 +346,10 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
     # Every argument is checked, even after "--" or "--end-of-options": either can be another
     # option's value (`log --grep --end-of-options --output=x`), and git then reads on.
     command, rest = texts[start], texts[start + 1 :]
-    if command == "config":
-        # Its action first: anywhere else, it can be another option's value (`config --file
-        # --list a.b c` writes a.b to a file named --list).
-        reads = rest[:1] in (["get"], ["list"]) or (bool(rest) and rest[0] in _CONFIG_READS)
-        writes = any(_names(arg, action) for arg in rest for action in _CONFIG_WRITES)
-        # -e (edit), even bundled with other short options (-ze): any short-option argument
-        # holding an "e" is refused, which takes in some that don't edit (e.g. -f<path>).
-        edits = any(arg[:1] == "-" and arg[1:2] != "-" and "e" in arg for arg in rest)
-        if not reads or writes or edits:
-            raise ReadOnlyError(f"ReadOnlyGit runs only a config that reads: {texts}")
-    elif command == "worktree":
-        if rest[:1] != ["list"]:
-            raise ReadOnlyError(f"ReadOnlyGit runs only worktree list: {texts}")
-    elif command not in _READING_COMMANDS:
-        raise ReadOnlyError(f"ReadOnlyGit doesn't run git {command}")
+    if command not in READING_COMMANDS and not reading_form(command, rest):
+        raise ReadOnlyError(f"ReadOnlyGit runs only commands that read, not git {texts}")
     for arg in rest:
-        if any(_names(arg, option) for option in _WRITING_OPTIONS):
+        if any(names(arg, option) for option in _WRITING_OPTIONS):
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
 
 
@@ -503,12 +425,16 @@ class ReadOnlyGit:
     `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`,
     `log`, `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`,
     `rev-list`, `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with
-    an action that reads (e.g. `--get`, `--list`, `get`), and `worktree list`; git's options
-    before them only if they name no config, repository or program (e.g. `--no-pager`, not
-    `-c`); and no `--output`, nor describe's `--dirty` or `--broken`, which write the index.
-    Not `diff`, which writes the index when it compares the worktree: `diff-index`,
-    `diff-files` and `diff-tree` don't. Each argument is checked, wherever it is (after `--`
-    too), and config's action must come first. Git gets GIT_OPTIONAL_LOCKS=0, so `status`
+    an action that reads (e.g. `--get`, `--list`, `get`) or a lone key, after options that
+    say which files it reads and how it gives values (e.g. `--global`, `-f <file>`,
+    `--type=bool`, `--default <value>`), `branch --show-current`, `symbolic-ref` naming one
+    ref (`--quiet`, `--short`), `remote` (`-v`) and `remote get-url`, and `worktree list`;
+    git's options before them only if they name no config, repository or program (e.g.
+    `--no-pager`, not `-c`); and no `--output`, nor describe's `--dirty` or `--broken`, which
+    write the index. Not `diff`, which writes the index when it compares the worktree:
+    `diff-index`, `diff-files` and `diff-tree` don't. Not `ls-remote`, which runs ssh or
+    credential helpers, which may store what they're given. Each argument is checked,
+    wherever it is (after `--` too), and config's action must come first. Git gets GIT_OPTIONAL_LOCKS=0, so `status`
     doesn't write the index either, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing
     object isn't fetched (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it).
     `env` (the client's or a command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ,

@@ -168,8 +168,11 @@ def patch_ids(
 ) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
-    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros; a
-    ReadOnlyGit doesn't run `diff` (see there), so give it `log` or `show`. Whatever
+    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. A diff of
+    two revisions (two arguments before `--`, which are taken as revisions: name paths after
+    `--`) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no index;
+    another (of the index or the worktree) runs as `git diff`, which a ReadOnlyGit doesn't
+    run (see there). Whatever
     the user's config says, each command shows changes in the whole repository (not only
     under `git.directory`, as diff.relative would) and in every submodule, none through a
     textconv, with git's usual a/ and b/ prefixes, and checks no signatures; and `log` and
@@ -195,6 +198,9 @@ def patch_ids(
             # Without a commit line, patch-id would take the diff as part of the marker
             # before it.
             patches.append(f"commit {'0' * length}")
+            revisions = rest[: rest.index("--")] if "--" in rest else rest
+            if len([arg for arg in revisions if not arg.startswith("-")]) == 2:
+                command, rest = "diff-tree", ["-p", *rest]
         settings = (
             (*_PATCH_SETTINGS, *_COMMIT_SETTINGS)
             if command in _SHOWING_COMMITS

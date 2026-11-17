@@ -253,11 +253,15 @@ It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
 `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`,
 `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`, `rev-list`,
 `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
-reads (`--get`, `--list`, `get`, ...) and `worktree list`. It doesn't run `diff`, which writes
-the index when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't),
-or take options that write: `--output`, and describe's `--dirty` and `--broken`. It checks
-every argument, after `--` too (which can be another option's value), and `config`'s action
-must come first. Of git's options before the command, it takes only those that name no
+reads (`--get`, `--list`, `get`, ...) or a lone key, after options that say which files it
+reads and how it gives values (`--global`, `-f <file>`, `--type=bool`, `--default <value>`,
+`-z`, ...), `branch --show-current`, `symbolic-ref` naming one ref (`--quiet`, `--short`),
+`remote` (`-v`), `remote get-url` and `worktree list`. It doesn't run `diff`, which writes
+the index when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't;
+`patch_ids` runs a diff of two revisions as `diff-tree -p`), nor `ls-remote`, which runs ssh
+or credential helpers that may store what they're given, or take options that write:
+`--output`, and describe's `--dirty` and `--broken`. It checks every argument, after `--` too
+(which can be another option's value), and `config`'s action must come first. Of git's options before the command, it takes only those that name no
 config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
 locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`). In a partial clone,
 it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.45 ignores, but

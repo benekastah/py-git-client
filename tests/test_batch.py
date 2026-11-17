@@ -18,7 +18,7 @@ from git_client import (
     refs,
     update_refs,
 )
-from git_client.testing import FakeGit
+from git_client.testing import FakeGit, GitCall
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -257,6 +257,28 @@ def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
     repo.run("config", key, value)
 
     assert patch_ids(repo, *TOPIC) == expected
+
+
+def test_patch_ids_reads_a_diff_of_two_revisions_with_diff_tree(
+    repo_from: RepoFrom, git_calls: list[GitCall]
+) -> None:
+    repo = topic_changing(repo_from, "b")
+    (Path(repo.directory) / "b").write_bytes(b"in the worktree\n")
+
+    # Which a ReadOnlyGit runs, and which doesn't write the index.
+    log, diff = patch_ids(repo.read_only(), *TOPIC)
+    started = len(git_calls)
+    [worktree] = patch_ids(repo, ["diff", "topic"])
+
+    assert diff == [(log[0][0], "0" * 40)]
+    assert [call[0] for call in git_calls[:started]] == [
+        "rev-parse",
+        "log",
+        "diff-tree",
+        "patch-id",
+    ]
+    assert git_calls[started][0] == "diff"
+    assert worktree and worktree[0][0] != log[0][0]
 
 
 def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:

@@ -4,43 +4,19 @@ import os
 import threading
 from collections.abc import Callable, Sequence
 
+from git_client.reading import READING_COMMANDS, reading_form
+
 # Options to git itself, before the command, whose value is the next argument.
 _GIT_OPTIONS_WITH_VALUES = frozenset(
     {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
 )
 
 # Commands that change no ref (HEAD included), and no setting that says what a ref's upstream
-# is: those a ReadOnlyGit runs, and those that write only objects, the index or the worktree.
+# is, beyond those a ReadOnlyGit runs (see reading.py), whatever their options (an option of
+# theirs that writes writes a file or the index, not a ref): those that write only objects, the
+# index or the worktree.
 _KEEPING_REFS = frozenset(
     {
-        # What a ReadOnlyGit runs (see client.py's _READING_COMMANDS), whatever its options:
-        # an option of theirs that writes writes a file or the index, not a ref.
-        "blame",
-        "cat-file",
-        "check-attr",
-        "check-ignore",
-        "check-ref-format",
-        "count-objects",
-        "describe",
-        "diff-files",
-        "diff-index",
-        "diff-tree",
-        "for-each-ref",
-        "log",
-        "ls-files",
-        "ls-tree",
-        "merge-base",
-        "name-rev",
-        "patch-id",
-        "range-diff",
-        "rev-list",
-        "rev-parse",
-        "shortlog",
-        "show",
-        "show-ref",
-        "status",
-        "var",
-        # Writing only objects, the index or the worktree.
         "apply",
         "commit-tree",
         "diff",
@@ -54,9 +30,6 @@ _KEEPING_REFS = frozenset(
         "write-tree",
     }
 )
-
-# `git symbolic-ref`'s options that a read may have.
-_SYMBOLIC_REF_READ_OPTIONS = frozenset({"-q", "--quiet", "--short", "--recurse", "--no-recurse"})
 
 # `git config`'s options that a write keeping refs may have: where it writes (but not another
 # file, which the repository's config could include) and how.
@@ -77,35 +50,15 @@ def _changes_refs(args: Sequence[str | bytes]) -> bool:
     while start < len(texts) and texts[start].startswith("-"):
         start += 2 if texts[start] in _GIT_OPTIONS_WITH_VALUES else 1
     command, rest = (texts[start], texts[start + 1 :]) if start < len(texts) else ("", [])
-    match command:
-        case _ if command in _KEEPING_REFS:
-            return False
-        case "branch":
-            return rest != ["--show-current"]
-        case "symbolic-ref":
-            # Reading names one ref, with none of the options that change it (e.g. --delete);
-            # given a ref to point it at, it changes it.
-            options = [arg for arg in rest if arg.startswith("-")]
-            names = len(rest) - len(options)
-            return names != 1 or not _SYMBOLIC_REF_READ_OPTIONS.issuperset(options)
-        case "remote":
-            return rest[:1] not in ([], ["get-url"])
-        case "worktree":
-            return rest[:1] != ["list"]
-        case "config":
-            return _config_changes_refs(rest)
-        case _:
-            return True
-
-
-def _config_changes_refs(rest: list[str]) -> bool:
-    """Whether `git config <rest>` may change a branch's upstream: unless it only reads, or
-    writes one of a branch's settings that git doesn't list refs or upstreams by (e.g. a tool's
-    own, `branch.<name>.toolParent`)."""
-    # Its action first, as a ReadOnlyGit reads it: anywhere else, it can be another option's
-    # value.
-    if rest[:1] in (["get"], ["list"], ["--get"], ["--get-all"], ["--get-regexp"], ["--list"]):
+    if command in READING_COMMANDS or command in _KEEPING_REFS or reading_form(command, rest):
         return False
+    return command != "config" or _config_writes_upstream(rest)
+
+
+def _config_writes_upstream(rest: list[str]) -> bool:
+    """Whether `git config <rest>`, which writes, may change a branch's upstream: unless it
+    writes one of a branch's settings that git doesn't list refs or upstreams by (e.g. a
+    tool's own, `branch.<name>.toolParent`)."""
     if rest[:1] in (["set"], ["unset"]):
         rest = rest[1:]
     options = [arg for arg in rest if arg.startswith("-")]
