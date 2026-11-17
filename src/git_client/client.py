@@ -739,12 +739,14 @@ class Git(ReadOnlyGit):
     def write_config(self, *args: Arg, wait: float = 5.0) -> str:
         """Run `git config <args>`, a write (e.g. `"branch.topic.base", "main"`, or
         `"--unset", "branch.topic.base"`), and return what it printed. While another process
-        has the config file locked, try it again, for `wait` seconds, then raise
-        ConfigLockedError. A write is made whole or not at all, so trying again is safe.
+        has the config file locked, try it again, starting no try after `wait` seconds, then
+        raise ConfigLockedError. A write is made whole or not at all, so trying again is safe.
 
-        git 2.56 and newer wait for the lock themselves, for core.configLockTimeout (a
-        second by default) on each try; older git fails at once, so without this, any write
-        racing another process's (e.g. an editor's git) would fail."""
+        Each try can take as long as git's own wait for the lock and the client's timeout
+        allow: git 2.56 and newer wait core.configLockTimeout (a second by default; -1: for
+        as long as it's locked) on each try, so the call can run that much past `wait`.
+        Older git fails at once, so without this, any write racing another process's (e.g.
+        an editor's git) would fail."""
         deadline = time.monotonic() + wait
         delay = 0.01
         while True:

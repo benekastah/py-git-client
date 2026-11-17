@@ -272,21 +272,15 @@ def locked_config(repo: Git) -> Path:
 
 def test_write_config_waits_while_the_config_file_is_locked(repo: Git) -> None:
     lock = locked_config(repo)
-    released = threading.Event()
-
-    def release() -> None:
-        # Set first: a write that lands as soon as the lock goes finds it set.
-        released.set()
-        lock.unlink()
-
-    timer = threading.Timer(0.2, release)
+    timer = threading.Timer(0.2, lock.unlink)
+    start = time.monotonic()
     timer.start()
     try:
         repo.write_config("x.y", "z")
     finally:
         timer.join()
 
-    assert released.is_set()
+    assert time.monotonic() - start >= 0.2
     assert repo.run("config", "x.y") == "z"
 
 
