@@ -91,6 +91,26 @@ def test_changelog_notes_are_the_versions_section() -> None:
     assert dev_project.changelog_notes(CHANGELOG, "0.0.0") == "- Before."
 
 
+@pytest.mark.parametrize(
+    ("markdown", "notes"),
+    [
+        ("a\nb", "a b"),
+        ("a\n\nb", "a\n\nb"),
+        ("- a\n  b\n- c", "- a b\n- c"),
+        ("- a\n  - b\n    c", "- a\n  - b c"),
+        ("1. a\n2) b\n   c", "1. a\n2) b c"),
+        ("### H\ntext", "### H\ntext"),
+        ("a (see\n#34) b", "a (see #34) b"),
+        ("a\n```\nx\n  y\n```\nb", "a\n```\nx\n  y\n```\nb"),
+        ("> q\n> r", "> q\n> r"),
+        ("| a |\n| b |", "| a |\n| b |"),
+    ],
+)
+def test_changelog_notes_join_only_wrapped_lines(markdown: str, notes: str) -> None:
+    section = f"## 0.0.1 (2026-01-02)\n\n{markdown}\n"
+    assert dev_project.changelog_notes(section, "0.0.1") == notes
+
+
 def test_changelog_notes_refuse_an_undated_section() -> None:
     with pytest.raises(ReleaseError, match=r"0\.0\.2's section .*\(unreleased\).*date it"):
         dev_project.changelog_notes(CHANGELOG, "0.0.2")
@@ -422,25 +442,42 @@ def test_release_refuses_an_undated_changelog_before_tagging(
     assert github.releases == []
 
 
-def test_release_says_how_to_finish_when_the_release_fails(
-    repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fail(repo: Path, github: str, tag: str, notes: str) -> str:
-        raise ReleaseError("gh release create failed")
+def fail_to_release(repo: Path, github: str, tag: str, notes: str) -> str:
+    raise ReleaseError("gh release create failed")
 
-    monkeypatch.setattr(dev_project, "create_release", fail)
+
+def test_release_says_how_to_finish_when_the_release_fails(
+    repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(dev_project, "create_release", fail_to_release)
+    monkeypatch.setattr(dev_project.tempfile, "tempdir", str(tmp_path))
     with pytest.raises(
         ReleaseError,
         match=r"(?s)pushed v0\.0\.1.*gh release create failed.*by hand.*gh release create v0\.0\.1"
         r".*start-0\.0\.2",
     ) as e:
         dev_project.publish(repos / "clone", "0.0.1")
-    notes = re.search(r"--notes-file (\S+)`", str(e.value))
+    notes = re.search(r'--notes-file "([^"]+)"`', str(e.value))
     assert notes is not None
     assert Path(notes.group(1)).read_text(encoding="utf-8") == NOTES
-    Path(notes.group(1)).unlink()
     assert Git(repos / "origin.git").run("cat-file", "-t", "v0.0.1") == "tag"
     assert github.prs == []
+
+
+def test_release_says_how_to_finish_when_the_release_and_its_notes_fail(
+    repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_space(*args: object, **kwargs: object) -> tuple[int, str]:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(dev_project, "create_release", fail_to_release)
+    monkeypatch.setattr(dev_project.tempfile, "mkstemp", no_space)
+    with pytest.raises(
+        ReleaseError,
+        match=r"(?s)pushed v0\.0\.1.*gh release create failed.*by hand.*--notes-file NOTES`,"
+        r" NOTES holding CHANGELOG\.md's section for 0\.0\.1",
+    ):
+        dev_project.publish(repos / "clone", "0.0.1")
 
 
 def test_release_says_how_to_finish_when_the_next_version_fails(

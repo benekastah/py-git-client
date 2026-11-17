@@ -32,8 +32,11 @@ PROJECT_VERSION = re.compile(r'^(version\s*=\s*")[^"]*(")', re.MULTILINE)
 CHANGELOG_SECTION = re.compile(r"^## (\S+) \(([^)]*)\)[ \t]*$", re.MULTILINE)
 """A version's heading in CHANGELOG.md: `## X.Y.Z (date)`, or `(unreleased)`."""
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-NEW_BLOCK = re.compile(r"\s*(?:#|[-*+] |[0-9]+\. )")
-"""A Markdown line that starts a heading or a list item, rather than continuing a line."""
+OWN_LINE = re.compile(r"\s*(?:#{1,6}(?:\s|$)|>|\||```|~~~)")
+"""A Markdown line that nothing joins and that joins nothing: a heading, a quote, a table row
+or a code fence."""
+LIST_ITEM = re.compile(r"\s*(?:[-*+]|[0-9]+[.)]) ")
+FENCE = re.compile(r"\s*(?:```|~~~)")
 
 
 class ReleaseError(Exception):
@@ -134,17 +137,27 @@ def _is_date(text: str) -> bool:
 
 
 def _unwrapped(markdown: str) -> str:
-    """`markdown` with each line that continues the one before it (not blank, not after a
-    heading, and not starting a heading or list item) joined to it with a space: GitHub shows
-    each line break in a release's notes, which would break wrapped sentences."""
+    """`markdown` with each line that continues a paragraph or list item joined to it with a
+    space: GitHub shows each line break in a release's notes, which would break wrapped
+    sentences. Code blocks, quotes, tables and headings keep their lines."""
     lines: list[str] = []
+    fenced = False  # inside a code block
     for line in markdown.splitlines():
         previous = lines[-1] if lines else ""
-        continues = previous.strip() and not previous.lstrip().startswith("#")
-        if continues and line.strip() and NEW_BLOCK.match(line) is None:
+        joins = (
+            not fenced
+            and line.strip()
+            and previous.strip()
+            and OWN_LINE.match(previous) is None
+            and OWN_LINE.match(line) is None
+            and LIST_ITEM.match(line) is None
+        )
+        if joins:
             lines[-1] = f"{previous} {line.strip()}"
         else:
             lines.append(line)
+        if FENCE.match(line):
+            fenced = not fenced
     return "\n".join(lines)
 
 
@@ -220,8 +233,8 @@ def publish(repo: Path, version: str) -> tuple[str, str, str]:
     section for `version`, then open a PR moving main to the next version. Returns the tag, the
     release's URL and the PR's. Refuses, before changing anything, unless origin is on
     github.com, `version` is origin/main's pyproject.toml version, its CHANGELOG.md section is
-    there, dated and not empty, neither its tag nor the next version's branch exists yet, and CI passed on that
-    commit."""
+    there, dated and not empty, neither its tag nor the next version's branch exists yet, and
+    CI passed on that commit."""
     parse_version(version)
     github = origin_github_repo(repo)
     tag = f"v{version}"
@@ -263,13 +276,13 @@ def publish(repo: Path, version: str) -> tuple[str, str, str]:
         if url:
             step, left = f"starting {upcoming}", ""
         else:
-            kept, notes_file = tempfile.mkstemp(prefix=f"{tag}-notes-", suffix=".md")
-            with os.fdopen(kept, "w", encoding="utf-8") as file:
-                file.write(notes)
             step = "publishing its GitHub release"
+            kept = _kept(notes)
+            notes_file = f'"{kept}"' if kept else "NOTES"
+            holding = "" if kept else f", NOTES holding CHANGELOG.md's section for {version}"
             left = (
                 f"`gh release create {tag} --repo {github} --verify-tag --title {tag}"
-                f" --notes-file {notes_file}`, then "
+                f" --notes-file {notes_file}`{holding}, then "
             )
         message = (
             f"pushed {tag}, but {step} failed: {why}\n"
@@ -281,6 +294,17 @@ def publish(repo: Path, version: str) -> tuple[str, str, str]:
             raise ReleaseError(message) from error
         print(f"release: {message}", file=sys.stderr)
         raise
+
+
+def _kept(notes: str) -> str | None:
+    """The path of a temporary file, kept, holding `notes`; None if one can't be written."""
+    try:
+        file, path = tempfile.mkstemp(prefix="release-notes-", suffix=".md")
+        with os.fdopen(file, "w", encoding="utf-8") as kept:
+            kept.write(notes)
+    except OSError:
+        return None
+    return path
 
 
 def _next_version_branch(released: str) -> str:
