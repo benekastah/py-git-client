@@ -9,6 +9,7 @@ from git_client import (
     RefUpdate,
     config,
     config_key,
+    git_paths,
     hash_blobs,
     patch_ids,
     printable,
@@ -352,7 +353,36 @@ def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
     assert [repo.run_bytes("cat-file", "blob", blob) for blob in ids] == contents
 
 
+def test_git_paths_finds_each_name_where_git_keeps_it_with_one_git(
+    repo: Git, tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    linked = tmp_path / "linked"
+    repo.run("worktree", "add", "--quiet", str(linked))
+    hooks = tmp_path / "hooks"
+    repo.run("config", "core.hooksPath", str(hooks))
+    own = Path(Git(linked).run("rev-parse", "--path-format=absolute", "--git-dir"))
+    started = len(git_calls)
+
+    found = git_paths(Git(linked), "HEAD", "refs/heads", "hooks")
+
+    # HEAD is the linked worktree's own; refs are the main repository's.
+    main = Path(repo.directory) / ".git"
+    assert [path.resolve() for path in found] == [
+        (own / "HEAD").resolve(),
+        (main / "refs" / "heads").resolve(),
+        hooks.resolve(),
+    ]
+    assert all(path.is_absolute() for path in found)
+    assert len(git_calls) == started + 1
+
+
+def test_git_paths_refuses_a_name_with_a_line_ending(repo: Git) -> None:
+    with pytest.raises(ValueError, match="line ending"):
+        git_paths(repo, "HEAD", "a\nb")
+
+
 def test_nothing_to_do_starts_no_git(repo: Git, git_calls: list[list[str]]) -> None:
+    assert git_paths(repo) == []
     assert hash_blobs(repo, []) == []
     assert patch_ids(repo) == []
     update_refs(repo, [])
