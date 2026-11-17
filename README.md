@@ -94,15 +94,15 @@ encoding. Both go for arguments and for values in `env`. Output is decoded as UT
 surrogateescape, so bytes that aren't UTF-8 survive a round trip through `encode`. Those
 surrogates can't be written as UTF-8 (to a file, a web page, JSON), so for a tool that stores
 or shows text, `printable(text)`, for what `run`, `config` or `refs` gave, replaces each with
-U+FFFD. Commands whose output the library reads run with `GIT_TEXTDOMAINDIR` naming no
-directory, so git finds no translation and its messages are in English whatever the user's
-language, which is how the library tells its failures apart. The user's locale (`LC_ALL`,
-`LANG`, `LC_CTYPE`, ...) is left as it is, so what git runs (hooks, filters, credential
-helpers, gpg, ssh) runs in it; only a git that those start themselves speaks English too.
-git's own pattern matching (`log --grep`, `--author`, `-G`, `-i`, `git grep`) follows the
-user's `LC_CTYPE` from git 2.39, and C's before; `-P` patterns are UTF-8 on every version.
-`passthrough`, whose output is the user's, keeps the user's language for git's messages as
-well.
+U+FFFD.
+
+git always runs in the user's locale: the library sets no `LC_ALL` or the like, so git's
+messages are in the user's language, for a tool to show them, and so is what git runs (hooks,
+filters, credential helpers, gpg, ssh). The library reads git's messages in the languages it
+has a file for (see [Adding a language](#adding-a-language)): English, for now. In another,
+what it can't read falls back (see [Errors](#errors) and `var`). A tool that wants git's
+messages in English gives git `LC_ALL=C` in `env` (which what git runs gets too), or, on a
+`Git`, `GIT_TEXTDOMAINDIR` naming no directory (e.g. `os.devnull`), which only git reads.
 
 Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
 first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its
@@ -181,7 +181,11 @@ said and raises a subclass:
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
 | `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
 
-Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
+Any other failure is a plain `GitError`, and so is one git describes in a language the library
+has no file for: it reads git's messages, which are in the user's language. `var` then raises
+for a missing identity, rather than return None. What's read from exit statuses and
+cat-file's output rather than messages works in any language: whether `resolve` and
+`CatFile` find a name, and `ok`'s and `succeeds`' answers. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
 `succeeds` and `passthrough` say whether git succeeded instead (exit status 0, not any
 other). They still raise when git gives no answer: `GitTimeoutError` past a timeout, an

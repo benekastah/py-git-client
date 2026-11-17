@@ -36,14 +36,6 @@ filesystem (bytes, in its encoding)."""
 # git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
 _FATAL = 128
 
-# What a git whose messages the library reads gets: as the directory of its translations, a
-# path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
-# English, with C's dates, while what git runs (hooks, filters, credential helpers, gpg, ssh)
-# keeps the user's locale. Only a git that one of those runs inherits it, and speaks English.
-# git itself keeps the user's LC_CTYPE (from 2.39), which its regex matching follows (see
-# ReadOnlyGit.process).
-_ENGLISH = {"GIT_TEXTDOMAINDIR": os.devnull}
-
 
 class ClientTimeout(enum.Enum):
     """CLIENT_TIMEOUT's type: a sentinel, whose one member means "the client's timeout". It's
@@ -528,11 +520,11 @@ class ReadOnlyGit:
     def environment(
         self, env: Mapping[str, EnvValue] | None = None, *, english: bool = False
     ) -> dict[str, str]:
-        """The environment for a command: ours, then (if `english`) _ENGLISH, so git's
-        messages are in English for the library to read (what git runs keeps the user's
-        locale), then this client's `env`, then `env`. Off Windows, git gets each value as
-        bytes, like `command`: text as UTF-8 (whatever the locale's encoding), and a path
-        given as bytes as it is. Each is given here as the str that os.fsdecode makes of
+        """The environment for a command: ours, then this client's `env`, then `env`. git,
+        and what it runs, keep the user's locale. `english` changes nothing: it's taken so
+        that a subclass's override that takes it still works. Off Windows, git gets each
+        value as bytes, like `command`: text as UTF-8 (whatever the locale's encoding), and a
+        path given as bytes as it is. Each is given here as the str that os.fsdecode makes of
         those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
         GIT_OPTIONAL_LOCKS=0 and GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a
         variable in `env` (or the client's) that it doesn't take."""
@@ -541,7 +533,6 @@ class ReadOnlyGit:
             _refuse_environment(added)
         return {
             **os.environ,
-            **(_ENGLISH if english else {}),
             **{key: self._environment_value(value) for key, value in added.items()},
             **(_READ_ONLY_ENVIRONMENT if self._read_only else {}),
         }
@@ -564,13 +555,10 @@ class ReadOnlyGit:
         """Run git and return the finished process, whatever its exit status. Raises
         GitTimeoutError if it runs past its timeout (see Git). With `capture_output`, its
         stderr is captured, and its stdout too unless `stdout` says where it goes (e.g.
-        subprocess.DEVNULL); git's messages are then in English whatever the user's language,
-        while what git runs (hooks, filters, credential helpers, gpg, ssh) keeps the user's
-        locale (see `environment`). git's own pattern matching then follows the user's
-        LC_CTYPE from git 2.39 (`log --grep`, `--author`, `-G`, `-i`, `git grep`), and C's
-        before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the user's to read, in theirs. Every git
-        process but `popen`'s starts here, so a subclass can override this to change how each
-        runs (e.g. to make every command fail once the tool is shutting down)."""
+        subprocess.DEVNULL). Either way git, and what it runs, are in the user's locale, so
+        its messages are in their language, for a tool to show them. Every git process but
+        `popen`'s starts here, so a subclass can override this to change how each runs (e.g.
+        to make every command fail once the tool is shutting down)."""
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
         own_group = _own_process_group(seconds)
         with subprocess.Popen(
@@ -578,7 +566,7 @@ class ReadOnlyGit:
             stdin=None if input is None else subprocess.PIPE,
             stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
             stderr=subprocess.PIPE if capture_output else None,
-            env=self.environment(env, english=capture_output),
+            env=self.environment(env),
             close_fds=CLOSE_FDS,
             process_group=0 if own_group else None,
         ) as process:
@@ -601,13 +589,13 @@ class ReadOnlyGit:
     ) -> subprocess.Popen[bytes]:
         """Start git with pipes for its stdin and stdout (its stderr goes nowhere), for a
         process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
-        has no timeout, and its messages are in English (see `process`)."""
+        has no timeout."""
         return subprocess.Popen(
             self.command(*args),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=self.environment(env, english=True),
+            env=self.environment(env),
             # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
             # non-inheritable, so a process that lives as long as the tool could hold the pipe
             # another thread is making, and that thread's process would never see EOF. One
@@ -624,7 +612,7 @@ class ReadOnlyGit:
     ) -> bytes:
         """Run git and return its stdout as it is (e.g. a file's content, or a patch).
         Raises GitError if it fails: a subclass (e.g. UnknownRevisionError) for a failure the
-        library knows from what git said."""
+        library knows from what git said, in a language it has a file for (see messages)."""
         result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
         return self._stdout(args, result)
 
@@ -695,8 +683,9 @@ class ReadOnlyGit:
         """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it
         names nothing: as `git rev-parse --verify` finds it, but only if the repository has
         that object (not for a full id it lacks, nor for a submodule's commit). Raises
-        GitError for another failure (e.g. NotARepositoryError). For many names, a CatFile
-        takes one process for all of them."""
+        GitError for another failure (e.g. NotARepositoryError). Which names name nothing is
+        read from exit statuses and cat-file's output, not git's messages, so in any language.
+        For many names, a CatFile takes one process for all of them."""
         line = batch_line(name)
         if line is None:
             return None
@@ -712,7 +701,8 @@ class ReadOnlyGit:
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None
         if no identity is set for it. Raises GitError for an unknown variable, or another
-        failure (e.g. a broken config)."""
+        failure (e.g. a broken config), and for a missing identity too when git says so in a
+        language the library has no file for (see messages)."""
         result = self.process("var", name, capture_output=True, timeout=timeout)
         if result.returncode == _FATAL and SAID["no_identity"].search(decode(result.stderr)):
             return None

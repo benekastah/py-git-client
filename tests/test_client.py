@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from git_client import (
+    CatFile,
     Git,
     GitError,
     GitTimeoutError,
@@ -335,11 +336,24 @@ def german(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("german")
-def test_captured_messages_are_in_english_whatever_the_users_language(repo: Git) -> None:
-    with pytest.raises(UnknownRevisionError) as raised:
+def test_captured_messages_are_in_the_users_language(repo: Git) -> None:
+    # The library has no German patterns, so it can't say which failure this is.
+    with pytest.raises(GitError) as raised:
         repo.run("rev-parse", "--verify", "no-such-branch")
 
-    assert "Needed a single revision" in raised.value.stderr
+    assert type(raised.value) is GitError
+    assert "Benötigte einen einzelnen Commit" in raised.value.stderr
+
+
+@pytest.mark.usefixtures("german")
+def test_answers_read_from_exit_statuses_dont_depend_on_the_users_language(repo: Git) -> None:
+    assert repo.resolve("no-such-branch") is None
+    assert repo.resolve("main@{u}") is None  # cat-file exits, then rev-parse --quiet checks
+    with CatFile(repo) as cat_file:
+        assert cat_file.resolve("no-such-branch") is None
+        assert cat_file.resolve("main@{u}") is None
+    assert not repo.ok("config", "--get", "no.such")
+    assert not repo.succeeds("rev-parse", "--verify", "no-such-branch")
 
 
 @pytest.mark.usefixtures("german")
