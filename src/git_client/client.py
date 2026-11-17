@@ -471,7 +471,11 @@ class ReadOnlyGit:
     winds down fast, whichever thread runs them. It doesn't stop a git that's already running: a
     command runs on until it finishes or times out (or the thread running it is
     interrupted), and a CatFile's process keeps answering until it's closed, though one
-    that has to start (again) raises.
+    that has to start (again) raises. `object_id_length` (40 for SHA-1, 64 for SHA-256), if
+    given, is the repository's, which `object_id_length()` then returns without starting git:
+    for a tool that already knows it, e.g. from the length of an id it has read. It's trusted,
+    not checked (that would start the process it saves): a wrong one makes what reads ids by
+    it (e.g. `patch_ids`) fail.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
     is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
@@ -510,17 +514,21 @@ class ReadOnlyGit:
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
+        object_id_length: int | None = None,
     ) -> None:
+        if object_id_length not in (None, 40, 64):
+            raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
         self.stopping = stopping
-        self._object_id_length: int | None = None
+        self._object_id_length = object_id_length
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
-        SHA-256. Read from git the first time it's asked; a repository's can't change."""
+        SHA-256: the client's `object_id_length` if given, else read from git the first time
+        it's asked (a repository's can't change)."""
         if self._object_id_length is None:
             sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
             self._object_id_length = 64 if sha256 else 40

@@ -23,6 +23,7 @@ from git_client import (
     find_git,
     printable,
 )
+from git_client.testing import FakeGit, GitCall
 
 
 @pytest.mark.usefixtures("fresh_find_git")
@@ -577,3 +578,24 @@ def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
 
     assert type(copy) is ToolError
     assert copy.__notes__ == ["while checking the stack"]
+
+
+def test_object_id_length_is_read_from_git_once(repo: Git, git_calls: list[GitCall]) -> None:
+    assert [repo.object_id_length(), repo.object_id_length()] == [40, 40]
+    assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+@pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
+def test_object_id_length_given_starts_no_git(
+    client: type[ReadOnlyGit], tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    # Not a repository: git, if asked, would fail.
+    git = client(tmp_path, object_id_length=64)
+    assert git.object_id_length() == 64
+    assert git_calls == []
+
+
+@pytest.mark.parametrize("length", [0, 39, 41, 63])
+def test_object_id_length_given_is_40_or_64(length: int) -> None:
+    with pytest.raises(ValueError, match="40 or 64"):
+        Git(object_id_length=length)

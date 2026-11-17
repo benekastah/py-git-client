@@ -499,6 +499,7 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
+        object_id_length: int | None = None,
     ) -> None:
         super().__init__(
             directory,
@@ -507,6 +508,7 @@ class FakeGit(Git):
             env=env,
             timeout=timeout,
             stopping=stopping,
+            object_id_length=object_id_length,
         )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
