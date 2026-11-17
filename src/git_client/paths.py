@@ -20,7 +20,7 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
     top = Path(directory)
     dot_git = top / ".git"
     if dot_git.is_file():
-        line = _first_line(dot_git)
+        line = _read_path(dot_git)
         if not line.startswith(b"gitdir: "):
             return None
         own = top / os.fsdecode(line.removeprefix(b"gitdir: "))
@@ -29,13 +29,13 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
     else:
         own = top
     commondir = own / "commondir"
-    common = own / os.fsdecode(_first_line(commondir)) if commondir.is_file() else own
+    common = own / os.fsdecode(_read_path(commondir)) if commondir.is_file() else own
     return common.resolve() if _is_git_directory(own, common) else None
 
 
-def _first_line(file: Path) -> bytes:
-    """A file git wrote a path in, without its line ending: as git reads it, only "\\n" and
-    "\\r" are taken off, so a path ending in a space keeps it."""
+def _read_path(file: Path) -> bytes:
+    """A file git wrote a path in (the whole file), without its line ending: as git reads it,
+    only "\\n" and "\\r" are taken off, so a path ending in a space keeps it."""
     return file.read_bytes().rstrip(b"\r\n")
 
 
