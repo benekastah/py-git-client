@@ -106,6 +106,11 @@ merged, conflicts = merge_file(
 )
 ```
 
+A CatFile's process stops once nothing uses it. A `Git` subclass that keeps a CatFile of
+itself makes it with `CatFile(self, weak=True)`, so the two make no reference cycle (which
+would keep the client and its process until the garbage collector ran). Don't pass
+`weak=True` for a client nothing else holds: it would be freed at once.
+
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
 filesystem's encoding; text, as str, which reaches git as UTF-8 whatever the locale's
 encoding. Both go for arguments and for values in `env`. Output is decoded as UTF-8 with

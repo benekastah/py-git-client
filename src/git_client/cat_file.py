@@ -4,18 +4,33 @@ without a process each."""
 import contextlib
 import subprocess
 import threading
+import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 
-from git_client.client import OBJECT_ID, ReadOnlyGit, batch_line, check_names_nothing, object_header
+from git_client.client import (
+    FATAL,
+    OBJECT_ID,
+    ReadOnlyGit,
+    batch_line,
+    check_names_nothing,
+    object_header,
+)
 from git_client.errors import GitError, UnknownRevisionError
 
 _COMMAND = ("cat-file", "--batch-command")
 
 USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
-unlike the 128 of `cat-file` exiting on a name."""
+unlike the 128 (FATAL) of `cat-file` exiting on a name."""
+
+_PROBE = b"info " + b"0" * 40 + b"\n"
+"""The first request to each new process, sent with the caller's: a name git answers rather
+than exits on (no object, or the start of a SHA-256 one's id). A process that answers it got
+through reading the repository, so exiting at the next request means it exited on that
+request's name, which needs no `rev-parse` to tell it from what's wrong with the repository."""
 
 
 @dataclass(frozen=True)
@@ -34,18 +49,36 @@ class CatFile:
     It sees refs and objects as they are when asked, even when other processes have changed
     them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
     no upstream), git cat-file exits rather than saying they name nothing; then that name
-    resolves to nothing, and the next request starts another process. A process that exits
-    after answering others (killed, say) is started again for the request it exited at. Any
+    resolves to nothing, and the next request starts another process. One that stopped
+    between requests (killed, say) is started again for the request that finds it gone. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
+    Damage git finds only as it reads a name (e.g. a corrupt object) makes that name resolve
+    to nothing, like a name git exits on.
+
+    Its process stops when it's no longer used, as Python frees it (or, at exit, as its stdin
+    closes). With `weak`, it holds
+    `git` by a weak reference, for a CatFile the client keeps itself (e.g. `self.cat_file =
+    CatFile(self, weak=True)` in a Git subclass): a strong one would make a reference cycle,
+    which keeps a client no longer used, and its process, until the garbage collector finds
+    it. A request after `git` is freed raises ReferenceError.
     """
 
-    def __init__(self, git: ReadOnlyGit) -> None:
-        self.git = git
+    def __init__(self, git: ReadOnlyGit, *, weak: bool = False) -> None:
+        self._git: Callable[[], ReadOnlyGit | None] = weakref.ref(git) if weak else lambda: git
         self._process: subprocess.Popen[bytes] | None = None
-        # Whether the process has answered a request.
-        self._answered = False
+        # Stops the process when this is freed, or as it's asked to (see _stop).
+        self._stopper: weakref.finalize[[subprocess.Popen[bytes]], CatFile] | None = None
         self._lock = threading.Lock()
+
+    @property
+    def git(self) -> ReadOnlyGit:
+        """The client it runs git with. Raises ReferenceError if it held it weakly, and it was
+        freed."""
+        git = self._git()
+        if git is None:
+            raise ReferenceError("the Git this CatFile runs git with was freed")
+        return git
 
     def __enter__(self) -> Self:
         return self
@@ -108,49 +141,61 @@ class CatFile:
     def _request(self, command: bytes, name: str) -> bytes | None:
         """Send command (a line, about `name`), and return the first line of the reply, or
         None if git exits rather than answer, as it does on some names that name nothing (the
-        next request starts another process). A process that exits after answering others
-        (killed, say, or on this name) is started again, for one more try. Raises GitError if
-        a new process exits at its first request for another reason: a usage error, as a git
-        older than 2.36 gives at --batch-command, or what's wrong with the repository (e.g.
+        next request starts another process). A process that stopped between requests (killed,
+        say) is started again, for one more try. Raises GitError if a new process exits before
+        it has answered anything for another reason: a usage error, as a git older than 2.36
+        gives at --batch-command, or what's wrong with the repository (e.g.
         NotARepositoryError). Hold the lock."""
-        retried = False
         while True:
+            new = self._process is None
             if self._process is None:
                 # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name
                 # that's both a branch and a tag), as rev-parse --quiet doesn't.
                 self._process = self.git.popen(*_COMMAND)
-                self._answered = False
-            assert self._process.stdin is not None and self._process.stdout is not None
-            try:
-                self._process.stdin.write(command)
-                self._process.stdin.flush()
-                reply = self._process.stdout.readline()
-            except OSError:
-                reply = b""
+                self._stopper = weakref.finalize(self, _end, self._process)
+                # Not as Python exits, when a daemon thread may be in a request: the process
+                # gets EOF on its stdin then, and exits by itself.
+                self._stopper.atexit = False
+            process = self._process
+            assert process.stdin is not None and process.stdout is not None
+            # Whether it has answered a request: _PROBE, for a new process.
+            answered = not new
+            reply = b""
+            with contextlib.suppress(OSError):
+                process.stdin.write(_PROBE + command if new else command)
+                process.stdin.flush()
+                if new:
+                    answered = bool(process.stdout.readline())
+                if answered:
+                    reply = process.stdout.readline()
             if reply:
-                self._answered = True
                 return reply
-            process, answered = self._process, self._answered
             self._stop()
             if process.returncode == USAGE_ERROR:
                 raise GitError(_COMMAND, USAGE_ERROR, "git 2.36 or newer is needed")
-            if answered:
-                retried = True
-                continue
-            if not retried:
-                # It has answered nothing in this repository yet.
+            if not answered:
+                # It exited as it started, as it does when it can't read the repository.
                 check_names_nothing(self.git, name)
-            return None
+                return None
+            if new or process.returncode == FATAL:
+                # It exited on this name, after answering _PROBE or other requests.
+                return None
+            # It stopped some other way (killed, say), maybe before this request reached it.
 
     def _stop(self) -> None:
         """Stop the process, if one is running. Hold the lock."""
-        if self._process is None:
-            return
-        if self._process.stdin is not None:
-            # It may have stopped already (on Windows, not always with a BrokenPipeError).
-            with contextlib.suppress(OSError):
-                self._process.stdin.close()
-        self._process.wait()
-        if self._process.stdout is not None:
-            self._process.stdout.close()
-        self._process = None
+        if self._stopper is not None:
+            self._stopper()
+        self._process = self._stopper = None
+
+
+def _end(process: subprocess.Popen[bytes]) -> None:
+    """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
+    used, rather than left for Python to warn of and reap."""
+    if process.stdin is not None:
+        # It may have stopped already (on Windows, not always with a BrokenPipeError).
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+    process.wait()
+    if process.stdout is not None:
+        process.stdout.close()

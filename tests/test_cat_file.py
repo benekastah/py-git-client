@@ -58,6 +58,22 @@ def test_keeps_answering_after_a_name_git_exits_on(repo: Git) -> None:
         assert cat_file.resolve("main") == repo.run("rev-parse", "main")
 
 
+def test_a_name_git_exits_on_starts_no_more_processes(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    # One process up to each name git exits on, and one more after it: no other to try the
+    # name again, nor to check the repository, when the process that exited says enough.
+    with CatFile(repo) as cat_file:
+        assert cat_file.resolve("HEAD") is not None
+        assert cat_file.resolve("main@{u}") is None
+        assert cat_file.resolve("HEAD") is not None
+        assert cat_file.resolve("main@{u}^{tree}") is None
+        cat_file.close()
+        assert cat_file.resolve("main@{u}") is None
+
+    assert git_calls == [["cat-file", "--batch-command"]] * 3
+
+
 class StartsKeepingGit(Git):
     """A Git that keeps each long-lived process it starts. It runs git itself: Git for
     Windows' launcher on PATH starts git as a child, which killing the launcher leaves
@@ -85,6 +101,65 @@ def test_a_process_that_stopped_between_requests_is_started_again(repo: Git) -> 
         assert cat_file.resolve("main") == repo.run("rev-parse", "main")
         assert cat_file.read(repo.run("rev-parse", "HEAD:a")) == ("blob", b"a\n")
     assert len(git.started) == 2
+
+
+def test_a_cat_file_no_longer_used_stops_its_process(repo: Git) -> None:
+    git = StartsKeepingGit(repo.directory)
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    del cat_file
+
+    assert git.started[0].poll() is not None
+
+
+def test_exiting_leaves_a_cat_file_another_thread_uses_alone(repo: Git) -> None:
+    # A daemon thread's requests carry on as Python exits, rather than lose the process.
+    script = """
+import sys, threading, time
+from git_client import CatFile, Git
+cat_file = CatFile(Git(sys.argv[1], program=sys.argv[2]))
+def resolve():
+    while True:
+        cat_file.resolve("HEAD")
+threading.Thread(target=resolve, daemon=True).start()
+time.sleep(0.2)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, repo.directory, real_git()],
+        capture_output=True,
+        check=True,
+    )
+
+    assert b"Exception in thread" not in result.stderr
+
+
+class KeepsItsCatFile(StartsKeepingGit):
+    """A client with a CatFile of its own, which holds it weakly."""
+
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory)
+        self.cat_file = CatFile(self, weak=True)
+
+
+def test_a_client_that_keeps_a_cat_file_stops_it_when_no_longer_used(repo: Git) -> None:
+    # By its reference count, rather than whenever the garbage collector gets to it.
+    git = KeepsItsCatFile(repo.directory)
+    git.cat_file.resolve("HEAD")
+    started = git.started
+    gc.disable()
+    try:
+        del git
+        assert started[0].poll() is not None
+    finally:
+        gc.enable()
+
+
+def test_a_cat_file_whose_git_is_gone_raises(repo: Git) -> None:
+    cat_file = CatFile(Git(repo.directory), weak=True)
+
+    with pytest.raises(ReferenceError):
+        cat_file.resolve("HEAD")
 
 
 def test_a_directory_that_isnt_a_repository_is_an_error_not_an_empty_answer(
@@ -235,13 +310,15 @@ def test_a_git_without_batch_command_is_an_error_not_an_empty_answer(repo: Git) 
 
 
 class GitThatDiesMidObject(Git):
-    """A git whose cat-file says an object has 100 bytes, then stops after 10."""
+    """A git whose cat-file answers the request CatFile sends first, then says an object has
+    100 bytes, and stops after 10."""
 
     def popen(
         self, *args: Arg, env: Mapping[str, EnvValue] | None = None
     ) -> subprocess.Popen[bytes]:
         script = (
-            "import sys; sys.stdin.readline();"
+            "import sys; sys.stdin.readline(); sys.stdin.readline();"
+            " sys.stdout.write('0' * 40 + ' missing\\n');"
             " sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
         )
         return subprocess.Popen(

@@ -34,7 +34,7 @@ filesystem (bytes, in its encoding)."""
 
 
 # git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
-_FATAL = 128
+FATAL = 128
 
 # What a git whose messages the library reads gets: as the directory of its translations, a
 # path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
@@ -721,7 +721,7 @@ class ReadOnlyGit:
         if no identity is set for it. Raises GitError for an unknown variable, or another
         failure (e.g. a broken config)."""
         result = self.process("var", name, capture_output=True, timeout=timeout)
-        if result.returncode == _FATAL and _NO_IDENTITY.search(decode(result.stderr)):
+        if result.returncode == FATAL and _NO_IDENTITY.search(decode(result.stderr)):
             return None
         return decode(self._stdout(("var", name), result)).strip()
 
