@@ -55,7 +55,9 @@ FATAL = 128
 # What a git whose messages the library reads gets: as the directory of its translations, a
 # path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
 # English, with C's dates, while what git runs (hooks, filters, credential helpers, gpg, ssh)
-# keeps the user's locale. Only a git that one of those runs inherits it, and speaks English.
+# keeps the user's locale. Only a git that one of those runs inherits it, and speaks English:
+# git takes its messages' language from its environment alone, and passes that on to what it
+# runs, so no variable could reach git and not its hooks.
 # git itself keeps the user's LC_CTYPE (from 2.39), which its regex matching follows (see
 # ReadOnlyGit.process).
 _ENGLISH = {"GIT_TEXTDOMAINDIR": os.devnull}
@@ -201,36 +203,74 @@ _GRACE = 0.25
 _AFTER_STOP = 1.0
 
 
-def _own_process_group(timeout: float | None) -> bool:
+def _own_process_group(timeout: float | None, process_groups: bool) -> bool:
     """Whether git starts in a process group of its own, so that past its timeout, or on an
     interrupt, what it started (hooks, ssh, git-remote-https, credential helpers) is stopped
     with it: on Linux and macOS, for a command with a timeout, when the tool has no
-    controlling terminal (as in CI, or a service). With one, git stays in the terminal's
-    foreground group, as from a shell: a group of its own would be in the background, where
-    reading the terminal (a password prompt, an editor, a pager) stops it until the timeout,
-    and Ctrl-C would reach the tool alone. Only with a timeout, as a group keeps Python from
-    using posix_spawn."""
-    if timeout is None or sys.platform == "win32":
+    controlling terminal (as in CI, or a service), unless the client's `process_groups` is
+    False. With a terminal, git stays in the terminal's foreground group, as from a shell: a
+    group of its own would be in the background, where reading the terminal (a password
+    prompt, an editor, a pager) stops it until the timeout, and Ctrl-C would reach the tool
+    alone. Only with a timeout, as a group keeps Python from using posix_spawn."""
+    if timeout is None or not process_groups or sys.platform == "win32":
         return False
+    return not _has_terminal(os.getpid(), os.getsid(0))
+
+
+@functools.cache
+def _has_terminal(pid: int, session: int) -> bool:
+    """Whether the tool has a controlling terminal: probed once per process (`pid`, so a
+    forked child probes again) and session (`session`, which os.setsid, the usual way to lose
+    the terminal, changes). Not noticed: a session leader that takes a terminal later, which
+    a tool doesn't do once it runs git; and a terminal lost in the same session (closed under
+    a tool that ignores SIGHUP, as under nohup, or given up with TIOCNOTTY). Then a command
+    with a timeout gets no group of its own, and what git started isn't stopped with it."""
     try:
         os.close(os.open("/dev/tty", os.O_RDWR))
     except OSError:
-        return True
-    return False
+        return False
+    return True
 
 
-def _stop(process: subprocess.Popen[bytes], own_group: bool) -> None:
+def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: bool) -> None:
     """Stop git, past its timeout or on an interrupt. On Linux and macOS, ask it to first, with
     SIGINT (to its group, if it has one of its own), as Ctrl-C would, so it removes its lock
-    files, and kill it (and its group) if it's still there after _GRACE. On Windows, kill its
-    process tree (taskkill /T) and git: Windows has no signal to ask a process with no console
-    of its own to stop."""
+    files, and kill it (and its group) after _GRACE, or as soon as the wait is interrupted
+    (e.g. by a second Ctrl-C). On Windows, kill its process tree (taskkill /T) and git:
+    Windows has no signal to ask a process with no console of its own to stop. On an
+    interrupt, though, Ctrl-C reached git too, from the console it shares with the tool, so
+    it's given _GRACE to clean up and exit first. taskkill finds what git started through
+    git, so once git has exited, what outlived it runs on."""
     if sys.platform == "win32":
-        # By its full path, as find_git finds git's: not from the current directory.
-        taskkill = os.path.join(
-            os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe"
-        )
-        # If taskkill can't run, git is still killed: what it started runs on.
+        try:
+            if interrupted:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(_GRACE)
+        finally:
+            _kill_tree(process)
+        return
+    try:
+        # Gone already, or (on macOS) only zombies left in its group.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if own_group:
+                os.killpg(process.pid, signal.SIGINT)
+            else:
+                process.send_signal(signal.SIGINT)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(_GRACE)
+    finally:
+        if own_group:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+        process.kill()
+
+
+def _kill_tree(process: subprocess.Popen[bytes]) -> None:
+    """On Windows, kill git and what it started (taskkill /F /T), or git alone if taskkill
+    can't run (what it started then runs on)."""
+    # By its full path, as find_git finds git's: not from the current directory.
+    taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
+    try:
         with contextlib.suppress(OSError):
             subprocess.run(
                 [taskkill, "/F", "/T", "/PID", str(process.pid)],
@@ -239,20 +279,8 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool) -> None:
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
+    finally:
         process.kill()
-        return
-    # Gone already, or (on macOS) only zombies left in its group.
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        if own_group:
-            os.killpg(process.pid, signal.SIGINT)
-        else:
-            process.send_signal(signal.SIGINT)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(_GRACE)
-    if own_group:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGKILL)
-    process.kill()
 
 
 def _let_go_of_output(process: subprocess.Popen[bytes]) -> None:
@@ -273,6 +301,53 @@ def _remaining_output(process: subprocess.Popen[bytes]) -> tuple[bytes | None, b
     except subprocess.TimeoutExpired as expired:
         _let_go_of_output(process)
         return expired.stdout, expired.stderr
+
+
+def _stdin(input: bytes | None, capture_output: bool) -> int | None:
+    """git's stdin: a pipe for `input`; else nothing (DEVNULL) for a command whose output is
+    captured, so one that would read stdin (e.g. `shortlog` with no revision, or
+    `hash-object --stdin`) doesn't wait on, or take, the tool's; else the tool's, for a
+    command run for the user (passthrough)."""
+    if input is not None:
+        return subprocess.PIPE
+    return subprocess.DEVNULL if capture_output else None
+
+
+# How many environments _environments keeps at most: one per mix of what a command adds.
+_MOST_ENVIRONMENTS = 64
+
+
+class _Environments:
+    """The environments built for git (see ReadOnlyGit.environment), per what was added to
+    ours: copying os.environ for every command costs about 50 µs, much of what starting git
+    costs. They're dropped once os.environ changes, which comparing it with a copy of what it
+    was then tells in about a microsecond."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seen: dict[object, object] | None = None
+        self._built: dict[object, dict[str, str]] = {}
+
+    def get(self, key: object, build: Callable[[], dict[str, str]]) -> dict[str, str]:
+        """The environment for `key`, built with `build` from os.environ unless one was
+        already, since os.environ last changed. It's shared: don't change it."""
+        # os.environ's own dict, looked up each time, as os.environ can be replaced (e.g. by
+        # mock.patch); not there (e.g. a plain dict in its place): built anew every time.
+        data: Mapping[object, object] | None = getattr(os.environ, "_data", None)
+        with self._lock:
+            if data is None:
+                return build()
+            if self._seen != data:
+                self._seen = dict(data)
+                self._built.clear()
+            if key not in self._built:
+                if len(self._built) >= _MOST_ENVIRONMENTS:
+                    self._built.clear()
+                self._built[key] = build()
+            return self._built[key]
+
+
+_environments = _Environments()
 
 
 def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
@@ -536,13 +611,17 @@ class ReadOnlyGit:
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
     is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
-    quarter of a second later; the call then waits at most a second more for its output. On
+    quarter of a second later, or at once if the tool is interrupted again meanwhile; the call
+    then waits at most a second more for its output. On
     Linux and macOS it's asked with SIGINT, as Ctrl-C asks it. When the tool has no
     controlling terminal (as in CI, or a service), a command with a timeout runs in a process
     group of its own, so what git started (hooks, ssh, credential helpers) is stopped with
     it. With a terminal, git stays in its foreground, as from a shell, so it can ask for a
     password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
-    Windows, git and what it started are killed (taskkill /T), with no chance to clean up.
+    Windows, git and what it started are killed (taskkill /T): past a timeout at once, with no
+    chance to clean up, and on an interrupt once git has had a quarter of a second to handle
+    the Ctrl-C that reached it too, from the tool's console. taskkill finds what git started
+    through git, so what outlives git's own exit (e.g. a hook that ignores Ctrl-C) runs on.
 
     A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
     from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
@@ -554,6 +633,13 @@ class ReadOnlyGit:
     times out, and is orphaned if the tool is killed first; to have it stopped with the
     tool, give those commands no timeout, so git stays in the tool's group and gets the
     signal itself.
+
+    With `process_groups=False`, git never gets a group of its own: past a timeout, or on an
+    interrupt, only git is stopped, and what it started (hooks, ssh, credential helpers) runs
+    on, as with a terminal. In exchange, starting git costs less: on macOS, a group of its own
+    keeps Python from using posix_spawn, and on Linux it costs about 50 µs a command (a
+    twentieth of what starting git costs). It suits a tool that runs many short commands
+    with a timeout and without a terminal, whose git starts nothing that could outlive it.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
@@ -573,6 +659,7 @@ class ReadOnlyGit:
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
+        process_groups: bool = True,
     ) -> None:
         if object_id_length not in (None, 40, 64):
             raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
@@ -581,6 +668,7 @@ class ReadOnlyGit:
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
         self.stopping = stopping
+        self.process_groups = process_groups
         self._object_id_length = object_id_length
         # Per location: the length, or an Event a thread asking git sets once it has answered.
         self._object_id_lengths: dict[Location, int | threading.Event] = {}
@@ -588,13 +676,13 @@ class ReadOnlyGit:
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
         (see there), and otherwise runs as the client does, with the same `program`,
-        `timeout`, `stopping` and `env`, as they are now. It's of the client's own class, so a
-        subclass's methods (e.g. its own `process`) and attributes are kept (an attribute
-        that holds the client itself still writes through it); and it shares what git told
-        the client about where things are (`prefix()`, `object_id_length()`, `git_paths`), so
-        it asks no question the client asked, nor the client one it asked. A new copy each
-        call; a read-only client gives itself. Raises ReadOnlyError if `env` holds a variable
-        a ReadOnlyGit doesn't take."""
+        `timeout`, `stopping`, `process_groups` and `env`, as they are now. It's of the
+        client's own class, so a subclass's methods (e.g. its own `process`) and attributes
+        are kept (an attribute that holds the client itself still writes through it); and it
+        shares what git told the client about where things are (`prefix()`,
+        `object_id_length()`, `git_paths`), so it asks no question the client asked, nor the
+        client one it asked. A new copy each call; a read-only client gives itself. Raises
+        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
@@ -683,16 +771,24 @@ class ReadOnlyGit:
         given as bytes as it is. Each is given here as the str that os.fsdecode makes of
         those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
         GIT_OPTIONAL_LOCKS=0 and GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a
-        variable in `env` (or the client's) that it doesn't take."""
+        variable in `env` (or the client's) that it doesn't take. What it builds is kept, for
+        the next command given the same, until os.environ changes."""
         added = {**self.env, **(env or {})}
         if self._read_only:
             _refuse_environment(added)
-        return {
-            **os.environ,
-            **(_ENGLISH if english else {}),
-            **{key: self._environment_value(value) for key, value in added.items()},
-            **(_READ_ONLY_ENVIRONMENT if self._read_only else {}),
-        }
+        read_only = self._read_only
+
+        def build() -> dict[str, str]:
+            return {
+                **os.environ,
+                **(_ENGLISH if english else {}),
+                **{key: self._environment_value(value) for key, value in added.items()},
+                **(_READ_ONLY_ENVIRONMENT if read_only else {}),
+            }
+
+        # A copy of the one kept (see _Environments), which costs little: a dict's, not
+        # os.environ's, which decodes each variable.
+        return dict(_environments.get((english, read_only, tuple(added.items())), build))
 
     @staticmethod
     def _environment_value(value: EnvValue) -> str:
@@ -721,15 +817,20 @@ class ReadOnlyGit:
         says so. Every git process but `popen`'s starts here, so a subclass can override this
         to change how each runs, calling `super().process`: once git ends, it counts one that
         may have changed refs for RefSnapshot, whether it succeeded or not, and an override
-        that starts git itself leaves RefSnapshot keeping what such a command changed."""
+        that starts git itself leaves RefSnapshot keeping what such a command changed.
+
+        git reads `input`, if given; else, with `capture_output`, nothing (as from
+        /dev/null), so a command that reads stdin when given no input (e.g. `shortlog` with no
+        revision) neither waits on the tool's stdin nor takes it; without, the tool's stdin, as
+        from a shell."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
-        own_group = _own_process_group(seconds)
+        own_group = _own_process_group(seconds, self.process_groups)
         try:
             with subprocess.Popen(
                 command,
-                stdin=None if input is None else subprocess.PIPE,
+                stdin=_stdin(input, capture_output),
                 stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
                 stderr=subprocess.PIPE if capture_output else None,
                 env=self.environment(env, english=capture_output),
@@ -739,13 +840,13 @@ class ReadOnlyGit:
                 try:
                     output, errors = process.communicate(input, timeout=seconds)
                 except subprocess.TimeoutExpired:
-                    _stop(process, own_group)
+                    _stop(process, own_group, interrupted=False)
                     output, errors = _remaining_output(process)
                     raise GitTimeoutError(
                         args, None, decode(errors or b""), decode(output or b"")
                     ) from None
                 except BaseException:  # e.g. KeyboardInterrupt
-                    _stop(process, own_group)
+                    _stop(process, own_group, interrupted=True)
                     _let_go_of_output(process)
                     raise
             return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
@@ -912,7 +1013,7 @@ class ReadOnlyGit:
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bool:
-        """Run git with its output going to ours (stdout to `stdout`, if given, e.g. stderr
+        """Run git with its input and output ours (stdout to `stdout`, if given, e.g. stderr
         when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
         than say no, if it runs past its timeout."""
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0

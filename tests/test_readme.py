@@ -19,9 +19,6 @@ from git_client.testing import RepoTemplates
 
 README = Path(__file__).parent.parent / "README.md"
 
-# The oldest git py-git-client supports, as the README says: CatFile needs it.
-MINIMUM_GIT = (2, 36)
-
 
 def make_readme_repository(directory: Path) -> None:
     """What the README's examples name: path/to/repo, a clone of origin.git, on main with a
@@ -42,14 +39,12 @@ def publish(git: Git) -> None:
     git.run("push", "origin", "main")
 
 
+# The oldest git py-git-client supports, as the README says: CatFile needs it.
+@pytest.mark.needs_git(2, 36, reason="the oldest supported")
 @pytest.mark.usefixtures("fresh_find_git")
 def test_the_readmes_python_examples_run(
     repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    version = Git(".").run("--version")
-    found = tuple(int(part) for part in re.findall(r"\d+", version)[:2])
-    if found < MINIMUM_GIT:
-        pytest.skip(f"{version}: the README's examples need git 2.36 or newer")
     repo_templates.build("readme", make_readme_repository)
     monkeypatch.chdir(repo_templates.copy("readme", tmp_path / "copy"))
     blocks = re.findall(r"```python\n(.*?)```", README.read_text(encoding="utf-8"), re.DOTALL)

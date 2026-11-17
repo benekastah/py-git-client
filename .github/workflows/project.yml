@@ -30,23 +30,53 @@ permissions:
   contents: read
 
 jobs:
-  # A workflow needs a job. This one never runs, so it costs nothing; replace it with the
-  # project's first, e.g.:
-  #
-  #   build:
-  #     if: fromJSON(inputs.context).code
-  #     runs-on: ubuntu-latest
-  #     timeout-minutes: 5
-  #     steps:
-  #       - uses: actions/checkout@...  # pinned as in ci.yml
-  #         with:
-  #           persist-credentials: false
-  #       - uses: ./.github/actions/setup
-  #         with:
-  #           python-version: ${{ fromJSON(inputs.context).min_python }}
-  #       - run: uv build
-  none:
-    if: false
+  # The tests with the oldest git supported (the README's 2.36, e.g. for CatFile's
+  # --batch-command), as CI's other jobs run the newest: the suite as a whole, but for the
+  # tests of what 2.36 lacks (merge-tree's --write-tree, GIT_NO_LAZY_FETCH), which skip, and
+  # the German ones, which skip as this git has no translations. Built once, then cached:
+  # about a minute uncached, seconds after.
+  oldest-git:
+    if: fromJSON(inputs.context).code
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GIT_VERSION: 2.36.6
+      # kernel.org's sha256sums.asc for the tarball.
+      GIT_SHA256: 3a54356dd0a6b23d7d0742952d5c86958ad8f797cbe41bd1952bc83ec429ea94
+      # How it's built, which the cache's key holds too, so a change to it builds git again.
+      # gnu17: newer GCC's default, C23, takes git's own unreachable() for its macro. curl,
+      # for the tests' HTTP remote; no translations, Perl, Python, Tcl or OpenSSL.
+      GIT_CFLAGS: -O2 -std=gnu17
+      GIT_MAKE_FLAGS: >-
+        NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 NO_OPENSSL=1 INSTALL_SYMLINKS=1
     steps:
-      - run: "true"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/oldest-git
+          key: >-
+            oldest-git-${{ runner.os }}-${{ env.GIT_VERSION }}-${{ env.GIT_CFLAGS }}-${{
+            env.GIT_MAKE_FLAGS }}
+      - name: Build git ${{ env.GIT_VERSION }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://www.kernel.org/pub/software/scm/git/git-$GIT_VERSION.tar.xz"
+          echo "$GIT_SHA256  git-$GIT_VERSION.tar.xz" | sha256sum -c -
+          tar xf "git-$GIT_VERSION.tar.xz"
+          # GIT_MAKE_FLAGS split into its words, as make takes them.
+          # shellcheck disable=SC2086
+          make -C "git-$GIT_VERSION" -j"$(nproc)" CFLAGS="$GIT_CFLAGS" prefix="$HOME/oldest-git" \
+            $GIT_MAKE_FLAGS install > /dev/null
+      - run: echo "$HOME/oldest-git/bin" >> "$GITHUB_PATH"
+      - run: git --version
+      - uses: ./.github/actions/setup
+        with:
+          python-version: ${{ fromJSON(inputs.context).min_python }}
+      - run: uv run --no-project python dev.py tests

@@ -1,7 +1,6 @@
 """Reads and writes that answer many questions, or make many changes, with one git process."""
 
 import os
-import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,10 +21,10 @@ from git_client.client import (
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
-# (diff.relative, submodule.<name>.ignore) or change them (color, an external diff, textconv,
-# diff.noprefix, diff.renames, diff.context, diff.interHunkContext, diff.algorithm), and so that
-# `diff-tree -p`, which reads none of that config, gives what `log -p` and `diff` give by
-# default.
+# (diff.relative, submodule.<name>.ignore, diff.submodule) or change them (color, an external
+# diff, textconv, diff.noprefix, diff.submodule, diff.renames, diff.context,
+# diff.interHunkContext, diff.algorithm), and so that `diff-tree -p`, which reads none of that
+# config, gives what `log -p` and `diff` give by default.
 _PATCH_SETTINGS = (
     "-M",
     "-U3",
@@ -37,14 +36,16 @@ _PATCH_SETTINGS = (
     "--dst-prefix=b/",
     "--no-relative",
     "--ignore-submodules=none",
+    "--submodule=short",
     "--no-textconv",
 )
 
 # The commands that print commits, and what patch_ids gives them besides: no gpg run on each
-# (log.showSignature), and each commit's full id at the start of a line, where patch-id looks
-# for it (log.abbrevCommit, format.pretty). `git diff` takes none of these.
+# (log.showSignature), each commit's full id at the start of a line, where patch-id looks for
+# it (log.abbrevCommit, format.pretty), and a root commit's patch (log.showRoot). `git diff`
+# takes none of these.
 _SHOWING_COMMITS = {"log", "show"}
-_COMMIT_SETTINGS = ("--no-show-signature", "--no-abbrev-commit", "--pretty=medium")
+_COMMIT_SETTINGS = ("--no-show-signature", "--no-abbrev-commit", "--pretty=medium", "--root")
 
 # The highest exit status of `git merge-file` that counts conflicts (git holds the count to
 # it); above it, git failed.
@@ -182,10 +183,11 @@ def patch_ids(
     name (`a:path`), which diff-tree doesn't take, but also `:/text`, a tree's `a:` and
     `@{<date> <time>}`, which it would. Whatever the user's config says, each command shows
     changes in the whole repository (not only under `git.directory`, as diff.relative would) and
-    in every submodule, none through a textconv, with git's usual a/ and b/ prefixes, renames, 3
-    lines of context (and none more between hunks) and the myers algorithm, and checks no
-    signatures; and `log` and `show` print each commit's full id, as patch-id needs (a command's
-    own `--format` still wins).
+    in every submodule (each as the commit it moves from and to, as diff.submodule's default
+    shows it), none through a textconv, with git's usual a/ and b/ prefixes, renames, 3 lines
+    of context (and none more between hunks) and the myers algorithm, and checks no
+    signatures; and `log` and `show` print each commit's full id, as patch-id needs (a
+    command's own `--format` still wins), and a root commit's patch too.
 
     Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff
@@ -251,6 +253,8 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
     hash_blob_at."""
     if not contents:
         return []
+    import tempfile  # here: at the top, it slows every tool's start
+
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[str] = []
         for i, content in enumerate(contents):
@@ -305,6 +309,8 @@ def merge_file(
     written to the repository: the three are put in temporary files for git, which merge-file
     needs. Raises GitError if git can't merge them (e.g. binary content). It takes a Git, as
     a ReadOnlyGit doesn't run merge-file."""
+    import tempfile  # here: at the top, it slows every tool's start
+
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[bytes] = []
         for name, content in (("ours", ours), ("base", base), ("theirs", theirs)):
