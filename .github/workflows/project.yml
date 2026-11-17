@@ -42,6 +42,12 @@ jobs:
       GIT_VERSION: 2.36.6
       # kernel.org's sha256sums.asc for the tarball.
       GIT_SHA256: 3a54356dd0a6b23d7d0742952d5c86958ad8f797cbe41bd1952bc83ec429ea94
+      # How it's built, which the cache's key holds too, so a change to it builds git again.
+      # gnu17: newer GCC's default, C23, takes git's own unreachable() for its macro. curl,
+      # for the tests' HTTP remote; no translations, Perl, Python, Tcl or OpenSSL.
+      GIT_CFLAGS: -O2 -std=gnu17
+      GIT_MAKE_FLAGS: >-
+        NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 NO_OPENSSL=1 INSTALL_SYMLINKS=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -50,7 +56,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/oldest-git
-          key: oldest-git-${{ runner.os }}-${{ env.GIT_VERSION }}
+          key: >-
+            oldest-git-${{ runner.os }}-${{ env.GIT_VERSION }}-${{ env.GIT_CFLAGS }}-${{
+            env.GIT_MAKE_FLAGS }}
       - name: Build git ${{ env.GIT_VERSION }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -61,11 +69,10 @@ jobs:
           curl -sSfLO "https://www.kernel.org/pub/software/scm/git/git-$GIT_VERSION.tar.xz"
           echo "$GIT_SHA256  git-$GIT_VERSION.tar.xz" | sha256sum -c -
           tar xf "git-$GIT_VERSION.tar.xz"
-          # gnu17: newer GCC's default, C23, takes git's own unreachable() for its macro. curl,
-          # for the tests' HTTP remote; no translations, Perl, Python, Tcl or OpenSSL.
-          make -C "git-$GIT_VERSION" -j"$(nproc)" CFLAGS="-O2 -std=gnu17" prefix="$HOME/oldest-git" \
-            NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 NO_OPENSSL=1 \
-            INSTALL_SYMLINKS=1 install > /dev/null
+          # GIT_MAKE_FLAGS split into its words, as make takes them.
+          # shellcheck disable=SC2086
+          make -C "git-$GIT_VERSION" -j"$(nproc)" CFLAGS="$GIT_CFLAGS" prefix="$HOME/oldest-git" \
+            $GIT_MAKE_FLAGS install > /dev/null
       - run: echo "$HOME/oldest-git/bin" >> "$GITHUB_PATH"
       - run: git --version
       - uses: ./.github/actions/setup
