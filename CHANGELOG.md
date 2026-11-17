@@ -135,9 +135,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   for a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch in
   a partial clone, or writing what nothing reads). It now closes the process's stdout too,
   and kills it if it hasn't exited within a second (#53).
-
-### Fixed
-
 - `patch_ids` keeps a commit that only moves a submodule, and gives a submodule's patches
   the same ids, whatever diff.submodule says, and keeps a root commit's patch whatever
   log.showRoot says (#52).

@@ -253,9 +253,7 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
     hash_blob_at."""
     if not contents:
         return []
-    # Here, not at the top: importing it takes a few milliseconds, which every tool would
-    # pay at its start.
-    import tempfile
+    import tempfile  # here: at the top, it slows every tool's start
 
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[str] = []
@@ -311,9 +309,7 @@ def merge_file(
     written to the repository: the three are put in temporary files for git, which merge-file
     needs. Raises GitError if git can't merge them (e.g. binary content). It takes a Git, as
     a ReadOnlyGit doesn't run merge-file."""
-    # Here, not at the top: importing it takes a few milliseconds, which every tool would
-    # pay at its start.
-    import tempfile
+    import tempfile  # here: at the top, it slows every tool's start
 
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[bytes] = []
