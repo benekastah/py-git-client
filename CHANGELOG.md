@@ -1,8 +1,8 @@
 # Changelog
 
 What each version of py-git-client changes for a tool that uses it. Versions are released
-as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the README's "Releasing". The version `main` carries, not yet
-released, says "(unreleased)".
+as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the README's
+"Releasing". The version `main` carries, not yet released, says "(unreleased)".
 
 ## 0.0.2 (2026-11-16)
 
