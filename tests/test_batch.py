@@ -592,3 +592,20 @@ def test_update_refs_makes_none_if_any_cant_be_made(repo: Git) -> None:
         )
 
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main"}
+
+
+@pytest.mark.parametrize(("where", "prefix"), [(".", ""), ("sub/deep", "sub/deep/"), (".git", "")])
+def test_git_paths_learns_the_prefix_in_the_same_process(
+    repo: Git, git_calls: list[list[str]], where: str, prefix: str
+) -> None:
+    (Path(repo.directory) / where).mkdir(parents=True, exist_ok=True)
+    git = Git(Path(repo.directory) / where)
+    git_paths(git, "HEAD")
+    assert git.prefix() == prefix
+    assert len(git_calls) == 1
+
+
+def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
+    repo.prefix()
+    git_paths(repo, "HEAD")
+    assert "--show-prefix" not in git_calls[-1]

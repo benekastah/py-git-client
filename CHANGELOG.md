@@ -11,8 +11,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
   that cached them itself can drop its cache (and its `cdup` is
-  `"../" * prefix().count("/")`). A repository moved or replaced under a client that keeps
-  its directory isn't noticed; make a new client (#50).
+  `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process. A
+  repository moved or replaced under a client that keeps its directory isn't noticed; make a
+  new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is

@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal
 
@@ -432,6 +433,11 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
+prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
+"""Each client's `prefix()`, per location: kept here rather than on the client, so that
+`git_paths` can learn it from the `rev-parse` it runs anyway."""
+
+
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
     each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
@@ -538,7 +544,6 @@ class ReadOnlyGit:
         self.stopping = stopping
         self._object_id_length = object_id_length
         self._object_id_lengths: dict[Location, int] = {}
-        self._prefixes: dict[Location, str] = {}
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
@@ -562,12 +567,13 @@ class ReadOnlyGit:
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
         its directory isn't noticed."""
+        known = prefixes.setdefault(self, {})
         key = location(self)
-        if key not in self._prefixes:
+        if key not in known:
             # Not run's, which would strip a directory's leading space.
             output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
-            self._prefixes[key] = decode(output.removesuffix(b"\n"))
-        return self._prefixes[key]
+            known[key] = decode(output.removesuffix(b"\n"))
+        return known[key]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:

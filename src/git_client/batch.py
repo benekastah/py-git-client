@@ -16,6 +16,7 @@ from git_client.client import (
     encode,
     error_from,
     location,
+    prefixes,
 )
 from git_client.errors import GitError
 
@@ -131,7 +132,8 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
 
     Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
-    may set, moves them. Nothing else `--git-path` answers depends on config."""
+    may set, moves them. Nothing else `--git-path` answers depends on config. The same
+    process tells the client's `prefix()`, if it isn't known yet."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -144,9 +146,15 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         if (where, name) not in known or _moved_by_config(name)
     ]
     if new:
+        # The prefix too, if it's not known: it costs no process of its own here.
+        known_prefixes = prefixes.setdefault(git, {})
+        prefix = [] if where in known_prefixes else ["--show-prefix"]
         args = [arg for name in new for arg in ("--git-path", name)]
-        output = git.run_bytes("rev-parse", "--path-format=absolute", *args)
-        for name, line in zip(new, output.splitlines(), strict=True):
+        output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
+        lines = output.split(b"\n")
+        if prefix:
+            known_prefixes[where] = decode(lines.pop(0))
+        for name, line in zip(new, lines[: len(new)], strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
 
