@@ -132,6 +132,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `patch_ids` keeps a commit that only moves a submodule, and gives a submodule's patches
   the same ids, whatever diff.submodule says, and keeps a root commit's patch whatever
   log.showRoot says (#52).
+- A command whose output the library reads (`run`, `ok`, `process(capture_output=True)`
+  and the like) reads nothing from stdin, as from /dev/null, unless given `input`: it read
+  the tool's, so `run("shortlog", "-s")` waited on it and `run("hash-object", "--stdin")`
+  hashed it. `passthrough` still gives git the tool's stdin (#52).
 
 ## 0.0.2 (2026-11-17)
 
