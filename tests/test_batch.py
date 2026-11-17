@@ -281,6 +281,18 @@ def test_patch_ids_reads_a_diff_of_two_revisions_with_diff_tree(
     assert worktree and worktree[0][0] != log[0][0]
 
 
+@pytest.mark.parametrize("command", [["diff", "-S", "b", "main"], ["diff", "main"]])
+def test_patch_ids_runs_any_other_diff_as_diff(
+    repo_from: RepoFrom, git_calls: list[GitCall], command: list[str]
+) -> None:
+    # Each compares the worktree: the value of an option isn't a second revision.
+    repo = topic_changing(repo_from, "b")
+
+    patch_ids(repo, command)
+
+    assert git_calls[-2][0] == "diff"
+
+
 def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:
     # A path as git reports it, from the top of the worktree, given from a subdirectory.
     repo = topic_changing(repo_from, "top")
