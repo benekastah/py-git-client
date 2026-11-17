@@ -96,10 +96,13 @@ surrogates can't be written as UTF-8 (to a file, a web page, JSON), so for a too
 or shows text, `printable(text)`, for what `run`, `config` or `refs` gave, replaces each with
 U+FFFD. Commands whose output the library reads run with `GIT_TEXTDOMAINDIR` naming no
 directory, so git finds no translation and its messages are in English whatever the user's
-language, which is how the library tells its failures apart. Their locale (`LC_ALL`, `LANG`)
-is left as it is, so what git runs (hooks, filters, credential helpers, gpg, ssh) runs in the
-user's locale; only a git that those start themselves speaks English too. `passthrough`,
-whose output is the user's, keeps their language for git's messages as well.
+language, which is how the library tells its failures apart. The user's locale (`LC_ALL`,
+`LANG`, `LC_CTYPE`, ...) is left as it is, so what git runs (hooks, filters, credential
+helpers, gpg, ssh) runs in it; only a git that those start themselves speaks English too.
+git's own pattern matching (`log --grep`, `--author`, `-G`, `-i`, `git grep`) follows the
+user's `LC_CTYPE` from git 2.39, and C's before; `-P` patterns are UTF-8 on every version.
+`passthrough`, whose output is the user's, keeps the user's language for git's messages as
+well.
 
 Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
 first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its

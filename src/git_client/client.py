@@ -37,8 +37,10 @@ _FATAL = 128
 
 # What a git whose messages the library reads gets: as the directory of its translations, a
 # path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
-# English, as with LC_ALL=C, while what git runs (hooks, filters, credential helpers, gpg, ssh)
+# English, with C's dates, while what git runs (hooks, filters, credential helpers, gpg, ssh)
 # keeps the user's locale. Only a git that one of those runs inherits it, and speaks English.
+# git itself keeps the user's LC_CTYPE (from 2.39), which its regex matching follows (see
+# ReadOnlyGit.process).
 _ENGLISH = {"GIT_TEXTDOMAINDIR": os.devnull}
 
 # What `git var` says when no identity is set for the name or email it's asked for.
@@ -532,10 +534,9 @@ class ReadOnlyGit:
     def environment(
         self, env: Mapping[str, EnvValue] | None = None, *, english: bool = False
     ) -> dict[str, str]:
-        """The environment for a command: ours, then (if `english`) GIT_TEXTDOMAINDIR set
-        to a path that's no directory, so git finds no translation and its messages are in
-        English for the library to read, while what git runs keeps the user's locale (LC_ALL,
-        LANG), then this client's `env`, then `env`. Off Windows, git gets each value as
+        """The environment for a command: ours, then (if `english`) _ENGLISH, so git's
+        messages are in English for the library to read (what git runs keeps the user's
+        locale), then this client's `env`, then `env`. Off Windows, git gets each value as
         bytes, like `command`: text as UTF-8 (whatever the locale's encoding), and a path
         given as bytes as it is. Each is given here as the str that os.fsdecode makes of
         those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
@@ -570,8 +571,10 @@ class ReadOnlyGit:
         GitTimeoutError if it runs past its timeout (see Git). With `capture_output`, its
         stderr is captured, and its stdout too unless `stdout` says where it goes (e.g.
         subprocess.DEVNULL); git's messages are then in English whatever the user's language,
-        while what git runs (hooks, filters, credential helpers, gpg, ssh) keeps their locale
-        (see `environment`). Otherwise its output is the user's to read, in theirs. Every git
+        while what git runs (hooks, filters, credential helpers, gpg, ssh) keeps the user's
+        locale (see `environment`). git's own pattern matching then follows the user's
+        LC_CTYPE from git 2.39 (`log --grep`, `--author`, `-G`, `-i`, `git grep`), and C's
+        before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the user's to read, in theirs. Every git
         process but `popen`'s starts here, so a subclass can override this to change how each
         runs (e.g. to make every command fail once the tool is shutting down)."""
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
