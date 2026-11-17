@@ -31,9 +31,14 @@ CHANGELOG = """\
 
 ## 0.0.1 (2026-01-02)
 
+A paragraph,
+wrapped.
+
 ### Added
 
-- First.
+- First,
+  wrapped.
+- Second.
 
 ## 0.0.0 (2026-01-01)
 
@@ -76,14 +81,26 @@ def test_set_pyproject_version_refuses_without_one() -> None:
         dev_project.set_pyproject_version('[project]\nname = "x"\n', "0.0.2")
 
 
+NOTES = "A paragraph, wrapped.\n\n### Added\n\n- First, wrapped.\n- Second."
+"""CHANGELOG's 0.0.1 section, its wrapped lines joined: GitHub shows each line break in a
+release's notes."""
+
+
 def test_changelog_notes_are_the_versions_section() -> None:
-    assert dev_project.changelog_notes(CHANGELOG, "0.0.1") == "### Added\n\n- First."
+    assert dev_project.changelog_notes(CHANGELOG, "0.0.1") == NOTES
     assert dev_project.changelog_notes(CHANGELOG, "0.0.0") == "- Before."
 
 
 def test_changelog_notes_refuse_an_undated_section() -> None:
-    with pytest.raises(ReleaseError, match=r"0\.0\.2's section .* unreleased.*date it"):
+    with pytest.raises(ReleaseError, match=r"0\.0\.2's section .*\(unreleased\).*date it"):
         dev_project.changelog_notes(CHANGELOG, "0.0.2")
+
+
+@pytest.mark.parametrize("date", ["Unreleased", "TBD", "2026-13-01"])
+def test_changelog_notes_refuse_anything_but_a_date(date: str) -> None:
+    changelog = CHANGELOG.replace("(2026-01-02)", f"({date})")
+    with pytest.raises(ReleaseError, match=r"0\.0\.1's section .*not a date"):
+        dev_project.changelog_notes(changelog, "0.0.1")
 
 
 @pytest.mark.parametrize("changelog", [CHANGELOG.replace("## 0.0.1 ", "## 0.0.10 "), ""])
@@ -331,7 +348,7 @@ def test_release_tags_origins_main_publishes_it_and_opens_the_next_versions_pr(
         "https://github.com/example/pull/1",
     )
     assert github.asked == [main]
-    assert github.releases == [("v0.0.1", "### Added\n\n- First.")]
+    assert github.releases == [("v0.0.1", NOTES)]
     assert origin.run("cat-file", "-t", "v0.0.1") == "tag"
     assert origin.run("rev-parse", "v0.0.1^{commit}") == main
     start = origin.run("rev-parse", "start-0.0.2")
@@ -416,8 +433,12 @@ def test_release_says_how_to_finish_when_the_release_fails(
         ReleaseError,
         match=r"(?s)pushed v0\.0\.1.*gh release create failed.*by hand.*gh release create v0\.0\.1"
         r".*start-0\.0\.2",
-    ):
+    ) as e:
         dev_project.publish(repos / "clone", "0.0.1")
+    notes = re.search(r"--notes-file (\S+)`", str(e.value))
+    assert notes is not None
+    assert Path(notes.group(1)).read_text(encoding="utf-8") == NOTES
+    Path(notes.group(1)).unlink()
     assert Git(repos / "origin.git").run("cat-file", "-t", "v0.0.1") == "tag"
     assert github.prs == []
 
