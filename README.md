@@ -232,7 +232,8 @@ than git's no should be reported.
 
 An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
 is git's exit status or, without one, `timed out` for a `GitTimeoutError`, `not started` for a
-`NotStartedError` and `no exit status` otherwise (e.g. for a command a tool didn't run).
+`NotStartedError` and `no exit status` otherwise (e.g. a tool's own `GitError` for a command
+it refused).
 
 ## Testing a tool that uses it
 

@@ -328,6 +328,8 @@ def test_git_calls_records_no_process_a_stopping_client_doesnt_start(
         git.run("log", "-1")
     with CatFile(git) as cat_file, pytest.raises(NotStartedError):
         cat_file.resolve("HEAD")
+    with pytest.raises(ReadOnlyError):  # not NotStartedError: a programming error
+        ReadOnlyGit(repo.directory, stopping=lambda: True).run("commit", "-m", "x")
 
     assert git_calls == []
 

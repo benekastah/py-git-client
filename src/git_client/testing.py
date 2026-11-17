@@ -430,9 +430,9 @@ def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
     process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
 
     def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
-        # Each raises, starting nothing: for a command a ReadOnlyGit refuses, and once stopping.
-        refuse_if_stopping(git, args)
+        # Each raises, starting nothing: for a command a ReadOnlyGit refuses, then once stopping.
         git.command(*args)
+        refuse_if_stopping(git, args)
         if not _setting_up.get():
             calls.append(GitCall([os.fsdecode(arg) for arg in args], git.program))
 

@@ -423,7 +423,8 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
 
 def refuse_if_stopping(git: "ReadOnlyGit", args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
-    each git process starts (FakeGit's too)."""
+    each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
+    run, so that programming error isn't passed off as stopping."""
     if git.stopping is not None and git.stopping():
         raise NotStartedError(args, None, "the tool is stopping")
 
@@ -600,11 +601,12 @@ class ReadOnlyGit:
         user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
         says so. Every git process but `popen`'s starts here, so a subclass can override this
         to change how each runs."""
+        command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
         own_group = _own_process_group(seconds)
         with subprocess.Popen(
-            self.command(*args),
+            command,
             stdin=None if input is None else subprocess.PIPE,
             stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
             stderr=subprocess.PIPE if capture_output else None,
@@ -633,9 +635,10 @@ class ReadOnlyGit:
         process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
         has no timeout, and its messages are in English (see `process`). Raises
         NotStartedError, starting nothing, once `stopping` says so."""
+        command = self.command(*args)
         refuse_if_stopping(self, args)
         return subprocess.Popen(
-            self.command(*args),
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
