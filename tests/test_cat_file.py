@@ -1,5 +1,6 @@
 import gc
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -395,7 +396,7 @@ class GitThatDropsStderr(Git):
 def test_verify_names_the_name_when_git_said_nothing_of_it(repo: Git) -> None:
     with (
         CatFile(GitThatDropsStderr(repo.directory)) as cat_file,
-        pytest.raises(UnknownRevisionError, match="main@{u} missing"),
+        pytest.raises(UnknownRevisionError, match=re.escape("main@{u} missing")),
     ):
         cat_file.verify("main@{u}")
 
