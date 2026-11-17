@@ -58,6 +58,22 @@ def test_keeps_answering_after_a_name_git_exits_on(repo: Git) -> None:
         assert cat_file.resolve("main") == repo.run("rev-parse", "main")
 
 
+def test_a_name_git_exits_on_starts_no_more_processes(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    # One process up to each name git exits on, and one more after it: no other to try the
+    # name again, nor to check the repository, when the process that exited says enough.
+    with CatFile(repo) as cat_file:
+        assert cat_file.resolve("HEAD") is not None
+        assert cat_file.resolve("main@{u}") is None
+        assert cat_file.resolve("HEAD") is not None
+        assert cat_file.resolve("main@{u}^{tree}") is None
+        cat_file.close()
+        assert cat_file.resolve("main@{u}") is None
+
+    assert git_calls == [["cat-file", "--batch-command"]] * 3
+
+
 class StartsKeepingGit(Git):
     """A Git that keeps each long-lived process it starts. It runs git itself: Git for
     Windows' launcher on PATH starts git as a child, which killing the launcher leaves
@@ -235,13 +251,15 @@ def test_a_git_without_batch_command_is_an_error_not_an_empty_answer(repo: Git) 
 
 
 class GitThatDiesMidObject(Git):
-    """A git whose cat-file says an object has 100 bytes, then stops after 10."""
+    """A git whose cat-file answers the request CatFile sends first, then says an object has
+    100 bytes, and stops after 10."""
 
     def popen(
         self, *args: Arg, env: Mapping[str, EnvValue] | None = None
     ) -> subprocess.Popen[bytes]:
         script = (
-            "import sys; sys.stdin.readline();"
+            "import sys; sys.stdin.readline(); sys.stdin.readline();"
+            " sys.stdout.write('0' * 40 + ' missing\\n');"
             " sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
         )
         return subprocess.Popen(

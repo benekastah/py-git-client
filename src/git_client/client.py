@@ -33,7 +33,7 @@ filesystem (bytes, in its encoding)."""
 
 
 # git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
-_FATAL = 128
+FATAL = 128
 
 # What `git var` says when no identity is set for the name or email it's asked for.
 _NO_IDENTITY = re.compile(
@@ -700,7 +700,7 @@ class ReadOnlyGit:
         if no identity is set for it. Raises GitError for an unknown variable, or another
         failure (e.g. a broken config)."""
         result = self.process("var", name, capture_output=True, timeout=timeout)
-        if result.returncode == _FATAL and _NO_IDENTITY.search(decode(result.stderr)):
+        if result.returncode == FATAL and _NO_IDENTITY.search(decode(result.stderr)):
             return None
         return decode(self._stdout(("var", name), result)).strip()
 
