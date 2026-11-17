@@ -371,6 +371,9 @@ still running, wait and run it again). Then it tags that commit (not your checko
 patch version (`start-X.Y.Z+1`). That PR merges like any other, once CI passes. If anything
 stops it after the tag is pushed, the command says how to finish by hand.
 
+Before releasing, date the version's section of CHANGELOG.md (`## X.Y.Z (unreleased)`) in
+a PR of its own; and add the next version's section to the PR the command opens.
+
 ### CI and dependencies
 
 CI (`.github/workflows/ci.yml`) runs the static checks once, on Linux, and the tests on Linux,
