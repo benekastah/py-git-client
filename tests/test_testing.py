@@ -586,6 +586,21 @@ def test_a_build_that_fails_leaves_nothing_behind(repo_templates: RepoTemplates)
             repo_templates.build("fails", fails)
 
 
+def test_a_fake_gits_read_only_one_refuses_what_writes_and_records_what_it_runs() -> None:
+    git = FakeGit()
+    git.respond([])
+    reader = git.read_only()
+
+    reader.run("log", "-1")
+    with pytest.raises(ReadOnlyError):
+        reader.run("commit", "-m", "x")
+    with pytest.raises(ReadOnlyError):
+        reader.run("log", env={"GIT_DIR": "elsewhere"})
+    git.run("commit", "-m", "x")  # the fake itself still runs anything
+
+    assert git.commands == [["log", "-1"], ["commit", "-m", "x"]]
+
+
 def test_fake_git_answers_from_its_responses_and_records_each_command() -> None:
     git = FakeGit()
     git.respond(["rev-parse", "--abbrev-ref"], stdout="main\n")

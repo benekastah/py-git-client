@@ -6,6 +6,7 @@ import pytest
 from git_client import (
     Git,
     GitError,
+    ReadOnlyError,
     RefUpdate,
     config,
     config_key,
@@ -18,7 +19,7 @@ from git_client import (
     refs,
     update_refs,
 )
-from git_client.testing import FakeGit
+from git_client.testing import FakeGit, GitCall
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -257,6 +258,95 @@ def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
     repo.run("config", key, value)
 
     assert patch_ids(repo, *TOPIC) == expected
+
+
+def test_patch_ids_reads_a_diff_of_two_revisions_with_diff_tree(
+    repo_from: RepoFrom, git_calls: list[GitCall]
+) -> None:
+    repo = topic_changing(repo_from, "b")
+    (Path(repo.directory) / "b").write_bytes(b"in the worktree\n")
+
+    # Which a ReadOnlyGit runs, and which doesn't write the index.
+    log, diff = patch_ids(repo.read_only(), *TOPIC)
+    started = len(git_calls)
+    [worktree] = patch_ids(repo, ["diff", "topic"])
+
+    assert diff == [(log[0][0], "0" * 40)]
+    assert [call[0] for call in git_calls[:started]] == [
+        "rev-parse",
+        "log",
+        "diff-tree",
+        "patch-id",
+    ]
+    assert git_calls[started][0] == "diff"
+    assert worktree and worktree[0][0] != log[0][0]
+
+
+@pytest.mark.parametrize("command", [["diff", "-S", "b", "main"], ["diff", "main"]])
+def test_patch_ids_runs_any_other_diff_as_diff(
+    repo_from: RepoFrom, git_calls: list[GitCall], command: list[str]
+) -> None:
+    # Each compares the worktree: the value of an option isn't a second revision.
+    repo = topic_changing(repo_from, "b")
+
+    patch_ids(repo, command)
+
+    assert git_calls[-2][0] == "diff"
+
+
+def renaming_topic(repo_from: RepoFrom) -> Git:
+    """A repository whose topic renames a file and changes it: lines that myers and histogram
+    diff differently, and two changes 8 lines apart, which git's default context keeps in
+    hunks of their own, but diff.context or diff.interHunkContext doesn't (see TOPIC)."""
+
+    def change(repo: Git) -> None:
+        directory = Path(repo.directory)
+        (directory / "old").write_bytes(b"b\na\n{\na\n}\n}\n}\n}\nx\ny\nz\n1\n2\n3\n4\n5\nq\n")
+        repo.run("add", "old")
+        repo.run("commit", "--quiet", "-m", "add old")
+        repo.run("switch", "--quiet", "-c", "topic")
+        repo.run("mv", "old", "new")
+        (directory / "new").write_bytes(b"}\nb\na\n{\n}\n}\na\n}\n}\nx\ny\nz\n1\n2\n3\n4\n5\nQ\n")
+        repo.run("commit", "--quiet", "-am", "rename old")
+
+    return repo_from("renaming-topic", change)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("diff.renames", "false"),
+        ("diff.context", "1"),
+        ("diff.algorithm", "histogram"),
+        ("diff.interHunkContext", "10"),
+    ],
+)
+def test_patch_ids_gives_a_diff_and_a_log_the_same_ids_whatever_the_config_says(
+    repo_from: RepoFrom, key: str, value: str
+) -> None:
+    repo = renaming_topic(repo_from)
+    expected = patch_ids(repo, *TOPIC)
+    repo.run("config", key, value)
+
+    [log], [diff] = patch_ids(repo, *TOPIC)
+
+    assert [log, diff] == [patch for [patch] in expected]
+    assert diff == (log[0], "0" * 40)
+
+
+def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(
+    repo_from: RepoFrom, git_calls: list[GitCall]
+) -> None:
+    # diff-tree takes only trees and commits.
+    repo = topic_changing(repo_from, "b")
+    blobs = ["diff", "main:b", "topic:b"]
+
+    [[(patch_id, _)]] = patch_ids(repo, blobs)
+
+    assert git_calls[-2][0] == "diff"
+    assert patch_id == patch_ids(repo, TOPIC[0])[0][0][0]
+    with pytest.raises(ReadOnlyError):
+        patch_ids(repo.read_only(), blobs)
 
 
 def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:

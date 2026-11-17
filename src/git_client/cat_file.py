@@ -32,10 +32,12 @@ from git_client.client import (
 )
 from git_client.errors import (
     CORRUPT_OBJECT,
+    MISSING_OBJECT,
     WRONG_TYPE,
     CorruptObjectError,
     GitError,
     GitTimeoutError,
+    MissingObjectError,
     UnknownRevisionError,
     WrongTypeError,
 )
@@ -151,7 +153,8 @@ class CatFile:
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
         --verify` would find it, with what git warned of it, or None if it names nothing (or
-        is ambiguous)."""
+        is ambiguous). Raises MissingObjectError for an object a partial clone couldn't fetch
+        (from a Git: a ReadOnlyGit's gives None)."""
         line = batch_line(name)
         if line is None:
             return None
@@ -190,9 +193,10 @@ class CatFile:
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
         ("blob", "commit", "tag" or "tree"), the object must be of that type, or peel to one
         as `<id>^{<type>}` does (e.g. a commit to its tree): else it raises WrongTypeError.
-        Raises UnknownRevisionError if there's no such object, CorruptObjectError if it's
-        damaged, and GitError if git stops partway through it, or can't read it at all (see
-        CatFile)."""
+        Raises UnknownRevisionError if there's no such object (or a ReadOnlyGit's partial
+        clone lacks it), MissingObjectError if a Git's couldn't fetch it, CorruptObjectError
+        if it's damaged, and GitError if git stops partway through it, or can't read it at
+        all (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         if type is not None and type not in _TYPES:
@@ -373,9 +377,12 @@ def _said(stderr: IO[bytes]) -> str:
 
 def _check_intact(reason: str, returncode: int) -> None:
     """Raise CorruptObjectError if what cat-file said of a request, `reason`, is that an object
-    it read is damaged: then it can't tell what the name names."""
+    it read is damaged, and MissingObjectError if it's that a partial clone couldn't fetch it:
+    then it can't tell what the name names."""
     if CORRUPT_OBJECT.search(reason):
         raise CorruptObjectError(_COMMAND, returncode, reason)
+    if MISSING_OBJECT.search(reason):
+        raise MissingObjectError(_COMMAND, returncode, reason)
 
 
 def _failure(name: str, said: str, *, exited: bool) -> GitError:

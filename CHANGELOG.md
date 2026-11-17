@@ -36,6 +36,28 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   it waited as long as it took. Its `stderr` is what git said of the request, and a note
   names the request. A tool whose requests may take longer gives its CatFile a client with a
   longer timeout, or none (#53).
+- `patch_ids` runs a `diff` of two revisions (two arguments before `--`, no options, and no
+  `:`, so not blobs) as `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no
+  index: a `FakeGit` answering it responds to `diff-tree`, and a path given as the second
+  argument, without `--`, is taken as a revision (#55).
+- `patch_ids` runs every command with `-M -U3 --inter-hunk-context=0 --diff-algorithm=myers`, so
+  a diff and a log give a change the same id whatever `diff.renames`, `diff.context`,
+  `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones
+  git gives by default (#55).
+- `RefSnapshot` keeps what it read past `remote -v`, and past the `git config` reads a
+  `ReadOnlyGit` now runs (#55).
+- A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to run
+  from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose driver
+  has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own diff;
+  every command but `config` runs with `-c core.fsmonitor=false -c diff.submodule=short`, so
+  whatever a repository's `diff.submodule` (`log` or `diff`) says, `log -p` and `show` show a
+  submodule's change as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`,
+  `--ext-diff` and `--submodule=diff`; a tool that needs them uses a `Git` (#55).
+- An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
+  `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor
+  remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
+  from `resolve` and `CatFile`. A tool that catches `RemoteError` around a partial clone's
+  commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
@@ -62,6 +84,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
+  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
+- `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
+  client's own class (a subclass's `process` still runs), sharing what git told the client
+  about where things are, for a tool's paths that never write (#55).
+- `FakeGit().read_only()` refuses what a `ReadOnlyGit` refuses, while sharing the fake's
+  responses and `calls`, so a unit test can check that code stays read-only (#55).
+- A `ReadOnlyGit` runs more reads: `config` with options before its action (`--global`,
+  `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
+  --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`
+  (#55).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).
