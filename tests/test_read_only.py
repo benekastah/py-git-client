@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +69,6 @@ def stale(repo: Git) -> Path:
         ("ls-tree", "HEAD"),
         ("merge-base", "HEAD", "HEAD"),
         ("name-rev", "HEAD"),
-        ("range-diff", "HEAD..HEAD", "HEAD..HEAD"),
         ("rev-list", "HEAD"),
         ("rev-parse", "HEAD"),
         ("shortlog", "-s", "HEAD"),
@@ -177,6 +177,16 @@ def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
         ("remote", "add", "upstream", "url"),
         ("remote", "set-url", "origin", "url"),
         ("ls-remote", "."),  # may run credential helpers, which store what they're told
+        # Each writes a textconv's cache (see test_a_read_only_client_caches_no_textconv).
+        ("cat-file", "--textconv", "HEAD:a"),
+        ("cat-file", "--batch", "--textc"),
+        ("diff-tree", "-p", "--textconv", "HEAD"),
+        ("log", "-p", "--textconv"),
+        ("status", "-v"),
+        ("status", "-sv"),
+        ("status", "--verb"),
+        ("range-diff", "HEAD~1..HEAD", "HEAD~1..HEAD"),  # its log takes no --no-textconv
+        ("log", "-p", "--ext-diff"),  # runs GIT_EXTERNAL_DIFF, or a diff driver's command
     ],
 )
 def test_a_read_only_client_refuses_any_other_command_without_starting_git(
@@ -337,3 +347,104 @@ def test_a_subclass_read_only_one_keeps_its_methods(repo: Git) -> None:
     assert git.log == ["rev-parse"]  # its own attributes too, shared with the client's
     with pytest.raises(ReadOnlyError):
         reader.run("commit", "--allow-empty", "-m", "x")
+
+
+def python_command(script: Path, *args: Path) -> str:
+    """A command line for git to run through its shell: `script`, with Python."""
+    return " ".join(f'"{path.as_posix()}"' for path in (Path(sys.executable), script, *args))
+
+
+@pytest.fixture
+def textconv_cached(repo: Git, tmp_path: Path) -> Path:
+    """repo with a second commit, changing `a`, whose diff driver has a textconv that git
+    caches (in refs/notes/textconv/upper), as `diff.<driver>.cachetextconv` asks."""
+    directory = Path(repo.directory)
+    (directory / "a").write_bytes(b"b\n")
+    repo.run("commit", "--quiet", "-am", "second")
+    (directory / ".git" / "info" / "attributes").write_text("a diff=upper\n", encoding="utf-8")
+    script = tmp_path / "upper.py"
+    script.write_text(
+        "import sys\nsys.stdout.buffer.write(open(sys.argv[1], 'rb').read().upper())\n",
+        encoding="utf-8",
+    )
+    repo.run("config", "diff.upper.textconv", python_command(script))
+    repo.run("config", "diff.upper.cachetextconv", "true")
+    return directory
+
+
+@pytest.mark.parametrize("args", [("log", "-p"), ("show",), ("blame", "a")])
+def test_a_read_only_client_caches_no_textconv(
+    textconv_cached: Path, args: tuple[str, ...]
+) -> None:
+    before = files(textconv_cached)
+
+    output = ReadOnlyGit(textconv_cached).run(*args)
+
+    assert files(textconv_cached) == before
+    assert "B" not in output  # git's own text, not the textconv's
+    Git(textconv_cached).run(*args)  # which caches it
+    assert Git(textconv_cached).run("for-each-ref", "refs/notes/textconv/")
+
+
+@pytest.fixture
+def fsmonitor(repo: Git, tmp_path: Path) -> Path:
+    """repo with a core.fsmonitor hook, a program that git runs to ask what changed (which
+    could write anything): it makes the file this returns, and says everything may have."""
+    ran = tmp_path / "fsmonitor-ran"
+    script = tmp_path / "fsmonitor.py"
+    script.write_text(
+        "import sys\nopen(sys.argv[1], 'w').close()\nsys.stdout.write('\\0/\\0')\n",
+        encoding="utf-8",
+    )
+    repo.run("config", "core.fsmonitor", python_command(script, ran))
+    return ran
+
+
+def test_a_read_only_client_runs_no_fsmonitor(repo: Git, fsmonitor: Path) -> None:
+    ReadOnlyGit(repo.directory).run("status")
+    assert not fsmonitor.exists()
+
+    Git(repo.directory).run("status")
+    assert fsmonitor.exists()
+
+
+def test_a_read_only_client_runs_no_fsmonitor_its_environment_sets(
+    repo: Git, fsmonitor: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command = Git(repo.directory).run("config", "core.fsmonitor")
+    Git(repo.directory).run("config", "--unset", "core.fsmonitor")
+    # As `git -c core.fsmonitor=... my-tool` would give it.
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", f"'core.fsmonitor'='{command}'")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", command)
+
+    ReadOnlyGit(repo.directory).run("status")
+
+    assert not fsmonitor.exists()
+
+
+def test_a_read_only_client_runs_no_external_diff_its_environment_names(
+    textconv_cached: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran = tmp_path / "external-diff-ran"
+    script = tmp_path / "external.py"
+    script.write_text("import sys\nopen(sys.argv[1], 'w').close()\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", python_command(script, ran))
+    git = ReadOnlyGit(textconv_cached)
+
+    for args in [
+        ("log", "-p"),
+        ("show",),
+        ("diff-tree", "-p", "HEAD"),
+        ("diff-index", "-p", "HEAD~1"),
+    ]:
+        git.run(*args)
+
+    assert not ran.exists()
+    Git(textconv_cached).run("log", "-p", "--ext-diff")  # which runs it
+    assert ran.exists()
+
+
+def test_a_read_only_clients_config_reads_have_none_of_its_own(repo: Git) -> None:
+    assert ReadOnlyGit(repo.directory).run("config", "--list") == repo.run("config", "--list")

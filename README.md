@@ -211,7 +211,9 @@ ran, e.g. its hooks), and is counted once it ends; a long-lived process (`popen`
 starts. `FakeGit`'s commands are counted too.
 
 It doesn't see changes made any other way: by another process (the user, another tool, a
-git the tool starts itself), or by a long-lived process after it starts. So keep one for no
+git the tool starts itself), or by a long-lived process after it starts; nor a textconv's
+cache (`refs/notes/textconv/`), which a `Git`'s `log`, `show`, `blame`, `range-diff` or
+`status -v` may write (a `ReadOnlyGit`'s don't). So keep one for no
 longer than one of the tool's operations (under its lock, if it has one), and make a new one
 to read afresh. `get` can be called from several threads; what a read that a change
 overlapped gave isn't kept.
@@ -251,25 +253,41 @@ refs(git.read_only(), "refs/heads/")
 
 It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
 `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`,
-`ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`, `rev-list`,
-`rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
-reads (`--get`, `--list`, `get`, ...) or a lone key, after options that say which files it
-reads and how it gives values (`--global`, `-f <file>`, `--type=bool`, `--default <value>`,
-`-z`, ...), `branch --show-current`, `symbolic-ref` naming one ref (`--quiet`, `--short`),
-`remote` (`-v`), `remote get-url` and `worktree list`. It doesn't run `diff`, which writes
-the index when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't;
-`patch_ids` runs a diff of two revisions as `diff-tree -p`), nor `ls-remote`, which runs ssh
-or credential helpers that may store what they're given, or take options that write:
-`--output`, and describe's `--dirty` and `--broken`. It checks every argument, after `--` too
-(which can be another option's value), and `config`'s action must come first. Of git's options before the command, it takes only those that name no
+`ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`, `rev-parse`,
+`shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that reads (`--get`,
+`--list`, `get`, ...) or a lone key, after options that say which files it reads and how it
+gives values (`--global`, `-f <file>`, `--type=bool`, `--default <value>`, `-z`, ...),
+`branch --show-current`, `symbolic-ref` naming one ref (`--quiet`, `--short`), `remote`
+(`-v`), `remote get-url` and `worktree list`. It doesn't run `diff`, which writes the index
+when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't; `patch_ids`
+runs a diff of two revisions as `diff-tree -p`), `range-diff`, whose log runs a textconv
+whatever it's told, nor `ls-remote`, which runs ssh or credential helpers that may store what
+they're given. It doesn't take options that write: `--output`, describe's `--dirty` and
+`--broken`, `--textconv` and status's `-v` (a textconv's cache), and `--ext-diff`. It checks
+every argument, after `--` too (which can be another option's value), and `config`'s action
+must come first. Of git's options before the command, it takes only those that name no
 config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
-locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`). In a partial clone,
-it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.45 ignores, but
-for the security releases 2.39.4 to 2.44.1).
+locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`).
 
-That covers what the tool asks git to do. What the repository's config tells git to run can
-still write (e.g. a diff driver's textconv with `cachetextconv`, a filter such as git-lfs's,
-or `core.fsmonitor`), as can what the tool's own environment gives git.
+What it runs, it runs so that what the repository's config or the tool's environment tells
+git to run doesn't write:
+
+- `log`, `show` and `blame` get `--no-textconv`: a diff driver's textconv with
+  `cachetextconv` writes its cache (`refs/notes/textconv/<driver>`). They show git's own diff
+  of a file a textconv would show otherwise.
+- Every command but `config` gets `-c core.fsmonitor=false`, which wins over the config git
+  inherits too, so no `core.fsmonitor` hook runs.
+- `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
+- `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
+  2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs
+  one fails.
+
+What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --filters`, or its
+clean, which `status` runs on a file whose stat information changed), gpg (`log
+--show-signature`, or `log.showSignature`), and, through `passthrough`, the pager. The rest of
+the tool's environment reaches git as it is: `GIT_DIR` (which a `Git` follows too),
+`GIT_TRACE*` (which write where they name), and config from `GIT_CONFIG_PARAMETERS` or
+`GIT_CONFIG_COUNT`, which can't get past the above.
 
 ### Errors
 

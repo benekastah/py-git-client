@@ -22,7 +22,6 @@ READING_COMMANDS = frozenset(
         "merge-base",
         "name-rev",
         "patch-id",
-        "range-diff",
         "rev-list",
         "rev-parse",
         "shortlog",
@@ -32,10 +31,11 @@ READING_COMMANDS = frozenset(
         "var",
     }
 )
-"""The commands that read whatever their arguments, but for options that write a file or the
-index (see client.py's _WRITING_OPTIONS). Not porcelain diff, which writes the index whatever
-GIT_OPTIONAL_LOCKS says when it compares the worktree: its plumbing (diff-files, diff-index,
-diff-tree) doesn't."""
+"""The commands that read whatever their arguments, but for options that write (see client.py's
+_WRITING_OPTIONS). Not porcelain diff, which writes the index whatever GIT_OPTIONAL_LOCKS says
+when it compares the worktree: its plumbing (diff-files, diff-index, diff-tree) doesn't. Not
+range-diff, whose log runs a textconv, and caches it if the driver says to, whatever its
+options."""
 
 # `git symbolic-ref`'s options that a read may have.
 _SYMBOLIC_REF_READ_OPTIONS = frozenset({"-q", "--quiet", "--short", "--recurse", "--no-recurse"})

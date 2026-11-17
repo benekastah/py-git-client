@@ -284,11 +284,31 @@ class ReadOnlyError(ValueError):
     """A ReadOnlyGit refused a command, or an environment for one, that could write."""
 
 
-# Options that make a command in READING_COMMANDS write: a file (--output), or the index
-# (describe's --dirty and --broken, whatever GIT_OPTIONAL_LOCKS says). Most commands (not log's
-# or diff's options) take an unambiguous abbreviation of a long option (e.g. describe's
-# --dirt), so those are refused too.
-_WRITING_OPTIONS = ("--output", "--output-directory", "--dirty", "--broken")
+# Options that make a command in READING_COMMANDS write: a file (--output), the index
+# (describe's --dirty and --broken, whatever GIT_OPTIONAL_LOCKS says), or what git or a program
+# it runs likes: a textconv's cache, in refs/notes/textconv/<driver>, which a driver's
+# cachetextconv asks for (--textconv), or an external diff (--ext-diff: GIT_EXTERNAL_DIFF, or a
+# driver's command). Most commands (not log's or diff's options) take an unambiguous
+# abbreviation of a long option (e.g. describe's --dirt), so those are refused too.
+_WRITING_OPTIONS = (
+    "--output",
+    "--output-directory",
+    "--dirty",
+    "--broken",
+    "--textconv",
+    "--ext-diff",
+)
+
+# What git takes as an abbreviation of one of _WRITING_OPTIONS but is an option of its own.
+_NOT_WRITING_OPTIONS = frozenset({"--text"})
+
+# The commands that run a diff driver's textconv unless told not to; a ReadOnlyGit tells them.
+_TEXTCONV_COMMANDS = frozenset({"log", "show", "blame"})
+
+# What a ReadOnlyGit gives git before any command but config (whose output it would join):
+# config that the repository's, or the tool's environment's, can't override (ours comes last),
+# so git runs no core.fsmonitor hook, a program that could write anything.
+_READ_ONLY_CONFIG = ("-c", "core.fsmonitor=false")
 
 # What git's options before the command may be: none that names another config (-c),
 # repository or program.
@@ -333,8 +353,21 @@ _READING_ENVIRONMENT = frozenset(
 _READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
 
 
-def _refuse_writes(args: Sequence[Arg]) -> None:
-    """Raise ReadOnlyError unless `args` are a command a ReadOnlyGit runs."""
+def _read_only_args(args: Sequence[Arg]) -> list[Arg]:
+    """`args` as a ReadOnlyGit runs them: with _READ_ONLY_CONFIG, and for a command that
+    would run a textconv, `--no-textconv`. Raises ReadOnlyError unless they're a command a
+    ReadOnlyGit runs."""
+    start = _refuse_writes(args)
+    command = os.fsdecode(args[start])
+    if command == "config":
+        return list(args)
+    no_textconv: list[Arg] = ["--no-textconv"] if command in _TEXTCONV_COMMANDS else []
+    return [*_READ_ONLY_CONFIG, *args[: start + 1], *no_textconv, *args[start + 1 :]]
+
+
+def _refuse_writes(args: Sequence[Arg]) -> int:
+    """Raise ReadOnlyError unless `args` are a command a ReadOnlyGit runs; else return where
+    the command is in them."""
     texts = [os.fsdecode(arg) for arg in args]
     start = 0
     while start < len(texts) and texts[start].startswith("-"):
@@ -349,8 +382,16 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
     if command not in READING_COMMANDS and not reading_form(command, rest):
         raise ReadOnlyError(f"ReadOnlyGit runs only commands that read, not git {texts}")
     for arg in rest:
-        if any(names(arg, option) for option in _WRITING_OPTIONS):
+        if arg not in _NOT_WRITING_OPTIONS and any(
+            names(arg, option) for option in _WRITING_OPTIONS
+        ):
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
+        # status -v shows the index's diff through a textconv, which caches it; even bundled
+        # with other short options (-sv), none of which holds a "v".
+        short = arg.startswith("-") and not arg.startswith("--")
+        if command == "status" and (names(arg, "--verbose") or short and "v" in arg):
+            raise ReadOnlyError(f"ReadOnlyGit doesn't take status {arg}: it writes")
+    return start
 
 
 type Location = tuple[str, tuple[tuple[str, EnvValue], ...]]
@@ -423,26 +464,37 @@ class ReadOnlyGit:
 
     It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
     `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`,
-    `log`, `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `range-diff`,
-    `rev-list`, `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with
-    an action that reads (e.g. `--get`, `--list`, `get`) or a lone key, after options that
-    say which files it reads and how it gives values (e.g. `--global`, `-f <file>`,
-    `--type=bool`, `--default <value>`), `branch --show-current`, `symbolic-ref` naming one
-    ref (`--quiet`, `--short`), `remote` (`-v`) and `remote get-url`, and `worktree list`;
-    git's options before them only if they name no config, repository or program (e.g.
-    `--no-pager`, not `-c`); and no `--output`, nor describe's `--dirty` or `--broken`, which
-    write the index. Not `diff`, which writes the index when it compares the worktree:
-    `diff-index`, `diff-files` and `diff-tree` don't. Not `ls-remote`, which runs ssh or
-    credential helpers, which may store what they're given. Each argument is checked,
-    wherever it is (after `--` too), and config's action must come first. Git gets GIT_OPTIONAL_LOCKS=0, so `status`
-    doesn't write the index either, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing
-    object isn't fetched (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it).
-    `env` (the client's or a command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ,
-    and which index and paths git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
+    `log`, `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`,
+    `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
+    reads (e.g. `--get`, `--list`, `get`) or a lone key, after options that say which files
+    it reads and how it gives values (e.g. `--global`, `-f <file>`, `--type=bool`,
+    `--default <value>`), `branch --show-current`, `symbolic-ref` naming one ref (`--quiet`,
+    `--short`), `remote` (`-v`) and `remote get-url`, and `worktree list`; git's options
+    before them only if they name no config, repository or program (e.g. `--no-pager`, not
+    `-c`); and none of the options that write: `--output`, describe's `--dirty` and
+    `--broken` (the index), `--textconv` and status's `-v` (a textconv's cache), and
+    `--ext-diff` (which runs a program). Not `diff`, which writes the index when it compares
+    the worktree: `diff-index`, `diff-files` and `diff-tree` don't. Not `range-diff`, whose
+    log runs a textconv whatever it's told. Not `ls-remote`, which runs ssh or credential
+    helpers, which may store what they're given. Each argument is checked, wherever it is
+    (after `--` too), and config's action must come first. `env` (the client's or a
+    command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ, and which index and paths
+    git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
 
-    That's what the tool asks for. What the repository's config tells git to run can still
-    write (e.g. a diff driver's textconv with cachetextconv, a filter like git-lfs's, or
-    core.fsmonitor), as can what the tool's own environment gives git.
+    What it runs, it runs so that what the repository's config, or the tool's environment,
+    tells git to run doesn't write: `log`, `show` and `blame` get `--no-textconv` (a textconv
+    whose driver has cachetextconv writes its cache, refs/notes/textconv/<driver>), so they
+    show git's own diff of a file a textconv would show otherwise; every command but `config`
+    gets `-c core.fsmonitor=false`, which wins over the config git inherits too, so no
+    core.fsmonitor hook runs; and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
+    the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
+    (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
+    fails. What git still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
+    --filters`, or its clean, which `status` runs on a file whose stat information changed),
+    gpg (`log --show-signature`, or log.showSignature), and, through `passthrough`, the
+    pager. The rest of the tool's environment reaches git as it is: GIT_DIR (which `Git`
+    follows too), GIT_TRACE* (which write where they name), and config from
+    GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, which can't get past the above.
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
@@ -596,7 +648,7 @@ class ReadOnlyGit:
         a name that isn't ASCII), and paths in the filesystem's encoding. Raises ReadOnlyError
         for a command a ReadOnlyGit doesn't run."""
         if self._read_only:
-            _refuse_writes(args)
+            args = tuple(_read_only_args(args))
         if sys.platform == "win32":
             return [self.program, "-C", self.directory, *map(os.fsdecode, args)]
         return [

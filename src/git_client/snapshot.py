@@ -25,6 +25,8 @@ _KEEPING_REFS = frozenset(
         "merge-file",
         "merge-tree",
         "mktree",
+        # It writes only a textconv's cache (refs/notes/textconv/), as log and show can.
+        "range-diff",
         "read-tree",
         "update-index",
         "write-tree",
@@ -115,8 +117,10 @@ class RefSnapshot[T]:
     an alias or a command that failed included, as may what it runs (e.g. its hooks).
 
     Changes it doesn't see: those made by anything but this process's clients (another
-    process, the user, a git that a tool starts some other way), and those a long-lived
-    process (`popen`) makes after it starts, which is when it's counted. So keep a snapshot
+    process, the user, a git that a tool starts some other way), those a long-lived process
+    (`popen`) makes after it starts, which is when it's counted, and a textconv's cache
+    (refs/notes/textconv/), which a `Git`'s log, show, blame, range-diff or `status -v` may
+    write (a ReadOnlyGit's don't). So keep a snapshot
     for no longer than one of the tool's operations, under the tool's lock if it has one, and
     make a new one to read afresh. Every client's commands count, whichever repository they
     run in: a command in another repository costs a read, but one in a worktree of the same
