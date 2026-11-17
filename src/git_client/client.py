@@ -595,19 +595,19 @@ class ReadOnlyGit:
             if not asking:
                 known.wait()
                 continue  # its answer, or (if it failed) ask again
+            length: int | None = None
             try:
                 sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
-            except BaseException:
+                length = 64 if sha256 else 40
+                return length
+            finally:
+                # Whatever stops it (e.g. KeyboardInterrupt), so no waiter waits for good.
                 with _lengths_lock:
-                    if self._object_id_lengths.get(key) is known:
+                    if length is not None:
+                        self._object_id_lengths[key] = length
+                    elif self._object_id_lengths.get(key) is known:
                         del self._object_id_lengths[key]
                 known.set()
-                raise
-            length = 64 if sha256 else 40
-            with _lengths_lock:
-                self._object_id_lengths[key] = length
-            known.set()
-            return length
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
