@@ -311,11 +311,6 @@ def _stdin(input: bytes | None, capture_output: bool) -> int | None:
     return subprocess.DEVNULL if capture_output else None
 
 
-# os.environ's own dict, which _environments compares with what it saw last to notice a
-# change; None where Python keeps it elsewhere, and the environment is then built anew for
-# every command.
-_ENVIRON_DATA: Mapping[object, object] | None = getattr(os.environ, "_data", None)
-
 # How many environments _environments keeps at most: one per mix of what a command adds.
 _MOST_ENVIRONMENTS = 64
 
@@ -334,11 +329,14 @@ class _Environments:
     def get(self, key: object, build: Callable[[], dict[str, str]]) -> dict[str, str]:
         """The environment for `key`, built with `build` from os.environ unless one was
         already, since os.environ last changed. It's shared: don't change it."""
+        # os.environ's own dict, looked up each time, as os.environ can be replaced (e.g. by
+        # mock.patch); not there (e.g. a plain dict in its place): built anew every time.
+        data: Mapping[object, object] | None = getattr(os.environ, "_data", None)
         with self._lock:
-            if _ENVIRON_DATA is None:
+            if data is None:
                 return build()
-            if self._seen != _ENVIRON_DATA:
-                self._seen = dict(_ENVIRON_DATA)
+            if self._seen != data:
+                self._seen = dict(data)
                 self._built.clear()
             if key not in self._built:
                 if len(self._built) >= _MOST_ENVIRONMENTS:

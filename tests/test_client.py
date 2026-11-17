@@ -514,6 +514,19 @@ def test_each_command_gets_the_environment_as_it_is_then(
     assert names[0] not in ("Ours", "The client's")
 
 
+def test_each_command_gets_the_environment_of_an_os_environ_put_in_its_place(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As mock.patch("os.environ", {...}) does.
+    environ = {**os.environ, "GIT_AUTHOR_NAME": "First"}
+    monkeypatch.setattr(os, "environ", environ)
+    names = [repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0]]
+    environ["GIT_AUTHOR_NAME"] = "Second"
+    names.append(repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0])
+
+    assert names == ["First", "Second"]
+
+
 def test_text_reaches_git_as_utf8(repo: Git) -> None:
     repo.run(
         "commit", "--quiet", "--allow-empty", "-m", "Zoë 张", env={"GIT_AUTHOR_NAME": "Zoë 张"}
