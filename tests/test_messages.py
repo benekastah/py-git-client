@@ -32,7 +32,8 @@ def test_a_kind_of_message_matches_what_any_language_says(tmp_path: Path) -> Non
         ("conflict = ['(?u)x']", "conflict: '\\(\\?u\\)x': global flags not at the start"),
         ("conflict = ['']", "conflict: '': matches any message"),
         ("conflict = ['x?']", "conflict: 'x\\?': matches any message"),
-        ("conflict = ['(?P<n>a)']", "conflict: '\\(\\?P<n>a\\)': names a group"),
+        ("conflict = ['(?P<n>a)']", "conflict: '\\(\\?P<n>a\\)': has a capturing group"),
+        ("conflict = ['(x)\\1']", "conflict: '\\(x\\)\\\\\\\\1': has a capturing group"),
         ("conflict = ['x'", "isn't TOML"),
     ],
 )

@@ -27,8 +27,8 @@ def load(files: Iterable[Path]) -> dict[str, re.Pattern[str]]:
     matches what any of them says. Raises ValueError, naming the file, for one that isn't
     TOML, names another kind, or gives one that isn't a list of patterns, each a regular
     expression of its own (not, say, `a)|(b`, nor one with a flag such as `(?i)` for all of
-    it: `(?i:...)` sets one for a part) that doesn't match an empty message and names no
-    group."""
+    it: `(?i:...)` sets one for a part) that doesn't match an empty message and has no
+    capturing group."""
     said: dict[str, list[str]] = {}
     for file in files:
         for kind, patterns in _read(file).items():
@@ -68,8 +68,9 @@ def _check(file: Path, kind: str, pattern: str) -> None:
     else:
         if compiled.search(""):
             problem = "matches any message"
-        elif compiled.groupindex:
-            problem = "names a group, which another pattern may name too"
+        elif compiled.groups:
+            # Which joining the patterns renumbers (so \1 would mean another's), or names twice.
+            problem = "has a capturing group: write (?:...)"
         else:
             return
     raise ValueError(f"{file.name}: {kind}: {pattern!r}: {problem}")

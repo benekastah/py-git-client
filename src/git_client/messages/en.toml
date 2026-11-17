@@ -7,7 +7,7 @@
 conflict = ['^CONFLICT \(']
 
 # The rest are on stderr (errors.py says in which order each GitError is tried).
-push_rejected = ['^ ! \[(remote )?rejected\]']
+push_rejected = ['^ ! \[(?:remote )?rejected\]']
 
 remote = [
     'Could not read from remote repository',
@@ -58,6 +58,6 @@ wrong_type = [
 # What `git var` says when no identity is set for the name or email it's asked for.
 no_identity = [
     'unable to auto-detect email address',
-    'no (email|name) was given and auto-detection is disabled',
+    'no (?:email|name) was given and auto-detection is disabled',
     'empty ident name \(for <.*>\) not allowed',
 ]
