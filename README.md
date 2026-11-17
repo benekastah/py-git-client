@@ -151,6 +151,10 @@ Any other failure is a plain `GitError`. `ok` raises them too, for any exit stat
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
 `passthrough` says whether git succeeded instead, but raises `GitTimeoutError` past a timeout.
 
+An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
+is git's exit status or, without one, `timed out` for a `GitTimeoutError` and `no exit status`
+otherwise (e.g. for a command a tool didn't run).
+
 ## Testing a tool that uses it
 
 `git_client.testing` is a pytest plugin. Load it in your top `conftest.py`

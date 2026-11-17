@@ -4,7 +4,7 @@ want to tell from the rest, chosen from what git said (in English: see Git.proce
 import os
 import re
 from collections.abc import Sequence
-from typing import Self
+from typing import ClassVar, Self
 
 # How much of a command line a GitError's message shows: a long one (thousands of paths, say)
 # would bury what git said.
@@ -13,12 +13,18 @@ MAX_COMMAND_IN_MESSAGE = 200
 
 class GitError(RuntimeError):
     """A git command failed. `command` is git's arguments, `returncode` its exit status (None
-    if it didn't exit: see GitTimeoutError), and `stderr` and `stdout` what it printed there
+    if it has none, e.g. a GitTimeoutError), and `stderr` and `stdout` what it printed there
     (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
-    one and failed). The message shows at most MAX_COMMAND_IN_MESSAGE characters of the
+    one and failed). The message's first line is `git <command> failed (<status>):`, the
+    status being the exit status or, without one, "timed out" for a GitTimeoutError and "no
+    exit status" otherwise (e.g. for a command a tool didn't run, saying why in `stderr`);
+    `stderr` follows. It shows at most MAX_COMMAND_IN_MESSAGE characters of the
     command line, ending with "…" when cut; `command` keeps all of it. It shows bytes that
     aren't UTF-8 (in a path, say) escaped, as `\xe9`, so it can be written anywhere;
     `command`, `stderr` and `stdout` keep them, as `decode` gives them."""
+
+    # What the message says in place of the exit status, when there's none.
+    _without_exit_status: ClassVar[str] = "no exit status"
 
     def __init__(
         self, args: Sequence[str | bytes], returncode: int | None, stderr: str, stdout: str = ""
@@ -30,7 +36,7 @@ class GitError(RuntimeError):
         line = " ".join(self.command)
         if len(line) > MAX_COMMAND_IN_MESSAGE:
             line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
-        status = "timed out" if returncode is None else returncode
+        status = self._without_exit_status if returncode is None else returncode
         super().__init__(_printable(f"git {line} failed ({status}):\n{stderr.strip()}"))
 
     def __reduce__(
@@ -56,6 +62,8 @@ def _printable(text: str) -> str:
 
 class GitTimeoutError(GitError):
     """git ran past its timeout (see Git), and was stopped. Its returncode is None."""
+
+    _without_exit_status: ClassVar[str] = "timed out"
 
 
 class NotARepositoryError(GitError):
