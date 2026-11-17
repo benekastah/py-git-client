@@ -36,6 +36,11 @@ the shape of the code or a rule here changes.
   next version (the release command opens that PR), so a change that could break git-stack,
   git-recommit or move-forward is simply released as the next patch version. PRs never change
   the version themselves.
+- **CHANGELOG.md** says what each version changes for a tool that uses the library. A PR adds
+  its change under the section of the version `main` carries (`## X.Y.Z (unreleased)`),
+  saying what a tool must change for it (e.g. an override's new signature). Before
+  `dev.py release`, a PR puts the date in place of "unreleased"; the release's PR to the next
+  version adds that version's section.
 - **Every git process starts through `ReadOnlyGit`** (`process`, or `popen` for one that
   answers requests; `Git` inherits both), so the way git is started stays the quickest each
   system allows, and a ReadOnlyGit refuses what could write. Never pass a working directory
