@@ -16,6 +16,8 @@ released, says "(unreleased)".
   exists"). A lock file git can't make for another reason (a missing directory, no
   permission), or a section's rename or removal under a held lock, is a plain `GitError`
   (#34).
+- A `Git` subclass that overrides `popen` takes its new `stderr` keyword and passes it on to
+  `super().popen`: CatFile reads git's reasons there (#32).
 
 ### Added
 
@@ -31,6 +33,9 @@ released, says "(unreleased)".
 - `patch_ids(..., paths_from_top=True)`, for paths as git reports them (#24).
 - Testing: `git_calls` records the program each process ran, and `FakeGit` takes `Git`'s
   keywords, so it can stand in for a tool's own `Git` subclass (#26).
+- `CatFile.verify(name)`: the id, or `UnknownRevisionError` with git's reason (e.g. no
+  upstream configured), without another process; and `CatFile.read(object_id, type)`, an
+  object of that type, peeled as `<id>^{type}` is, else a `GitError` (#32).
 
 ### Fixed
 
