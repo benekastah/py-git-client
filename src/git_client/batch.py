@@ -75,6 +75,8 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
     read, as `--format` names them without `%(...)` (e.g. "upstream:track",
     "committerdate:iso-strict", "push:remotename"), each of whose values must be one line.
+    Fields git translates are in the user's language (e.g. "committerdate:relative", and a
+    "format:" date's names follow LC_TIME); "upstream:track" and ":trackshort" aren't.
 
     For a branch's short name, ask for "refname:lstrip=2" (or "upstream:lstrip=2"), never
     ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git

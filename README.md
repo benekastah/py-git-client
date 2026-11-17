@@ -181,17 +181,19 @@ said and raises a subclass:
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
 | `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
 
-Any other failure is a plain `GitError`, and so is one git describes in a language the library
-has no file for: it reads git's messages, which are in the user's language. `var` then raises
-for a missing identity, rather than return None. What's read from exit statuses and
-cat-file's output rather than messages works in any language: whether `resolve` and
-`CatFile` find a name, and `ok`'s and `succeeds`' answers. `ok` raises them too, for any exit status but 0
-(True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
-`succeeds` and `passthrough` say whether git succeeded instead (exit status 0, not any
+Any other failure is a plain `GitError`. `ok` raises these errors too, for any exit status
+but 0 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the
+like). `succeeds` and `passthrough` say whether git succeeded instead (exit status 0, not any
 other). They still raise when git gives no answer: `GitTimeoutError` past a timeout, an
 `OSError` if git can't be started, and a `ReadOnlyGit`'s `ReadOnlyError` for a command it
 refuses. Use `succeeds` where any failure of git's means no, and `ok` where a failure other
 than git's no should be reported.
+
+The subclasses are read from git's messages, which are in the user's language. In a language
+the library has no file for, a failure is a plain `GitError`, and `var` raises for a missing
+identity rather than return None. Whether `resolve` and `CatFile` find a name, and `ok`'s and
+`succeeds`' answers, are read from exit statuses and cat-file's output, so they're the same
+in any language.
 
 An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
 is git's exit status or, without one, `timed out` for a `GitTimeoutError` and `no exit status`
