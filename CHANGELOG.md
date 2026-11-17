@@ -49,8 +49,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   run from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose
   driver has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own
   diff; every command but `config` runs with `-c core.fsmonitor=false -c
-  diff.submodule=short`, so a repository's `diff.submodule=diff` shows a submodule's change
-  as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`, `--ext-diff` and
+  diff.submodule=short`, so whatever a repository's `diff.submodule` (`log` or `diff`) says,
+  `log -p` and `show` show a submodule's change as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`, `--ext-diff` and
   `--submodule=diff`; a tool that needs them uses a `Git` (#55).
 - An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
   `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor

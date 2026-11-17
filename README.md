@@ -278,7 +278,8 @@ git to run doesn't write:
   of a file a textconv would show otherwise.
 - Every command but `config` gets `-c core.fsmonitor=false -c diff.submodule=short`, which
   win over the config git inherits too, so no `core.fsmonitor` hook runs, and
-  `diff.submodule` can't ask for a submodule's `git diff`.
+  `diff.submodule` can't ask for a submodule's `git diff`: `log -p` and `show` show a
+  submodule's change as its commits' ids, whatever `diff.submodule` (`log` or `diff`) says.
 - `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
 - `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
   2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs

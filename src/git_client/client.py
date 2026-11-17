@@ -500,7 +500,8 @@ class ReadOnlyGit:
     show git's own diff of a file a textconv would show otherwise; every command but `config`
     gets `-c core.fsmonitor=false -c diff.submodule=short`, which win over the config git
     inherits too, so no core.fsmonitor hook runs, and diff.submodule can't ask for a
-    submodule's `git diff`; and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
+    submodule's `git diff` (`log -p` and `show` show a submodule's change as its commits'
+    ids, whatever diff.submodule, `log` or `diff`, says); and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
     the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
     (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
     fails: most commands raise MissingObjectError, but cat-file says only that it's missing,
