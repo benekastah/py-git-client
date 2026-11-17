@@ -42,6 +42,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   which it found (#50).
 - `CorruptObjectError`, a `GitError` for an object git found damaged as it read it (#50).
 - `ObjectType`, the types `CatFile.read` takes, exported from `git_client` (#50).
+- `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
+  worktree's own, not the main one), read from its files without starting git (#50).
 - `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
   until a command that may change a ref or a branch's upstream runs through any `Git` (or
   `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands

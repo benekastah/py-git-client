@@ -17,6 +17,23 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
     (unlike git, it doesn't look in the directories above), or a `.git` file that names no
     git directory. It doesn't read git's variables (e.g. GIT_DIR, GIT_COMMON_DIR). Raises
     OSError if a file it needs can't be read (e.g. PermissionError)."""
+    found = _git_directories(directory)
+    return found[1].resolve() if found else None
+
+
+def git_dir(directory: str | os.PathLike[str]) -> Path | None:
+    """A checkout's own git directory (as `git rev-parse --absolute-git-dir` finds it), read
+    from the files, without starting git: the counterpart of `git_common_dir`, and the same
+    but for a linked worktree, whose own is the one its `.git` file names (its HEAD, index
+    and rebase state), not the main one. For a git directory, it; for a checkout whose `.git`
+    is a directory, that one. The path is absolute, with symbolic links resolved. None, and
+    OSError, where git_common_dir gives them."""
+    found = _git_directories(directory)
+    return found[0].resolve() if found else None
+
+
+def _git_directories(directory: str | os.PathLike[str]) -> tuple[Path, Path] | None:
+    """`directory`'s own git directory and its common one (see git_common_dir), or None."""
     top = Path(directory)
     dot_git = top / ".git"
     if dot_git.is_file():
@@ -30,7 +47,7 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
         own = top
     commondir = own / "commondir"
     common = own / os.fsdecode(_read_path(commondir)) if commondir.is_file() else own
-    return common.resolve() if _is_git_directory(own, common) else None
+    return (own, common) if _is_git_directory(own, common) else None
 
 
 def _read_path(file: Path) -> bytes:

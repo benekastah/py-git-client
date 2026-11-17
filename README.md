@@ -19,8 +19,8 @@ what git-stack, git-recommit and move-forward share for that:
   (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
-- **No process at all** to find a checkout's common git directory (`git_common_dir`), read
-  from its `.git` file or directory.
+- **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
+  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory.
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`).
@@ -44,6 +44,7 @@ from git_client import (
     config,
     config_key,
     git_common_dir,
+    git_dir,
     git_paths,
     hash_blob_at,
     hash_blobs,
@@ -97,6 +98,7 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).
 common = git_common_dir("path/to/repo")
+own = git_dir("path/to/repo")  # its own: a linked worktree's HEAD, index and rebase state
 
 # Blobs: as they are (no filters or line-ending conversion), written, with one process...
 [raw] = hash_blobs(git, [b"one\r\n"])

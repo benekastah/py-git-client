@@ -42,7 +42,7 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
-from git_client.paths import git_common_dir
+from git_client.paths import git_common_dir, git_dir
 from git_client.snapshot import RefSnapshot
 
 __all__ = [
@@ -77,6 +77,7 @@ __all__ = [
     "encode",
     "find_git",
     "git_common_dir",
+    "git_dir",
     "git_paths",
     "hash_blob_at",
     "hash_blobs",
