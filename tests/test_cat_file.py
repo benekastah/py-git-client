@@ -156,6 +156,23 @@ def test_what_git_says_as_it_starts_is_of_no_name(
     assert (raised.value.stderr, raised.value.reason) == ("fatal: bad revision 'nope'", "")
 
 
+def break_a_ref(git: Git) -> None:
+    """Make refs/heads/broken a ref file that holds no id, which git warns of and ignores."""
+    (Path(git.directory) / ".git" / "refs" / "heads" / "broken").write_text("garbage\n")
+
+
+def test_a_warning_is_no_reason(repo_from: Callable[[str, Callable[[Git], None]], Git]) -> None:
+    repo = repo_from("broken-ref", break_a_ref)
+
+    with CatFile(repo) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("broken")
+
+    assert raised.value.stderr == (
+        "warning: ignoring broken ref refs/heads/broken\nfatal: bad revision 'broken'"
+    )
+    assert raised.value.reason == ""
+
+
 def test_verify_gives_only_what_git_said_of_that_name(
     repo_from: Callable[[str, Callable[[Git], None]], Git],
 ) -> None:

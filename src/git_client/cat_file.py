@@ -168,9 +168,9 @@ class CatFile:
     def verify(self, name: str) -> str:
         """The id of the object `name` names, as `resolve` finds it. If it names nothing,
         raises UnknownRevisionError, whose `reason` is git's (e.g. "fatal: no upstream
-        configured for branch 'main'"), or "" if it gave none (cat-file says only "<name>
-        missing" of most names): its `stderr` is then rev-parse's "fatal: bad revision
-        '<name>'". If it names an object of the wrong type (e.g. `<tree>^{commit}`), it raises
+        configured for branch 'main'"), without its warnings and hints, or "" if it gave none
+        (cat-file says only "<name> missing" of most names): its `stderr` then ends with
+        rev-parse's "fatal: bad revision '<name>'". If it names an object of the wrong type (e.g. `<tree>^{commit}`), it raises
         WrongTypeError, saying so. It takes no process of its own to find the reason:
         cat-file's own messages give it."""
         line = batch_line(name)
@@ -358,18 +358,27 @@ def _check_intact(reason: str, returncode: int) -> None:
         raise CorruptObjectError(_COMMAND, returncode, reason)
 
 
-def _failure(name: str, reason: str, *, exited: bool) -> GitError:
-    """The error for `name`, which cat-file found nothing for, saying `reason` on stderr
+def _failure(name: str, said: str, *, exited: bool) -> GitError:
+    """The error for `name`, which cat-file found nothing for, having `said` that on stderr
     (empty if it said nothing, or its stderr didn't reach the file, as from a popen that
-    doesn't pass it on), and whether it `exited` rather than answer. Without a reason, it
-    says the name names nothing in rev-parse's words."""
+    doesn't pass it on), and whether it `exited` rather than answer. Its reason is what it
+    said but its warnings and hints (e.g. of a broken ref it ignored); without one, it says
+    the name names nothing in rev-parse's words, after them."""
     returncode = FATAL if exited else 1
-    if WRONG_TYPE.search(reason):
-        return WrongTypeError(_COMMAND, returncode, reason)
+    if WRONG_TYPE.search(said):
+        return WrongTypeError(_COMMAND, returncode, said)
+    lines = said.splitlines()
+    reason = "\n".join(line for line in lines if not line.startswith(_NO_REASON))
     if reason:
-        return UnknownRevisionError(_COMMAND, returncode, reason)
-    said = f"fatal: bad revision '{name}'" + (": git exited without saying why" if exited else "")
-    return UnknownRevisionError(_COMMAND, returncode, said, reason="")
+        return UnknownRevisionError(_COMMAND, returncode, said, reason=reason)
+    lines.append(
+        f"fatal: bad revision '{name}'" + (": git exited without saying why" if exited else "")
+    )
+    return UnknownRevisionError(_COMMAND, returncode, "\n".join(lines), reason="")
+
+
+# How git starts a line that isn't why it failed.
+_NO_REASON = ("warning: ", "hint: ")
 
 
 def _end(process: subprocess.Popen[bytes], output: _Output, stderr: IO[bytes]) -> None:
