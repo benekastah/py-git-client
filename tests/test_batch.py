@@ -1,18 +1,12 @@
-import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO
 
 import pytest
 
 from git_client import (
-    CLIENT_TIMEOUT,
-    Arg,
-    EnvValue,
     Git,
     GitError,
     RefUpdate,
-    Timeout,
     config,
     config_key,
     hash_blobs,
@@ -272,6 +266,27 @@ def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:
     assert [commit for _, commit in patches] == [repo.run("rev-parse", "topic")]
 
 
+def test_patch_ids_takes_paths_from_the_top_as_they_are(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "top")
+    (Path(repo.directory) / "sub").mkdir()
+    # Which would have git take ":(top,literal)top" as a name, were it not overridden.
+    sub = Git(Path(repo.directory) / "sub", env={"GIT_LITERAL_PATHSPECS": "1"})
+
+    from_top, as_pattern, no_paths = patch_ids(
+        sub,
+        [*TOPIC[0], "--", "no-such-path", "top"],
+        [*TOPIC[0], "--", "to*"],
+        TOPIC[0],
+        paths_from_top=True,
+    )
+
+    topic = [repo.run("rev-parse", "topic")]
+    assert [commit for _, commit in from_top] == topic
+    # "to*" names no path: it's taken as a name, not a pattern.
+    assert as_pattern == []
+    assert [commit for _, commit in no_paths] == topic
+
+
 def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
     repo = topic_changing(repo_from, "b.txt")
     expected = patch_ids(repo, *TOPIC)
@@ -312,39 +327,19 @@ def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
     assert "no-such-gpg" not in trace.read_text(encoding="utf-8")
 
 
-class CountingGit(Git):
-    """Counts the processes it starts."""
+def test_patch_ids_reads_the_object_format_once_per_client(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    patch_ids(repo, ["log", "-p", "HEAD"])
+    patch_ids(repo, ["log", "-p", "HEAD"])
 
-    started = 0
-
-    def process(
-        self,
-        *args: Arg,
-        capture_output: bool = False,
-        input: bytes | None = None,
-        stdout: int | IO[bytes] | IO[str] | None = None,
-        env: Mapping[str, EnvValue] | None = None,
-        timeout: Timeout = CLIENT_TIMEOUT,
-    ) -> subprocess.CompletedProcess[bytes]:
-        self.started += 1
-        return super().process(
-            *args,
-            capture_output=capture_output,
-            input=input,
-            stdout=stdout,
-            env=env,
-            timeout=timeout,
-        )
-
-
-def test_patch_ids_reads_the_object_format_once_per_client(repo: Git) -> None:
-    git = CountingGit(repo.directory)
-    patch_ids(git, ["log", "-p", "HEAD"])
-    git.started = 0
-
-    patch_ids(git, ["log", "-p", "HEAD"])
-
-    assert git.started == 2  # the command, and patch-id
+    assert [call[0] for call in git_calls] == [
+        "rev-parse",
+        "log",
+        "patch-id",
+        "log",
+        "patch-id",
+    ]
 
 
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
