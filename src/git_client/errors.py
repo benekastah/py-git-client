@@ -118,8 +118,6 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
     for error, says in _STDOUT_SAYS:
         if says.search(stdout):
             return error
-    if not SAID["language"].search(stderr):
-        return GitError  # in a language with no file (see messages/en.toml)
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
             if error is UnknownRevisionError and SAID["wrong_type"].search(stderr):

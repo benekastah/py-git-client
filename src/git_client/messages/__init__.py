@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import cast
 
 KINDS = (
-    "language",
     "conflict",
     "push_rejected",
     "remote",

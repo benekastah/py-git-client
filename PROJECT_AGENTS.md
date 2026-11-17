@@ -49,11 +49,8 @@ the shape of the code or a rule here changes.
   read from git's message (in English: commands whose output is read run with `LC_ALL=C`),
   and each message matched is one a test makes real git print. The messages are in
   `messages/`, a file per language; a new language's file needs those tests under its locale,
-  skipped where git's translation isn't installed. A failure on stderr is read only when a
-  line shows git speaks a language with a file (its `language`, e.g. `fatal: `), so an
-  untranslated message can't be read without the translated one that qualifies it. Every
-  language's file is tried, which is fine for a few; with more than a few, pick the file for
-  git's language instead.
+  skipped where git's translation isn't installed. Every language's file is tried, which is
+  fine for a few; with more than a few, pick the file for git's language instead.
 
 ## CI
 
