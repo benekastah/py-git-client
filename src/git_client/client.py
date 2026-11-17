@@ -281,6 +281,16 @@ def _remaining_output(process: subprocess.Popen[bytes]) -> tuple[bytes | None, b
         return expired.stdout, expired.stderr
 
 
+def _stdin(input: bytes | None, capture_output: bool) -> int | None:
+    """git's stdin: a pipe for `input`; else nothing (DEVNULL) for a command whose output is
+    captured, so one that would read stdin (e.g. `shortlog` with no revision, or
+    `hash-object --stdin`) doesn't wait on, or take, the tool's; else the tool's, for a
+    command run for the user (passthrough)."""
+    if input is not None:
+        return subprocess.PIPE
+    return subprocess.DEVNULL if capture_output else None
+
+
 def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
     """The GitError for a command that failed: a subclass for a failure the library knows from
     what git said (see errors.py)."""
@@ -727,7 +737,12 @@ class ReadOnlyGit:
         says so. Every git process but `popen`'s starts here, so a subclass can override this
         to change how each runs, calling `super().process`: once git ends, it counts one that
         may have changed refs for RefSnapshot, whether it succeeded or not, and an override
-        that starts git itself leaves RefSnapshot keeping what such a command changed."""
+        that starts git itself leaves RefSnapshot keeping what such a command changed.
+
+        git reads `input`, if given; else, with `capture_output`, nothing (as from
+        /dev/null), so a command that reads stdin when given no input (e.g. `shortlog` with no
+        revision) neither waits on the tool's stdin nor takes it; without, the tool's stdin, as
+        from a shell."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
@@ -735,7 +750,7 @@ class ReadOnlyGit:
         try:
             with subprocess.Popen(
                 command,
-                stdin=None if input is None else subprocess.PIPE,
+                stdin=_stdin(input, capture_output),
                 stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
                 stderr=subprocess.PIPE if capture_output else None,
                 env=self.environment(env, english=capture_output),
@@ -918,7 +933,7 @@ class ReadOnlyGit:
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bool:
-        """Run git with its output going to ours (stdout to `stdout`, if given, e.g. stderr
+        """Run git with its input and output ours (stdout to `stdout`, if given, e.g. stderr
         when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
         than say no, if it runs past its timeout."""
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0

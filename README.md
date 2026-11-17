@@ -88,7 +88,8 @@ git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at 
 # tried again while locked. Other config writes (--add, ...): git.run("config", ...).
 git.write_config(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
-# git is stopped (see below) and GitTimeoutError raised
+# git is stopped (see below) and GitTimeoutError raised; only passthrough gives git the
+# tool's stdin: the others give it their `input`, or nothing
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing

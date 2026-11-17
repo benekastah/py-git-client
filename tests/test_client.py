@@ -667,6 +667,28 @@ def test_what_git_runs_keeps_the_users_locale(
     assert seen.read_text(encoding="utf-8").strip() == "de_DE.UTF-8 fr_FR.UTF-8"
 
 
+def test_only_passthrough_reads_the_tools_stdin(repo: Git) -> None:
+    # In a Python of its own, given stdin: on Windows, git inherits the process's standard
+    # handle, not fd 0, so the tests' process can't stand in for it.
+    script = (
+        "import sys; from git_client import Git; git = Git(sys.argv[1]);"
+        " print(git.run('hash-object', '--stdin'), flush=True);"
+        " git.passthrough('hash-object', '--stdin')"
+    )
+    printed = subprocess.run(
+        [sys.executable, "-c", script, repo.directory],
+        input=b"the tool's\n",
+        capture_output=True,
+        check=True,
+    ).stdout.split()
+
+    # The ids of an empty blob, and of the tool's stdin.
+    assert printed == [
+        b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        b"e6f364be0ca5213da8cb6a285b49e8438e386b94",
+    ]
+
+
 def test_runs_in_its_directory_wherever_we_are(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
