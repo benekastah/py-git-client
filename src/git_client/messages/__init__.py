@@ -6,9 +6,8 @@ reliably from the environment (LANGUAGE, a translation that isn't installed)."""
 import re
 import tomllib
 from collections.abc import Iterable
-from importlib import resources
-from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import cast
 
 KINDS = (
     "conflict",
@@ -23,14 +22,15 @@ KINDS = (
 """The kinds of message a language's file may give patterns for (en.toml says what each is)."""
 
 
-def load(files: Iterable[Traversable | Path]) -> dict[str, re.Pattern[str]]:
+def load(files: Iterable[Path]) -> dict[str, re.Pattern[str]]:
     """For each kind of message that `files` give patterns for, one pattern (multiline) that
-    matches what any of them says. Raises ValueError for a file that names another kind."""
+    matches what any of them says. Raises ValueError, naming the file, for one that isn't
+    TOML, names another kind, or gives one that isn't a list of patterns, each a regular
+    expression of its own (not, say, `a)|(b`, nor one with a flag such as `(?i)` for all of
+    it: `(?i:...)` sets one for a part)."""
     said: dict[str, list[str]] = {}
     for file in files:
-        for kind, patterns in tomllib.loads(file.read_text(encoding="utf-8")).items():
-            if kind not in KINDS:
-                raise ValueError(f"{file.name}: {kind} isn't a kind of message (see KINDS)")
+        for kind, patterns in _read(file).items():
             said.setdefault(kind, []).extend(patterns)
     return {
         kind: re.compile("|".join(f"(?:{pattern})" for pattern in patterns), re.MULTILINE)
@@ -38,12 +38,32 @@ def load(files: Iterable[Traversable | Path]) -> dict[str, re.Pattern[str]]:
     }
 
 
+def _read(file: Path) -> dict[str, list[str]]:
+    """What `file` says of each kind of message, checked (see load)."""
+    try:
+        read = tomllib.loads(file.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"{file.name}: isn't TOML: {error}") from None
+    for kind, patterns in read.items():
+        if kind not in KINDS:
+            raise ValueError(f"{file.name}: {kind} isn't a kind of message (see KINDS)")
+        listed = cast(list[object], patterns) if isinstance(patterns, list) else []
+        if not listed or not all(isinstance(pattern, str) for pattern in listed):
+            raise ValueError(f"{file.name}: {kind}: not a list of patterns")
+        for pattern in cast(list[str], listed):
+            try:
+                compiled = re.compile(pattern, re.MULTILINE)
+            except re.error as error:
+                raise ValueError(f"{file.name}: {kind}: {pattern}: {error}") from None
+            if compiled.flags != _FLAGS:
+                raise ValueError(f"{file.name}: {kind}: {pattern}: sets a flag for every pattern")
+    return cast(dict[str, list[str]], read)
+
+
+# What a pattern's flags are when it sets none of its own.
+_FLAGS = re.compile("", re.MULTILINE).flags
+
 # Every language's file is tried, which is fine for a few. With more, pick the file for the
 # language git speaks instead (e.g. by asking git, once, for a message in it).
-SAID = load(
-    sorted(
-        (file for file in resources.files(__name__).iterdir() if file.name.endswith(".toml")),
-        key=lambda file: file.name,
-    )
-)
+SAID = load(sorted(Path(__file__).parent.glob("*.toml")))
 """For each of KINDS, what git says of it in any language the library has a file for."""

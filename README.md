@@ -351,12 +351,13 @@ Dependencies are locked in `uv.lock`. `dev.py` installs from it with uv, and upd
 
 ### Adding a language
 
-The messages of git's the library reads (to choose a `GitError`, or `var`'s missing identity)
-are in `src/git_client/messages/`, one file per language: `en.toml` is English, and says what
-each kind of message is. To have the library read git in another language, add a file for it
-(e.g. `de.toml`) giving, for any of those kinds, the messages git prints in that language, as
-regular expressions. Every language's file is tried. Each message needs a test that makes
-real git print it in that language, skipped where git's translation isn't installed.
+The messages from git that the library reads (to choose a `GitError`, or to see that `var`
+has no identity) are in `src/git_client/messages/`, one file per language: `en.toml` is
+English, and says what each kind of message is. To have the library read git in another
+language, add a file for it (e.g. `de.toml`) giving, for any of those kinds, the messages git
+prints in that language, as regular expressions. Every language's file is tried. Each
+message needs a test that makes real git print it in that language, skipped where git's
+translation isn't installed.
 
 ### Releasing
 
