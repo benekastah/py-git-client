@@ -1,9 +1,12 @@
 import os
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from git_client import (
+    Arg,
     CatFile,
     EnvValue,
     Git,
@@ -207,3 +210,93 @@ def test_in_a_partial_clone_a_read_only_client_fetches_no_missing_object(repo: G
     assert result.returncode != 0
     assert files(clone) == before
     assert Git(clone).run("cat-file", "-p", blob) == "a"  # which a Git fetches
+
+
+def test_a_clients_read_only_one_runs_as_it_does_but_refuses_what_writes(
+    repo: Git, tmp_path: Path
+) -> None:
+    def stopping() -> bool:
+        return False
+
+    git = Git(repo.directory, timeout=9, stopping=stopping, env={"TZ": "UTC"})
+
+    reader = git.read_only()
+
+    assert isinstance(reader, ReadOnlyGit)
+    assert (reader.directory, reader.program, reader.timeout, reader.stopping, reader.env) == (
+        git.directory,
+        git.program,
+        9,
+        stopping,
+        {"TZ": "UTC"},
+    )
+    assert reader.run("log", "-1", "--format=%s") == "first"
+    with pytest.raises(ReadOnlyError):
+        reader.run("commit", "--allow-empty", "-m", "x")
+    git.run("commit", "--allow-empty", "--quiet", "-m", "x")  # the client itself still writes
+    assert reader.read_only() is reader
+
+
+def test_a_clients_read_only_one_is_made_once_and_again_when_the_client_changes(
+    repo: Git, tmp_path: Path
+) -> None:
+    reader = repo.read_only()
+    assert repo.read_only() is reader
+
+    repo.directory = str(tmp_path)
+    moved = repo.read_only()
+    repo.env["TZ"] = "UTC"
+    changed = repo.read_only()
+
+    assert moved is not reader
+    assert moved.directory == str(tmp_path)
+    assert reader.directory != str(tmp_path)  # a reader already given out stays as it was
+    assert changed.env == {"TZ": "UTC"}
+
+
+def test_a_client_whose_environment_a_read_only_one_refuses_makes_none(repo: Git) -> None:
+    git = Git(repo.directory, env={"GIT_DIR": "elsewhere"})
+
+    with pytest.raises(ReadOnlyError):
+        git.read_only()
+
+
+def test_a_client_and_its_read_only_one_share_what_git_told_them(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    git = Git(repo.directory)
+    git.prefix()
+    git.object_id_length()
+    reader = git.read_only()
+    git_paths(reader, "HEAD")
+    started = len(git_calls)
+
+    assert reader.prefix() == ""
+    assert reader.object_id_length() == 40
+    git_paths(git, "HEAD")
+
+    assert len(git_calls) == started
+
+
+class LoggingGit(Git):
+    """A tool's own Git, whose `process` notes each command."""
+
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory)
+        self.log: list[str] = []
+
+    def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        self.log.append(os.fsdecode(args[0]))
+        return super().process(*args, **kwargs)
+
+
+def test_a_subclass_read_only_one_keeps_its_methods(repo: Git) -> None:
+    git = LoggingGit(repo.directory)
+
+    reader = git.read_only()
+    reader.run("rev-parse", "HEAD")
+
+    assert isinstance(reader, LoggingGit)
+    assert git.log == ["rev-parse"]  # its own attributes too, shared with the client's
+    with pytest.raises(ReadOnlyError):
+        reader.run("commit", "--allow-empty", "-m", "x")

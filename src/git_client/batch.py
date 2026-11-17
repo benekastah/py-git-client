@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import weakref
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +14,7 @@ from git_client.client import (
     decode,
     encode,
     error_from,
+    known_git_paths,
     learn_object_id_length,
     location,
     prefixes,
@@ -118,12 +118,6 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
-# Where git keeps each name, per client and `location`.
-_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[object, str], Path]] = (
-    weakref.WeakKeyDictionary()
-)
-
-
 def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
     "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
@@ -142,7 +136,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         return []
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths can't take a name with a line ending: {names}")
-    known = _git_paths.setdefault(git, {})
+    known = known_git_paths.setdefault(git, {})
     where = location(git)
     new = [
         name

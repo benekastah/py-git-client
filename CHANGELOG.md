@@ -62,6 +62,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
+  client's own class (a subclass's `process` still runs), sharing what git told the client
+  about where things are, for a tool's paths that never write (#55).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).

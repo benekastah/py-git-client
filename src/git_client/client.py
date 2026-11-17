@@ -2,6 +2,7 @@
 text and paths to it as git expects them."""
 
 import contextlib
+import copy
 import enum
 import functools
 import os
@@ -13,7 +14,8 @@ import threading
 import time
 import weakref
 from collections.abc import Callable, Mapping, Sequence
-from typing import IO, ClassVar, Final, Literal
+from pathlib import Path
+from typing import IO, Final, Literal
 
 from git_client.errors import (
     CORRUPT_OBJECT,
@@ -443,7 +445,14 @@ def location(git: ReadOnlyGit) -> Location:
 
 prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
 """Each client's `prefix()`, per location: kept here rather than on the client, so that
-`git_paths` can learn it from the `rev-parse` it runs anyway."""
+`git_paths` can learn it from the `rev-parse` it runs anyway. A client and its `read_only()`
+share theirs."""
+
+known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str], Path]] = (
+    weakref.WeakKeyDictionary()
+)
+"""Where git keeps each name, per client, location and name (see `git_paths`). A client and its
+`read_only()` share theirs."""
 
 
 # Guards each client's object id lengths: held only to read or change them, never while git
@@ -487,7 +496,8 @@ class ReadOnlyGit:
     before it starts git, it raises ReadOnlyError for anything else, so a tool that only
     reads can show that it does by making one. Git extends it to run any command, so a
     function that only reads takes a ReadOnlyGit, and is given either: a parameter typed
-    ReadOnlyGit says what the function asks of git, not that the client can't write.
+    ReadOnlyGit says what the function asks of git, not that the client can't write. A Git's
+    `read_only()` gives one that can't.
 
     It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
     `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`,
@@ -550,8 +560,11 @@ class ReadOnlyGit:
     would keep Python from using posix_spawn.
     """
 
-    # Whether it runs only commands that read (see ReadOnlyGit); Git's runs any.
-    _read_only: ClassVar[bool] = True
+    # Whether it runs only commands that read (see ReadOnlyGit); Git's runs any, but for the
+    # one read_only() makes.
+    _read_only: bool = True
+    # What read_only() made last.
+    _reader: ReadOnlyGit | None = None
 
     def __init__(
         self,
@@ -574,6 +587,30 @@ class ReadOnlyGit:
         self._object_id_length = object_id_length
         # Per location: the length, or an Event a thread asking git sets once it has answered.
         self._object_id_lengths: dict[Location, int | threading.Event] = {}
+
+    def read_only(self) -> ReadOnlyGit:
+        """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
+        (see there), and otherwise runs as the client does, with the same `program`,
+        `timeout`, `stopping` and `env`. It's of the client's own class, so a subclass's
+        methods (e.g. its own `process`) and attributes are kept; and it shares what git told
+        the client about where things are (`prefix()`, `object_id_length()`, `git_paths`), so
+        it asks no question the client asked, nor the client one it asked. Made once, and again
+        when the client's `directory`, `program`, `env`, `timeout` or `stopping` change; one
+        already given out keeps what it had. A read-only client gives itself. Raises
+        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        if self._read_only:
+            return self
+        _refuse_environment(self.env)
+        reader = self._reader
+        if reader is None or _settings(reader) != _settings(self):
+            reader = copy.copy(self)
+            reader.env = dict(self.env)
+            reader._read_only = True
+            reader._reader = None
+            prefixes[reader] = prefixes.setdefault(self, {})
+            known_git_paths[reader] = known_git_paths.setdefault(self, {})
+            self._reader = reader
+        return reader
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
@@ -885,13 +922,18 @@ class ReadOnlyGit:
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0
 
 
+def _settings(git: ReadOnlyGit) -> tuple[object, ...]:
+    """What `read_only()` copies from a client, and makes its reader again when they change."""
+    return git.directory, git.program, git.env, git.timeout, git.stopping
+
+
 class Git(ReadOnlyGit):
     """Runs any git command in `directory`, as `git -C <directory>` does: a ReadOnlyGit
     without its limits on commands and their environment, nor the variables it sets for git
     (GIT_OPTIONAL_LOCKS, GIT_NO_LAZY_FETCH). How it runs them, finds git and stops one past
     its timeout is ReadOnlyGit's (see there)."""
 
-    _read_only: ClassVar[bool] = False
+    _read_only = False
 
     def write_config(self, *args: Arg, wait: float = 5.0) -> str:
         """Run `git config <args>`, a write (e.g. `"branch.topic.base", "main"`, or
