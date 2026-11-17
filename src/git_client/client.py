@@ -650,10 +650,11 @@ class ReadOnlyGit:
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> bool:
         """Run git, discarding its output, and say whether it succeeded: True for exit status
-        0, False for any other, whatever went wrong (e.g. a revision that names nothing, or no
-        repository). For a check where any failure means no; where 1 is git's no and anything
-        else a failure to report, use `ok`. Raises GitTimeoutError, rather than say no, if it
-        runs past its timeout: that's not git's answer."""
+        0, False for any other (e.g. a revision that names nothing, or no repository). For a
+        check where any failure of git's means no; where 1 is git's no and anything else a
+        failure to report, use `ok`. It still raises when git gives no answer: GitTimeoutError
+        past its timeout, an OSError if git can't be started, and a ReadOnlyGit's
+        ReadOnlyError for a command it refuses."""
         result = self.process(
             *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
         )
