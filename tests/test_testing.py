@@ -1,10 +1,12 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from git_client import CatFile, Git, ReadOnlyError, ReadOnlyGit, config, find_git
+from git_client import Arg, CatFile, Git, ReadOnlyError, ReadOnlyGit, config, find_git
 from git_client.testing import FakeGit, GitCall, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -610,3 +612,37 @@ def test_fake_git_fails_on_a_command_it_has_no_response_for() -> None:
 
     with pytest.raises(UnexpectedCommand, match="git push origin main"):
         git.run("push", "origin", "main")
+
+
+class StoppingGit(Git):
+    """A project's own Git, as move-forward's: its own constructor, which names git through
+    its variable, a method of its own, and a `process` that refuses once stopped."""
+
+    stopped = False
+
+    def __init__(self, directory: Path, *, timeout: float | None = 5) -> None:
+        super().__init__(directory, env_var="NO_SUCH_TOOL_GIT", timeout=timeout)
+
+    def output(self, *args: str) -> str:
+        return self.run(*args)
+
+    def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if self.stopped:
+            raise RuntimeError("stopped")
+        return super().process(*args, **kwargs)
+
+
+class FakeStoppingGit(StoppingGit, FakeGit):
+    pass
+
+
+def test_fake_git_stands_in_for_a_projects_own_git(tmp_path: Path) -> None:
+    git = FakeStoppingGit(tmp_path)
+    git.respond(["rev-parse"], stdout="main\n")
+
+    assert git.output("rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git.commands == [["rev-parse", "--abbrev-ref", "HEAD"]]
+    assert (git.directory, git.timeout) == (str(tmp_path), 5)
+    git.stopped = True
+    with pytest.raises(RuntimeError, match="stopped"):
+        git.output("rev-parse", "HEAD")

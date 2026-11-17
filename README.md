@@ -266,6 +266,27 @@ otherwise (e.g. for a command a tool didn't run).
   assert git.commands[-1] == ["push", "origin", "main"]
   ```
 
+  If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
+  so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
+  calls `super().process`), run over its fake processes. Your constructor's arguments reach
+  `FakeGit`'s, which are `Git`'s, but it runs `"git"` unless given `program`, without looking
+  for one (it ignores `env_var`):
+
+  ```python
+  class MyGit(Git):  # your tool's
+      def output(self, *args: str) -> str:
+          return self.run(*args)
+
+
+  class FakeMyGit(MyGit, FakeGit):
+      pass
+
+
+  git = FakeMyGit()
+  git.respond(["rev-parse"], stdout="main\n")
+  assert git.output("rev-parse", "--abbrev-ref", "HEAD") == "main"
+  ```
+
 ## Development
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone the repository,

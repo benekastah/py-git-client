@@ -478,10 +478,26 @@ class FakeGit(Git):
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git.
+
+    To fake a project's own subclass of Git, put that class first, so FakeGit stands where
+    Git was beneath it: its methods, and its own `process` (which calls `super().process`),
+    run over FakeGit's. Its constructor's arguments reach FakeGit's, Git's own, but FakeGit
+    runs "git" unless given `program`, without looking for one (`env_var` is ignored).
+
+        class FakeMyGit(MyGit, FakeGit):
+            pass
     """
 
-    def __init__(self, directory: str | os.PathLike[str] = ".") -> None:
-        super().__init__(directory, program="git")
+    def __init__(
+        self,
+        directory: str | os.PathLike[str] = ".",
+        *,
+        program: str = "git",
+        env_var: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        super().__init__(directory, program=program, env_var=env_var, env=env, timeout=timeout)
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
 
