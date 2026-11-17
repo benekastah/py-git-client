@@ -4,6 +4,7 @@ import os
 import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from git_client.client import EnvValue, Git, ReadOnlyGit, decode, encode
 from git_client.errors import GitError
@@ -96,6 +97,24 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
             name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
         )
     return found
+
+
+def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
+    """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
+    "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
+    --git-path`. Each is where git itself would look: in a linked worktree, its own git
+    directory for what's the worktree's (HEAD, index, rebase-merge) and the common one for the
+    rest (refs, objects, config); and where config or the environment move it (e.g.
+    core.hooksPath, GIT_OBJECT_DIRECTORY). Raises ValueError for a name with a line ending,
+    whose path couldn't be told from the next one's, and GitError if git fails (e.g.
+    NotARepositoryError)."""
+    if not names:
+        return []
+    if any(c in name for name in names for c in "\n\r"):
+        raise ValueError(f"git_paths can't take a name with a line ending: {names}")
+    args = [arg for name in names for arg in ("--git-path", name)]
+    output = git.run_bytes("rev-parse", "--path-format=absolute", *args)
+    return [Path(os.fsdecode(line)) for line in output.splitlines()]
 
 
 def patch_ids(

@@ -10,6 +10,7 @@ from git_client import (
     ReadOnlyError,
     ReadOnlyGit,
     config,
+    git_paths,
     patch_ids,
     refs,
 )
@@ -184,6 +185,8 @@ def test_the_librarys_reads_take_a_read_only_client(repo: Git) -> None:
     assert config(git)["user.name"]
     assert len(patch_ids(git, ["log", "-p", "HEAD"])[0]) == 1
     assert git.resolve("HEAD") == head
+    assert git.prefix() == ""
+    assert git_paths(git, "HEAD")[0].name == "HEAD"
 
 
 @pytest.mark.skipif(

@@ -6,6 +6,7 @@ from git_client.batch import (
     RefUpdate,
     config,
     config_key,
+    git_paths,
     hash_blobs,
     patch_ids,
     refs,
@@ -36,6 +37,7 @@ from git_client.errors import (
     RemoteError,
     UnknownRevisionError,
 )
+from git_client.paths import git_common_dir
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -63,6 +65,8 @@ __all__ = [
     "decode",
     "encode",
     "find_git",
+    "git_common_dir",
+    "git_paths",
     "hash_blobs",
     "patch_ids",
     "printable",

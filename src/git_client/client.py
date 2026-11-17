@@ -497,6 +497,16 @@ class ReadOnlyGit:
             self._object_id_length = 64 if sha256 else 40
         return self._object_id_length
 
+    def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
+        """The path from the top of the worktree down to the client's directory, with a slash
+        after each directory (e.g. "src/app/"), as `git rev-parse --show-prefix` gives it: ""
+        at the top, and outside a worktree (e.g. in a bare repository or a git directory).
+        Put it before a path from the directory to name that path from the top. Raises
+        GitError if git fails (e.g. NotARepositoryError)."""
+        # Not run's, which would strip a directory's leading space.
+        output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
+        return decode(output.removesuffix(b"\n"))
+
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
         text as git wrote it (whatever the locale's encoding, which with LC_ALL=C can't hold a

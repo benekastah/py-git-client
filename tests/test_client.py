@@ -49,6 +49,18 @@ def test_run_can_leave_the_output_as_git_wrote_it(repo: Git) -> None:
     assert repo.run("status", "--porcelain") == "M a"
 
 
+def test_prefix_is_the_path_from_the_top_of_the_worktree_down_to_the_directory(
+    repo: Git,
+) -> None:
+    # With a space at its start, which stripping git's output would lose.
+    below = Path(repo.directory) / " a" / "b"
+    below.mkdir(parents=True)
+
+    assert Git(below).prefix() == " a/b/"
+    assert repo.prefix() == ""
+    assert Git(Path(repo.directory) / ".git").prefix() == ""
+
+
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
     with pytest.raises(GitError) as raised:
         repo.run("switch", "no-such-branch")

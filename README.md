@@ -15,7 +15,10 @@ what git-stack, git-recommit and move-forward share for that:
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  blobs (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  where git keeps many files in the git directory (`git_paths`), blobs (`hash_blobs`), and ref
+  updates in one transaction (`update_refs`).
+- **No process at all** to find a checkout's common git directory (`git_common_dir`), read
+  from its `.git` file or directory.
 
 It has no dependencies of its own, and needs Python 3.11 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`).
@@ -31,7 +34,17 @@ or `pip install git+https://github.com/benekastah/py-git-client`.
 ## Using it
 
 ```python
-from git_client import CatFile, Git, RefUpdate, config, config_key, refs, update_refs
+from git_client import (
+    CatFile,
+    Git,
+    RefUpdate,
+    config,
+    config_key,
+    git_common_dir,
+    git_paths,
+    refs,
+    update_refs,
+)
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
 # a tool names its own variable so its users can choose, e.g. git itself, for speed.
@@ -46,6 +59,7 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 # names nothing: True for exit 0, False for any other
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
+git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised
 
@@ -64,6 +78,14 @@ for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
 # which comes back as "heads/v1" when a tag is named v1 too; and give git full ref names.
 old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
+
+# Absolute Paths, where git itself looks: in a linked worktree, HEAD is its own and refs the
+# main repository's; config such as core.hooksPath moves hooks.
+head_file, hooks = git_paths(git, "HEAD", "hooks")
+# The directory with the refs, objects and config of a checkout (its top), or of a git
+# directory, without running git: a linked worktree's or a submodule's too. None if it's
+# neither (a subdirectory of a checkout included).
+common = git_common_dir("path/to/repo")
 ```
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
@@ -104,7 +126,7 @@ those commands no timeout, so git stays in the tool's group and gets the signal 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git`, and runs only commands that read. Anything else raises `ReadOnlyError`
 before git starts. `Git` extends it, so a function that only reads can take a `ReadOnlyGit`,
-and be given either; `CatFile`, `config`, `refs` and `patch_ids` do. A parameter typed
+and be given either; `CatFile`, `config`, `refs`, `patch_ids` and `git_paths` do. A parameter typed
 `ReadOnlyGit` says what the function asks of git, not that the client can't write: the
 promise is the client's, so make a `ReadOnlyGit` to have it.
 
