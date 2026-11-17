@@ -27,7 +27,8 @@ def load(files: Iterable[Path]) -> dict[str, re.Pattern[str]]:
     matches what any of them says. Raises ValueError, naming the file, for one that isn't
     TOML, names another kind, or gives one that isn't a list of patterns, each a regular
     expression of its own (not, say, `a)|(b`, nor one with a flag such as `(?i)` for all of
-    it: `(?i:...)` sets one for a part)."""
+    it: `(?i:...)` sets one for a part) that doesn't match an empty message and names no
+    group."""
     said: dict[str, list[str]] = {}
     for file in files:
         for kind, patterns in _read(file).items():
@@ -51,17 +52,28 @@ def _read(file: Path) -> dict[str, list[str]]:
         if not listed or not all(isinstance(pattern, str) for pattern in listed):
             raise ValueError(f"{file.name}: {kind}: not a list of patterns")
         for pattern in cast(list[str], listed):
-            try:
-                compiled = re.compile(pattern, re.MULTILINE)
-            except re.error as error:
-                raise ValueError(f"{file.name}: {kind}: {pattern}: {error}") from None
-            if compiled.flags != _FLAGS:
-                raise ValueError(f"{file.name}: {kind}: {pattern}: sets a flag for every pattern")
+            _check(file, kind, pattern)
     return cast(dict[str, list[str]], read)
 
 
-# What a pattern's flags are when it sets none of its own.
-_FLAGS = re.compile("", re.MULTILINE).flags
+def _check(file: Path, kind: str, pattern: str) -> None:
+    """Raise ValueError unless `pattern` is one that `load` takes."""
+    # On its own (refusing, say, a)|(b, which a group can't hold), then in a group, as load
+    # joins it (refusing a flag such as (?i) for all of it).
+    try:
+        re.compile(pattern)
+        compiled = re.compile(f"(?:{pattern})", re.MULTILINE)
+    except re.error as error:
+        problem = str(error.msg)
+    else:
+        if compiled.search(""):
+            problem = "matches any message"
+        elif compiled.groupindex:
+            problem = "names a group, which another pattern may name too"
+        else:
+            return
+    raise ValueError(f"{file.name}: {kind}: {pattern!r}: {problem}")
+
 
 # Every language's file is tried, which is fine for a few. With more, pick the file for the
 # language git speaks instead (e.g. by asking git, once, for a message in it).
