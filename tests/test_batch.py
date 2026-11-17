@@ -10,7 +10,9 @@ from git_client import (
     config,
     config_key,
     git_paths,
+    hash_blob_at,
     hash_blobs,
+    merge_file,
     patch_ids,
     printable,
     refs,
@@ -379,6 +381,78 @@ def test_git_paths_finds_each_name_where_git_keeps_it_with_one_git(
 def test_git_paths_refuses_a_name_with_a_line_ending(repo: Git) -> None:
     with pytest.raises(ValueError, match="line ending"):
         git_paths(repo, "HEAD", "a\nb")
+
+
+def blob_id(git: Git, content: bytes) -> str:
+    """The id of content as a blob, as it is."""
+    return git.run_bytes("hash-object", "--stdin", "--no-filters", input=content).decode().strip()
+
+
+def has_object(git: Git, object_id: str) -> bool:
+    return git.ok("cat-file", "-e", object_id)
+
+
+def test_hash_blob_at_hashes_content_through_its_paths_filters(repo: Git) -> None:
+    (Path(repo.directory) / ".gitattributes").write_bytes(b"*.txt text\n")
+
+    # .txt files are text, so git stores them with LF line endings; others as they are.
+    assert hash_blob_at(repo, "notes.txt", b"one\r\ntwo\r\n") == blob_id(repo, b"one\ntwo\n")
+    assert hash_blob_at(repo, "data.bin", b"one\r\n") == blob_id(repo, b"one\r\n")
+    # Unlike hash_blobs, which writes content as it is.
+    [as_it_is] = hash_blobs(repo, [b"one\r\ntwo\r\n"])
+    assert as_it_is == blob_id(repo, b"one\r\ntwo\r\n")
+
+
+def test_hash_blob_at_writes_the_blob_only_if_asked(repo: Git) -> None:
+    (Path(repo.directory) / ".gitattributes").write_bytes(b"*.txt text\n")
+
+    hashed = hash_blob_at(repo, "only-hashed.txt", b"only hashed\r\n")
+    written = hash_blob_at(repo, "written.txt", b"written\r\n", write=True)
+
+    assert not has_object(repo, hashed)
+    assert repo.run_bytes("cat-file", "blob", written) == b"written\n"
+
+
+def test_merge_file_merges_changes_to_different_lines(repo: Git) -> None:
+    merged = merge_file(repo, b"A\nb\nc\n", b"a\nb\nc\n", b"a\nb\nC\n")
+
+    assert merged == (b"A\nb\nC\n", 0)
+
+
+def test_merge_file_counts_conflicts_and_marks_them_with_its_labels(repo: Git) -> None:
+    content, conflicts = merge_file(
+        repo,
+        b"ours\nsame\nours\n",
+        b"base\nsame\nbase\n",
+        b"theirs\nsame\ntheirs\n",
+        labels=("mine", "original", "yours"),
+        options=["--diff3"],
+    )
+
+    assert conflicts == 2
+    assert content.split(b"\n")[:5] == [
+        b"<<<<<<< mine",
+        b"ours",
+        b"||||||| original",
+        b"base",
+        b"=======",
+    ]
+
+
+def test_merge_file_counts_at_most_127_conflicts(repo: Git) -> None:
+    # git's exit status is the count, which it holds to 127: above that is an error.
+    # 130 of them, each 4 lines from the next: git takes conflicts closer than that as one.
+    def lines(word: str) -> bytes:
+        return b"".join(f"{word}{i}\n".encode() + b"same\n" * 4 for i in range(130))
+
+    _, conflicts = merge_file(repo, lines("ours"), lines("base"), lines("theirs"))
+
+    assert conflicts == 127
+
+
+def test_merge_file_raises_if_git_cant_merge(repo: Git) -> None:
+    with pytest.raises(GitError, match="binary"):
+        merge_file(repo, b"ours\0", b"base\0", b"theirs\0")
 
 
 def test_nothing_to_do_starts_no_git(repo: Git, git_calls: list[list[str]]) -> None:
