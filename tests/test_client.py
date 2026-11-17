@@ -195,7 +195,9 @@ def test_var_raises_for_what_isnt_a_missing_value(repo: Git) -> None:
         repo.var("GIT_AUTHOR_IDENT")
 
 
-def test_ok_answers_yes_for_exit_0_and_no_for_exit_1(repo: Git) -> None:
+def test_ok_answers_yes_for_exit_0_and_no_for_exit_1(
+    repo: Git, capfd: pytest.CaptureFixture[str]
+) -> None:
     repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
     (Path(repo.directory) / "a").write_bytes(b"changed\n")
 
@@ -204,6 +206,7 @@ def test_ok_answers_yes_for_exit_0_and_no_for_exit_1(repo: Git) -> None:
     assert repo.ok("diff", "--quiet", "--cached")
     assert not repo.ok("diff", "--quiet")
     assert not repo.ok("config", "--get", "no.such-key")
+    assert capfd.readouterr() == ("", "")  # git's output discarded
 
 
 def test_ok_raises_for_a_failure(repo: Git) -> None:
@@ -214,10 +217,13 @@ def test_ok_raises_for_a_failure(repo: Git) -> None:
     assert "no-such-branch" in raised.value.stderr
 
 
-def test_succeeds_answers_yes_for_exit_0_and_no_for_any_other(repo: Git, tmp_path: Path) -> None:
+def test_succeeds_answers_yes_for_exit_0_and_no_for_any_other(
+    repo: Git, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
     assert repo.succeeds("rev-parse", "--verify", "HEAD")
     assert not repo.succeeds("config", "--get", "no.such-key")  # exit 1
     assert not repo.succeeds("merge-base", "--is-ancestor", "no-such-branch", "HEAD")  # 128
+    assert capfd.readouterr() == ("", "")  # git's output, and its fatal: line, discarded
     assert not ReadOnlyGit(tmp_path / "no-such-directory").succeeds("status")
 
 
