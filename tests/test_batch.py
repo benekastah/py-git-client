@@ -295,16 +295,17 @@ def test_patch_ids_runs_any_other_diff_as_diff(
 
 def renaming_topic(repo_from: RepoFrom) -> Git:
     """A repository whose topic renames a file and changes it: lines that myers and histogram
-    diff differently, and far enough apart for diff.context to matter (see TOPIC)."""
+    diff differently, and two changes 8 lines apart, which git's default context keeps in
+    hunks of their own, but diff.context or diff.interHunkContext doesn't (see TOPIC)."""
 
     def change(repo: Git) -> None:
         directory = Path(repo.directory)
-        (directory / "old").write_bytes(b"b\na\n{\na\n}\n}\n}\n}\nx\ny\nz\n")
+        (directory / "old").write_bytes(b"b\na\n{\na\n}\n}\n}\n}\nx\ny\nz\n1\n2\n3\n4\n5\nq\n")
         repo.run("add", "old")
         repo.run("commit", "--quiet", "-m", "add old")
         repo.run("switch", "--quiet", "-c", "topic")
         repo.run("mv", "old", "new")
-        (directory / "new").write_bytes(b"}\nb\na\n{\n}\n}\na\n}\n}\nx\ny\nz\n")
+        (directory / "new").write_bytes(b"}\nb\na\n{\n}\n}\na\n}\n}\nx\ny\nz\n1\n2\n3\n4\n5\nQ\n")
         repo.run("commit", "--quiet", "-am", "rename old")
 
     return repo_from("renaming-topic", change)
@@ -312,7 +313,12 @@ def renaming_topic(repo_from: RepoFrom) -> Git:
 
 @pytest.mark.parametrize(
     ("key", "value"),
-    [("diff.renames", "false"), ("diff.context", "1"), ("diff.algorithm", "histogram")],
+    [
+        ("diff.renames", "false"),
+        ("diff.context", "1"),
+        ("diff.algorithm", "histogram"),
+        ("diff.interHunkContext", "10"),
+    ],
 )
 def test_patch_ids_gives_a_diff_and_a_log_the_same_ids_whatever_the_config_says(
     repo_from: RepoFrom, key: str, value: str
