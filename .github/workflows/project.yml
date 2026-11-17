@@ -30,10 +30,11 @@ permissions:
   contents: read
 
 jobs:
-  # The tests with the oldest git supported (the README's 2.36), as CI's other jobs run the
-  # newest: what the docs say of older git (CatFile's --batch-command, merge-tree's
-  # --write-tree from 2.38, LC_CTYPE from 2.39, GIT_NO_LAZY_FETCH from 2.45) is tested on both
-  # sides. Built once, then cached: about a minute uncached, seconds after.
+  # The tests with the oldest git supported (the README's 2.36, e.g. for CatFile's
+  # --batch-command), as CI's other jobs run the newest: the suite as a whole, but for the
+  # tests of what 2.36 lacks (merge-tree's --write-tree, GIT_NO_LAZY_FETCH), which skip, and
+  # the German ones, which skip as this git has no translations. Built once, then cached:
+  # about a minute uncached, seconds after.
   oldest-git:
     if: fromJSON(inputs.context).code
     runs-on: ubuntu-latest
