@@ -65,6 +65,7 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top
+git.write_config("branch.a.description", "x")  # git config, tried again while locked
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised
 
@@ -192,7 +193,7 @@ said and raises a subclass:
 | --- | --- |
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
-| `ConfigLockedError` | Another process has the config file locked; a write can be tried again. |
+| `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |

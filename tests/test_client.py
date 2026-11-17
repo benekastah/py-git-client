@@ -2,11 +2,14 @@ import os
 import pickle
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from git_client import (
+    ConfigLockedError,
     Git,
     GitError,
     GitTimeoutError,
@@ -256,6 +259,48 @@ def test_succeeds_answers_yes_for_exit_0_and_no_for_any_other(
     assert not repo.succeeds("merge-base", "--is-ancestor", "no-such-branch", "HEAD")  # 128
     assert capfd.readouterr() == ("", "")  # git's output, and its fatal: line, discarded
     assert not ReadOnlyGit(tmp_path / "no-such-directory").succeeds("status")
+
+
+def locked_config(repo: Git) -> Path:
+    """Lock repo's config file, as a process writing it does, and have git fail at once on
+    the lock, as git before 2.56 does; the lock file, to remove to release it."""
+    repo.run("config", "core.configLockTimeout", "0")
+    lock = Path(repo.directory) / ".git" / "config.lock"
+    lock.write_bytes(b"")
+    return lock
+
+
+def test_write_config_waits_while_the_config_file_is_locked(repo: Git) -> None:
+    lock = locked_config(repo)
+    timer = threading.Timer(0.2, lock.unlink)
+    start = time.monotonic()
+    timer.start()
+    try:
+        repo.write_config("x.y", "z")
+    finally:
+        timer.join()
+
+    assert time.monotonic() - start >= 0.2
+    assert repo.run("config", "x.y") == "z"
+
+
+def test_write_config_gives_up_once_its_wait_is_over(repo: Git) -> None:
+    locked_config(repo)
+    start = time.monotonic()
+
+    with pytest.raises(ConfigLockedError):
+        repo.write_config("x.y", "z", wait=0.2)
+
+    assert time.monotonic() - start >= 0.2
+
+
+def test_write_config_tries_another_failure_once(repo: Git, git_calls: list[list[str]]) -> None:
+    with pytest.raises(GitError) as raised:
+        repo.write_config("--unset", "no.such-key")
+
+    # git config --unset's exit status for a key that isn't set.
+    assert raised.value.returncode == 5
+    assert git_calls == [["config", "--unset", "no.such-key"]]
 
 
 def test_input_and_output_keep_their_line_endings(repo: Git) -> None:
