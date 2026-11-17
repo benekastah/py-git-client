@@ -46,7 +46,8 @@ the shape of the code or a rule here changes.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.
 - **Errors are the library's own**, never subprocess's: which `GitError` a failure raises is
-  read from git's message (in English: commands whose output is read run with `LC_ALL=C`),
+  read from git's message (in English: commands whose output is read run with
+  `GIT_TEXTDOMAINDIR` naming no directory, which leaves the user's locale to what git runs),
   and each message matched is one a test makes real git print. The messages are in
   `messages/`, a file per language; a new language's file needs those tests under its locale,
   skipped where git's translation isn't installed. Every language's file is tried, which is
