@@ -15,8 +15,10 @@ what git-stack, git-recommit and move-forward share for that:
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  where git keeps many files in the git directory (`git_paths`), blobs (`hash_blobs`), and ref
-  updates in one transaction (`update_refs`).
+  where git keeps many files in the git directory (`git_paths`), blobs as they are
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+- **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
+  through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **No process at all** to find a checkout's common git directory (`git_common_dir`), read
   from its `.git` file or directory.
 
@@ -42,6 +44,9 @@ from git_client import (
     config_key,
     git_common_dir,
     git_paths,
+    hash_blob_at,
+    hash_blobs,
+    merge_file,
     refs,
     update_refs,
 )
@@ -86,6 +91,18 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).
 common = git_common_dir("path/to/repo")
+
+# Blobs: as they are (no filters or line-ending conversion), written, with one process...
+[raw] = hash_blobs(git, [b"one\r\n"])
+# ...or as `git add` would store one at a path (its clean filter, `text`, core.autocrlf), and
+# written only if asked.
+cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
+
+# A three-way merge of contents, writing nothing to the repository: the result, with conflict
+# markers, and how many conflicts it has (at most 127). GitError if git can't merge them.
+merged, conflicts = merge_file(
+    git, ours=b"ours\n", base=b"base\n", theirs=b"theirs\n", options=["--diff3"]
+)
 ```
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the

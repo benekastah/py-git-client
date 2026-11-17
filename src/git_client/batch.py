@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from git_client.client import EnvValue, Git, ReadOnlyGit, decode, encode
+from git_client.client import Arg, EnvValue, Git, ReadOnlyGit, decode, encode, error_from
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -27,6 +27,10 @@ _PATCH_SETTINGS = (
 # for it (log.abbrevCommit, format.pretty). `git diff` takes none of these.
 _SHOWING_COMMITS = {"log", "show"}
 _COMMIT_SETTINGS = ("--no-show-signature", "--no-abbrev-commit", "--pretty=medium")
+
+# The highest exit status of `git merge-file` that counts conflicts (git holds the count to
+# it); above it, git failed.
+_MOST_CONFLICTS = 127
 
 # The patch that patch_ids puts after each command's output, to mark where it ends.
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
@@ -179,7 +183,9 @@ def patch_ids(
 
 def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
     """Write each of contents to the object database as a blob, as it is (no filters or
-    line-ending conversion), with one `git hash-object`, and return their ids in order."""
+    line-ending conversion), with one `git hash-object`, and return their ids in order. For
+    content as `git add` would store it at a path, through that path's filters, see
+    hash_blob_at."""
     if not contents:
         return []
     with tempfile.TemporaryDirectory() as scratch:
@@ -192,6 +198,55 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
         return decode(
             git.run_bytes("hash-object", "-w", "--no-filters", "--stdin-paths", input=listed)
         ).split()
+
+
+def hash_blob_at(git: Git, path: Arg, content: bytes, *, write: bool = False) -> str:
+    """The id of content as `git add` would store it at `path`, whether or not a file is
+    there: through the filters that path's attributes and the config give it, e.g. a clean
+    filter (such as git-lfs's), or line-ending conversion (`text`, `eol`, core.autocrlf),
+    unlike hash_blobs, which stores content as it is. With `write`, the blob is written to the
+    object database too. One `git hash-object --path`, which runs the filter's program, if
+    any. Raises GitError if git fails (e.g. a required filter does).
+
+    `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"): give a
+    path git printed (from the top of the worktree) to a client at the top."""
+    output = git.run_bytes(
+        "hash-object", *(["-w"] if write else []), "--path", path, "--stdin", input=content
+    )
+    return decode(output).strip()
+
+
+def merge_file(
+    git: Git,
+    *,
+    ours: bytes,
+    base: bytes,
+    theirs: bytes,
+    labels: tuple[str, str, str] = ("ours", "base", "theirs"),
+    options: Sequence[str] = (),
+) -> tuple[bytes, int]:
+    """Merge the changes from base to ours and from base to theirs, as `git merge-file`
+    does, and return the result and how many conflicts it has (at most 127, as git counts
+    them), each between conflict markers that name it by `labels` (ours, base, theirs).
+    `options` are merge-file's own, e.g. "--diff3" or "--zdiff3" (otherwise, in a repository,
+    its config's merge.conflictStyle says how conflicts look; outside one, git's default),
+    "--union", "--marker-size=10". The three contents are keyword-only, as orders differ
+    (git's is ours, base, theirs), and a swap would merge silently wrong. Nothing is
+    written to the repository: the three are put in temporary files for git, which merge-file
+    needs. Raises GitError if git can't merge them (e.g. binary content). It takes a Git, as
+    a ReadOnlyGit doesn't run merge-file."""
+    with tempfile.TemporaryDirectory() as scratch:
+        paths: list[bytes] = []
+        for name, content in (("ours", ours), ("base", base), ("theirs", theirs)):
+            paths.append(os.fsencode(os.path.join(scratch, name)))
+            with open(paths[-1], "wb") as f:
+                f.write(content)
+        args = ["merge-file", "--stdout", *options]
+        args += [arg for label in labels for arg in ("-L", label)]
+        result = git.process(*args, *paths, capture_output=True)
+    if not 0 <= result.returncode <= _MOST_CONFLICTS:
+        raise error_from(args, result)
+    return result.stdout, result.returncode
 
 
 @dataclass(frozen=True)
