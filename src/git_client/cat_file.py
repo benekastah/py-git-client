@@ -10,7 +10,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import IO, Self
+from typing import IO, Literal, Self, get_args
 
 from git_client.client import (
     FATAL,
@@ -29,8 +29,10 @@ USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
 unlike the 128 (FATAL) of `cat-file` exiting on a name."""
 
-_TYPES = ("blob", "commit", "tag", "tree")
+ObjectType = Literal["blob", "commit", "tag", "tree"]
 """The types of git's objects."""
+
+_TYPES: tuple[ObjectType, ...] = get_args(ObjectType)
 
 _PROBE = b"info " + b"0" * 40 + b"\n"
 """The first request to each new process, sent with the caller's: a name git answers rather
@@ -133,10 +135,10 @@ class CatFile:
             reply, reason = self._request(b"info " + line, name)
         header = object_header(reply)
         if header is None:
-            raise _failure(reply, reason)
+            raise _failure(name, reply, reason)
         return header[0]
 
-    def read(self, object_id: str, type: str | None = None) -> tuple[str, bytes]:
+    def read(self, object_id: str, type: ObjectType | None = None) -> tuple[str, bytes]:
         """The type and content of the object with this full id, as `git cat-file <type>
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
         ("blob", "commit", "tag" or "tree"), the object must be of that type, or peel to one
@@ -154,7 +156,7 @@ class CatFile:
             if header is None:
                 if not reply:
                     raise GitError(_COMMAND, 1, reason or f"cat-file exited at {name}")
-                raise _failure(reply, reason)
+                raise _failure(name, reply, reason)
             assert self._process is not None and self._process.stdout is not None
             _, kind, size = header
             content = self._process.stdout.read(size)
@@ -178,22 +180,28 @@ class CatFile:
         the lock."""
         while True:
             new = self._process is None
-            if self._process is None or self._stderr is None:
+            if self._process is None:
                 # Its stderr goes to a file, read only for what it says of a name that names
                 # nothing: it warns even of names it resolves (e.g. a name that's both a
-                # branch and a tag), as rev-parse --quiet doesn't.
-                # _end closes it, with the process.
-                self._stderr = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
-                self._process = self.git.popen(*_COMMAND, stderr=self._stderr)
-                self._stopper = weakref.finalize(self, _end, self._process, self._stderr)
+                # branch and a tag), as rev-parse --quiet doesn't. _end closes it, with the
+                # process; or here, if the process can't start.
+                file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
+                try:
+                    self._process = self.git.popen(*_COMMAND, stderr=file)
+                except BaseException:
+                    file.close()
+                    raise
+                self._stderr = file
+                self._stopper = weakref.finalize(self, _end, self._process, file)
                 # Not as Python exits, when a daemon thread may be in a request: the process
                 # gets EOF on its stdin then, and exits by itself.
                 self._stopper.atexit = False
-            elif os.fstat(self._stderr.fileno()).st_size:
+            elif self._stderr is not None and os.fstat(self._stderr.fileno()).st_size:
                 # What it said of earlier requests.
                 self._stderr.truncate(0)
                 self._stderr.seek(0)
             process, stderr = self._process, self._stderr
+            assert stderr is not None
             assert process.stdin is not None and process.stdout is not None
             # Whether it has answered a request: _PROBE, for a new process.
             answered = not new
@@ -233,15 +241,14 @@ class CatFile:
 def _said(stderr: IO[bytes]) -> str:
     """What cat-file wrote to its stderr file since it was last emptied."""
     stderr.seek(0)
-    # Without NULs: where git's offset in the file isn't ours, it writes past the end of the
-    # file as we emptied it, and the gap reads as NULs.
-    return decode(stderr.read()).replace("\0", "").strip()
+    return decode(stderr.read()).strip()
 
 
-def _failure(reply: bytes, reason: str) -> GitError:
-    """The error for a name cat-file found nothing for: it answered `reply` (empty if it
-    exited), saying `reason` on stderr."""
-    reason = reason or decode(reply).strip()
+def _failure(name: str, reply: bytes, reason: str) -> GitError:
+    """The error for `name`, which cat-file found nothing for: it answered `reply` (empty if
+    it exited), saying `reason` on stderr (empty if its stderr didn't reach the file, as from
+    a popen that doesn't pass it on)."""
+    reason = reason or decode(reply).strip() or f"{name} missing"
     error = GitError if WRONG_TYPE.search(reason) else UnknownRevisionError
     return error(_COMMAND, FATAL if not reply else 1, reason)
 

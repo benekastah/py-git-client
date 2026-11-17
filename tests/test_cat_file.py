@@ -291,8 +291,8 @@ def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:
             cat_file.read(blob, "commit")
         with pytest.raises(UnknownRevisionError):
             cat_file.read("0" * 40, "commit")
-        with pytest.raises(ValueError):
-            cat_file.read(commit, "HEAD")
+        with pytest.raises(ValueError):  # from a caller whose types aren't checked
+            cat_file.read(commit, "HEAD")  # pyright: ignore[reportArgumentType]
 
     assert type(raised.value) is GitError
     assert "expected commit type, but the object dereferences to blob type" in str(raised.value)
@@ -354,6 +354,50 @@ def test_stopping_leaves_no_pipe_open(repo: Git) -> None:
         gc.collect()
 
     assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
+
+
+class GitThatCantStart(Git):
+    """A git whose long-lived process can't start (e.g. a tool's that's shutting down)."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        raise RuntimeError("not now")
+
+
+def test_a_process_that_cant_start_leaves_no_file_open(repo: Git) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        cat_file = CatFile(GitThatCantStart(repo.directory))
+        with pytest.raises(RuntimeError):
+            cat_file.resolve("HEAD")
+        del cat_file
+        gc.collect()
+
+    assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
+
+
+class GitThatDropsStderr(Git):
+    """A git whose popen takes `stderr`, but doesn't pass it on."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        return super().popen(*args, env=env)
+
+
+def test_verify_names_the_name_when_git_said_nothing_of_it(repo: Git) -> None:
+    with (
+        CatFile(GitThatDropsStderr(repo.directory)) as cat_file,
+        pytest.raises(UnknownRevisionError, match="main@{u} missing"),
+    ):
+        cat_file.verify("main@{u}")
 
 
 class GitWithoutBatchCommand(Git):

@@ -638,7 +638,9 @@ class ReadOnlyGit:
         until its stdin closes (e.g. `cat-file --batch`). Its stderr goes nowhere, or to
         `stderr`: a file, say, not a pipe, which nothing would read until it filled and git
         stopped. It has no timeout, and its messages are in English (see `process`). Raises
-        NotStartedError, starting nothing, once `stopping` says so."""
+        NotStartedError, starting nothing, once `stopping` says so. A subclass that overrides
+        it must take `stderr` and pass it on to `super().popen`: CatFile reads git's reasons
+        there."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
         return subprocess.Popen(
