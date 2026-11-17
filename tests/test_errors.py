@@ -336,3 +336,22 @@ def test_an_object_a_partial_clone_cant_fetch(unfetchable: Git) -> None:
             cat_file.info(blob)
         with pytest.raises(MissingObjectError):
             cat_file.read(blob)
+
+
+def test_a_read_only_client_takes_a_blob_a_partial_clone_lacks_as_naming_nothing(
+    partial_clone: Git,
+) -> None:
+    # cat-file says only that it's missing, as of a name that names nothing: git doesn't say
+    # why, so neither can the library, short of a process of its own per name.
+    reader = partial_clone.read_only()
+    blob = reader.run("rev-parse", "HEAD:a")  # which reads only the tree
+
+    assert reader.resolve(blob) is None
+    with CatFile(reader) as cat_file:
+        assert cat_file.info("HEAD:a") is None
+        with pytest.raises(UnknownRevisionError):
+            cat_file.read(blob)
+    with pytest.raises(UnknownRevisionError):
+        reader.run("cat-file", "-p", "HEAD:a")
+    with pytest.raises(GitError, match="no such path"):
+        reader.run("blame", "HEAD", "--", "a")

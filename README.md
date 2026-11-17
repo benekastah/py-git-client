@@ -281,7 +281,12 @@ git to run doesn't write:
 - `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
 - `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
   2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs
-  one fails.
+  one fails. Most (`log -p`, `show`, `diff-tree -p`, `log --stat`, ...) raise
+  `MissingObjectError`, which a tool can catch to try again with a `Git`. But `cat-file`
+  says only that the object is missing, as of a name that names nothing: `resolve` and
+  `CatFile` give None for it (and `verify` and `read` raise `UnknownRevisionError`), `git
+  cat-file -p <rev>:<path>` raises `UnknownRevisionError`, and `git blame` says the path
+  isn't there (a plain `GitError`).
 
 What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --filters`, or its
 clean, which `status` runs on a file whose stat information changed), a merge driver

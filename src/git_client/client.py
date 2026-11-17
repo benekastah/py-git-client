@@ -501,7 +501,9 @@ class ReadOnlyGit:
     submodule's `git diff`; and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
     the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
     (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
-    fails. What git still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
+    fails: most commands raise MissingObjectError, but cat-file says only that it's missing,
+    so `resolve` and CatFile take it as a name that names nothing (see the README). What git
+    still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
     --filters`, or its clean, which `status` runs on a file whose stat information changed),
     a merge driver (merge.<driver>.driver, which `log --remerge-diff` runs, as does `log -m`
     under log.diffMerges=remerge), the program gpg.program or gpg.ssh.program names (`log
