@@ -135,9 +135,11 @@ class CorruptObjectError(GitError):
 
 
 class MissingObjectError(GitError):
-    """An object a partial clone lacks, which git couldn't fetch from its promisor remote: a
-    ReadOnlyGit fetches none (see there), and a Git fails to when the remote can't be reached
-    (its reasons are in `stderr` too). A tool can catch it and try again with a Git."""
+    """An object a partial clone lacks, which git couldn't fetch from its promisor remote. From
+    a ReadOnlyGit, which fetches none (see there), try again with a Git. From a Git, the
+    promisor remote couldn't be reached, or lacks it (its `stderr` says why), so trying again
+    fails the same way. It's raised where a failed fetch raised RemoteError before, so a tool
+    that catches RemoteError around a partial clone's commands should catch this too."""
 
 
 class ConfigLockedError(GitError):

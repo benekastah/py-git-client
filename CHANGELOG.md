@@ -55,7 +55,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
   `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor
   remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
-  from `resolve` and `CatFile` (#55).
+  from `resolve` and `CatFile`. A tool that catches `RemoteError` around a partial clone's
+  commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
