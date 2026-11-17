@@ -1,10 +1,11 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 from git_client import CatFile, Git, ReadOnlyError, ReadOnlyGit, config, find_git
-from git_client.testing import FakeGit, RepoTemplates, UnexpectedCommand, real_git
+from git_client.testing import FakeGit, GitCall, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
 
@@ -301,6 +302,24 @@ def test_git_calls_records_a_read_only_clients_processes_but_not_what_it_refuses
         git.run("commit", "--allow-empty", "-m", "x")
 
     assert git_calls == [["log", "-1"]]
+
+
+@pytest.mark.usefixtures("fresh_find_git")
+def test_git_calls_records_the_git_each_process_ran(
+    repo: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real git, spelled as no search for git would: only the variable can name it so.
+    named = os.path.join(os.path.dirname(real_git()), ".", os.path.basename(real_git()))
+    monkeypatch.setenv("MY_TOOL_GIT", named)
+
+    Git(repo.directory, env_var="MY_TOOL_GIT").run("log", "-1")
+    with CatFile(Git(repo.directory, program=real_git())) as cat_file:
+        cat_file.resolve("HEAD")
+
+    assert [(call.program, call) for call in git_calls] == [
+        (named, ["log", "-1"]),
+        (real_git(), ["cat-file", "--batch-command"]),
+    ]
 
 
 @pytest.fixture

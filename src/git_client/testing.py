@@ -408,20 +408,30 @@ def fresh_find_git() -> Iterator[None]:
     find_git.cache_clear()
 
 
+class GitCall(list[str]):
+    """A git process git_calls recorded: git's arguments, as a list (equal to a plain list of
+    the same arguments), and `program`, the git it ran (the client's `program`: e.g. what a
+    project's variable named, through `find_git(env_var)`)."""
+
+    def __init__(self, args: Sequence[str], program: str) -> None:
+        super().__init__(args)
+        self.program = program
+
+
 @pytest.fixture
-def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """The arguments of each git process a `Git` or `ReadOnlyGit` starts during the test
-    (through `process` or `popen`; without `git -C <directory>`), in order, while git runs as
-    it would: to count a tool's processes, or check the ones it starts. It leaves out the
-    plugin's own, building and copying templates (see RepoTemplates), whichever fixture is
-    set up first."""
-    calls: list[list[str]] = []
+def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
+    """Each git process a `Git` or `ReadOnlyGit` starts during the test (through `process` or
+    `popen`), in order, while git runs as it would: to count a tool's processes, or check the
+    ones it starts. Each is a GitCall: git's arguments (without `git -C <directory>`), and the
+    git it ran in `program`. It leaves out the plugin's own, building and copying templates
+    (see RepoTemplates), whichever fixture is set up first."""
+    calls: list[GitCall] = []
     process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
 
     def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
         git.command(*args)  # raises ReadOnlyError, starting nothing, for one it refuses
         if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+            calls.append(GitCall([os.fsdecode(arg) for arg in args], git.program))
 
     def recording_process(
         self: ReadOnlyGit, *args: Arg, **kwargs: Any

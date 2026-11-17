@@ -228,14 +228,17 @@ otherwise (e.g. for a command a tool didn't run).
   ```python
   os.environ["MY_TOOL_GIT"] = real_git()
   ```
-- **`git_calls`**: the arguments of each git process a `Git` or `ReadOnlyGit` starts during the
-  test, while real git runs, to count a tool's processes or check the ones it starts. It leaves
-  out the plugin's own, building and copying templates, whatever order the fixtures come in:
+- **`git_calls`**: each git process a `Git` or `ReadOnlyGit` starts during the test, while
+  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
+  plugin's own, building and copying templates, whatever order the fixtures come in. Each is
+  a `GitCall`: git's arguments, as a list (equal to a plain list of them), and in `program`
+  the git it ran, e.g. to check that your tool's variable is honored:
 
   ```python
-  def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:
+  def test_status_takes_one_process(clone: Git, git_calls: list[GitCall]) -> None:
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
+      assert git_calls[0].program == os.environ["MY_TOOL_GIT"]
   ```
 - **`outside_any_repository`**: runs a test from an empty temporary directory, where git
   finds no repository, so a git run without a directory (a `Git()` your code forgot to give
