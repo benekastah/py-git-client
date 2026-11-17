@@ -16,9 +16,9 @@ class GitError(RuntimeError):
     if it has none, e.g. a GitTimeoutError), and `stderr` and `stdout` what it printed there
     (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
     one and failed). The message's first line is `git <command> failed (<status>):`, the
-    status being the exit status, or, without one, "no exit status" (e.g. for a command a tool
-    didn't run, saying why in `stderr`), and "timed out" only for a GitTimeoutError; what git
-    said to stderr follows. It shows at most MAX_COMMAND_IN_MESSAGE characters of the
+    status being the exit status or, without one, "timed out" for a GitTimeoutError and "no
+    exit status" otherwise (e.g. for a command a tool didn't run, saying why in `stderr`);
+    `stderr` follows. It shows at most MAX_COMMAND_IN_MESSAGE characters of the
     command line, ending with "…" when cut; `command` keeps all of it. It shows bytes that
     aren't UTF-8 (in a path, say) escaped, as `\xe9`, so it can be written anywhere;
     `command`, `stderr` and `stdout` keep them, as `decode` gives them."""
