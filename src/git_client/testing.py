@@ -482,8 +482,8 @@ class FakeGit(Git):
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
     run over FakeGit's. Its constructor's arguments reach FakeGit's, Git's own, but FakeGit
-    runs "git" unless given a `program` (None included), without looking for one (`env_var`
-    is ignored).
+    runs `program`, or "git" if that's None, without looking for one (`env_var` is
+    ignored).
 
         class FakeMyGit(MyGit, FakeGit):
             pass

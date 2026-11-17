@@ -273,8 +273,8 @@ otherwise (e.g. for a command a tool didn't run).
   If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
   so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
   calls `super().process`), run over its fake processes. Your constructor's arguments reach
-  `FakeGit`'s, which are `Git`'s, but it runs `"git"` unless given a `program` (`None`
-  included), without looking for one (it ignores `env_var`):
+  `FakeGit`'s, which are `Git`'s, but it runs `program`, or `"git"` if that's `None`,
+  without looking for one (it ignores `env_var`):
 
   ```python
   class MyGit(Git):  # your tool's
