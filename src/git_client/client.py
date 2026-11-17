@@ -209,22 +209,31 @@ _GRACE = 0.25
 _AFTER_STOP = 1.0
 
 
-def _own_process_group(timeout: float | None) -> bool:
+def _own_process_group(timeout: float | None, process_groups: bool) -> bool:
     """Whether git starts in a process group of its own, so that past its timeout, or on an
     interrupt, what it started (hooks, ssh, git-remote-https, credential helpers) is stopped
     with it: on Linux and macOS, for a command with a timeout, when the tool has no
-    controlling terminal (as in CI, or a service). With one, git stays in the terminal's
-    foreground group, as from a shell: a group of its own would be in the background, where
-    reading the terminal (a password prompt, an editor, a pager) stops it until the timeout,
-    and Ctrl-C would reach the tool alone. Only with a timeout, as a group keeps Python from
-    using posix_spawn."""
-    if timeout is None or sys.platform == "win32":
+    controlling terminal (as in CI, or a service), unless the client's `process_groups` is
+    False. With a terminal, git stays in the terminal's foreground group, as from a shell: a
+    group of its own would be in the background, where reading the terminal (a password
+    prompt, an editor, a pager) stops it until the timeout, and Ctrl-C would reach the tool
+    alone. Only with a timeout, as a group keeps Python from using posix_spawn."""
+    if timeout is None or not process_groups or sys.platform == "win32":
         return False
+    return not _has_terminal(os.getpid(), os.getsid(0))
+
+
+@functools.cache
+def _has_terminal(pid: int, session: int) -> bool:
+    """Whether the tool has a controlling terminal: probed once per process (`pid`, so a
+    forked child probes again) and session (`session`, which os.setsid, the usual way to lose
+    the terminal, changes). Not noticed: a session leader that takes a terminal of its own
+    later, which a tool doesn't do once it runs git."""
     try:
         os.close(os.open("/dev/tty", os.O_RDWR))
     except OSError:
-        return True
-    return False
+        return False
+    return True
 
 
 def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: bool) -> None:
@@ -297,6 +306,45 @@ def _stdin(input: bytes | None, capture_output: bool) -> int | None:
     if input is not None:
         return subprocess.PIPE
     return subprocess.DEVNULL if capture_output else None
+
+
+# os.environ's own dict, which _environments compares with what it saw last to notice a
+# change; None where Python keeps it elsewhere, and the environment is then built anew for
+# every command.
+_ENVIRON_DATA: Mapping[object, object] | None = getattr(os.environ, "_data", None)
+
+# How many environments _environments keeps at most: one per mix of what a command adds.
+_MOST_ENVIRONMENTS = 64
+
+
+class _Environments:
+    """The environments built for git (see ReadOnlyGit.environment), per what was added to
+    ours: copying os.environ for every command costs about 50 µs, much of what starting git
+    costs. They're dropped once os.environ changes, which comparing it with a copy of what it
+    was then tells in about a microsecond."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seen: dict[object, object] | None = None
+        self._built: dict[object, dict[str, str]] = {}
+
+    def get(self, key: object, build: Callable[[], dict[str, str]]) -> dict[str, str]:
+        """The environment for `key`, built with `build` from os.environ unless one was
+        already, since os.environ last changed. It's shared: don't change it."""
+        with self._lock:
+            if _ENVIRON_DATA is None:
+                return build()
+            if self._seen != _ENVIRON_DATA:
+                self._seen = dict(_ENVIRON_DATA)
+                self._built.clear()
+            if key not in self._built:
+                if len(self._built) >= _MOST_ENVIRONMENTS:
+                    self._built.clear()
+                self._built[key] = build()
+            return self._built[key]
+
+
+_environments = _Environments()
 
 
 def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
@@ -581,6 +629,13 @@ class ReadOnlyGit:
     tool, give those commands no timeout, so git stays in the tool's group and gets the
     signal itself.
 
+    With `process_groups=False`, git never gets a group of its own: past a timeout, or on an
+    interrupt, only git is stopped, and what it started (hooks, ssh, credential helpers) runs
+    on, as with a terminal. In exchange, starting git costs less: on macOS, a group of its own
+    keeps Python from using posix_spawn, and on Linux it costs about 50 µs a command (a
+    twentieth of what starting git costs). For a tool that runs many short commands with a timeout and
+    without a terminal, whose git starts nothing that could outlive it.
+
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
     """
@@ -599,6 +654,7 @@ class ReadOnlyGit:
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
+        process_groups: bool = True,
     ) -> None:
         if object_id_length not in (None, 40, 64):
             raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
@@ -607,6 +663,7 @@ class ReadOnlyGit:
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
         self.stopping = stopping
+        self.process_groups = process_groups
         self._object_id_length = object_id_length
         # Per location: the length, or an Event a thread asking git sets once it has answered.
         self._object_id_lengths: dict[Location, int | threading.Event] = {}
@@ -614,13 +671,13 @@ class ReadOnlyGit:
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
         (see there), and otherwise runs as the client does, with the same `program`,
-        `timeout`, `stopping` and `env`, as they are now. It's of the client's own class, so a
-        subclass's methods (e.g. its own `process`) and attributes are kept (an attribute
-        that holds the client itself still writes through it); and it shares what git told
-        the client about where things are (`prefix()`, `object_id_length()`, `git_paths`), so
-        it asks no question the client asked, nor the client one it asked. A new copy each
-        call; a read-only client gives itself. Raises ReadOnlyError if `env` holds a variable
-        a ReadOnlyGit doesn't take."""
+        `timeout`, `stopping`, `process_groups` and `env`, as they are now. It's of the
+        client's own class, so a subclass's methods (e.g. its own `process`) and attributes
+        are kept (an attribute that holds the client itself still writes through it); and it
+        shares what git told the client about where things are (`prefix()`,
+        `object_id_length()`, `git_paths`), so it asks no question the client asked, nor the
+        client one it asked. A new copy each call; a read-only client gives itself. Raises
+        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
@@ -709,16 +766,24 @@ class ReadOnlyGit:
         given as bytes as it is. Each is given here as the str that os.fsdecode makes of
         those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
         GIT_OPTIONAL_LOCKS=0 and GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a
-        variable in `env` (or the client's) that it doesn't take."""
+        variable in `env` (or the client's) that it doesn't take. What it builds is kept, for
+        the next command given the same, until os.environ changes."""
         added = {**self.env, **(env or {})}
         if self._read_only:
             _refuse_environment(added)
-        return {
-            **os.environ,
-            **(_ENGLISH if english else {}),
-            **{key: self._environment_value(value) for key, value in added.items()},
-            **(_READ_ONLY_ENVIRONMENT if self._read_only else {}),
-        }
+        read_only = self._read_only
+
+        def build() -> dict[str, str]:
+            return {
+                **os.environ,
+                **(_ENGLISH if english else {}),
+                **{key: self._environment_value(value) for key, value in added.items()},
+                **(_READ_ONLY_ENVIRONMENT if read_only else {}),
+            }
+
+        # A copy of the one kept (see _Environments), which costs little: a dict's, not
+        # os.environ's, which decodes each variable.
+        return dict(_environments.get((english, read_only, tuple(added.items())), build))
 
     @staticmethod
     def _environment_value(value: EnvValue) -> str:
@@ -756,7 +821,7 @@ class ReadOnlyGit:
         command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
-        own_group = _own_process_group(seconds)
+        own_group = _own_process_group(seconds, self.process_groups)
         try:
             with subprocess.Popen(
                 command,

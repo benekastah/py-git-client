@@ -595,6 +595,26 @@ def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
     assert client.run("log", "-2", "--format=%an") == "Command\nClient"
 
 
+def test_each_command_gets_the_environment_as_it_is_then(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The library keeps the environment it built for git till ours, or the client's, changes.
+    def author() -> str:
+        return repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0]
+
+    names = [author()]
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Ours")
+    names.append(author())
+    repo.env["GIT_AUTHOR_NAME"] = "The client's"
+    names.append(author())
+    del repo.env["GIT_AUTHOR_NAME"]
+    monkeypatch.delenv("GIT_AUTHOR_NAME")
+    names.append(author())
+
+    assert names == [names[0], "Ours", "The client's", names[0]]
+    assert names[0] not in ("Ours", "The client's")
+
+
 def test_text_reaches_git_as_utf8(repo: Git) -> None:
     repo.run(
         "commit", "--quiet", "--allow-empty", "-m", "Zoë 张", env={"GIT_AUTHOR_NAME": "Zoë 张"}

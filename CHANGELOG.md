@@ -121,6 +121,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
   --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`
   (#55).
+- `Git(process_groups=False)`, and `ReadOnlyGit`'s and `FakeGit`'s: git never gets a
+  process group of its own, so a command with a timeout starts faster without a terminal,
+  but what git started isn't stopped with it (#52).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).
@@ -171,6 +174,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
   Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
   started are killed; a timeout still kills them at once (#52).
+- Starting git costs less: per command (of about 1 ms), about 70 µs less when the tool has
+  no terminal, and about 120 µs less for a command with a timeout, terminal or not. The
+  environment built for git is kept until os.environ, the client's `env` or the command's
+  changes, rather than copied from os.environ every time, and whether the tool has a
+  terminal is asked once per process and session (#52).
 
 ## 0.0.2 (2026-11-17)
 

@@ -213,6 +213,12 @@ stops only a git the main thread runs. A git another thread runs goes on until i
 times out, and is orphaned if the tool is killed first; to have it stopped with the tool, give
 those commands no timeout, so git stays in the tool's group and gets the signal itself.
 
+`Git(..., process_groups=False)` keeps git in the tool's group whatever its timeout: past one,
+or on an interrupt, only git is stopped, and what it started runs on, as with a terminal. In
+exchange each command starts faster without a terminal: by about 50 µs on Linux, and more on
+macOS, where a group of its own keeps Python from using posix_spawn. It suits a tool that runs
+many short commands, whose git starts nothing that could outlive it.
+
 A tool that's shutting down can have its clients start no more git, whichever thread asks,
 with `stopping`, which each client asks before it starts git:
 
