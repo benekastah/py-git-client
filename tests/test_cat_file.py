@@ -113,6 +113,27 @@ def test_a_cat_file_no_longer_used_stops_its_process(repo: Git) -> None:
     assert git.started[0].poll() is not None
 
 
+def test_exiting_leaves_a_cat_file_another_thread_uses_alone(repo: Git) -> None:
+    # A daemon thread's requests carry on as Python exits, rather than lose the process.
+    script = """
+import sys, threading, time
+from git_client import CatFile, Git
+cat_file = CatFile(Git(sys.argv[1], program=sys.argv[2]))
+def resolve():
+    while True:
+        cat_file.resolve("HEAD")
+threading.Thread(target=resolve, daemon=True).start()
+time.sleep(0.2)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, repo.directory, real_git()],
+        capture_output=True,
+        check=True,
+    )
+
+    assert b"Exception in thread" not in result.stderr
+
+
 class KeepsItsCatFile(StartsKeepingGit):
     """A client with a CatFile of its own, which holds it weakly."""
 

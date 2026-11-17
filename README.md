@@ -66,10 +66,10 @@ old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
 ```
 
-A CatFile's process stops once nothing uses it. A client that keeps one for itself (e.g.
-`self.cat_file = CatFile(self, weak=True)` in a `Git` subclass) passes `weak=True`, so the
-two make no reference cycle, which would keep the client and its process until Python's
-garbage collector ran.
+A CatFile's process stops once nothing uses it. A `Git` subclass that keeps a CatFile of
+itself makes it with `CatFile(self, weak=True)`, so the two make no reference cycle (which
+would keep the client and its process until the garbage collector ran). Don't pass
+`weak=True` for a client nothing else holds: it would be freed at once.
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
 filesystem's encoding; text, as str, which reaches git as UTF-8 whatever the locale's

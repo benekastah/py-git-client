@@ -53,8 +53,11 @@ class CatFile:
     between requests (killed, say) is started again for the request that finds it gone. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
+    Damage git finds only as it reads a name (e.g. a corrupt object) makes that name resolve
+    to nothing, like a name git exits on.
 
-    Its process stops when it's no longer used, as Python frees it. With `weak`, it holds
+    Its process stops when it's no longer used, as Python frees it (or, at exit, as its stdin
+    closes). With `weak`, it holds
     `git` by a weak reference, for a CatFile the client keeps itself (e.g. `self.cat_file =
     CatFile(self, weak=True)` in a Git subclass): a strong one would make a reference cycle,
     which keeps a client no longer used, and its process, until the garbage collector finds
@@ -150,6 +153,9 @@ class CatFile:
                 # that's both a branch and a tag), as rev-parse --quiet doesn't.
                 self._process = self.git.popen(*_COMMAND)
                 self._stopper = weakref.finalize(self, _end, self._process)
+                # Not as Python exits, when a daemon thread may be in a request: the process
+                # gets EOF on its stdin then, and exits by itself.
+                self._stopper.atexit = False
             process = self._process
             assert process.stdin is not None and process.stdout is not None
             # Whether it has answered a request: _PROBE, for a new process.
