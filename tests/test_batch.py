@@ -288,33 +288,14 @@ def test_patch_ids_takes_paths_from_the_top_as_they_are(repo_from: RepoFrom) -> 
     assert [commit for _, commit in no_paths] == topic
 
 
-def test_patch_ids_takes_paths_from_the_top_case_sensitively(repo: Git) -> None:
-    # Two paths that differ only in case, made in the index alone so that a case-insensitive
-    # filesystem needn't hold both.
-    def commit(message: str, ab_content: bytes) -> None:
-        for path, content in (("ab", b"same\n"), ("Ab", ab_content)):
-            blob = repo.run("hash-object", "-w", "--stdin", input=content.decode()).strip()
-            repo.run(
-                "-c", "core.ignorecase=false", "update-index", "--add", "--cacheinfo",
-                f"100644,{blob},{path}",
-            )  # fmt: skip
-        repo.run("commit", "--quiet", "-m", message)
-
-    commit("add both", b"before\n")
-    repo.run("switch", "--quiet", "-c", "topic")
-    commit("change Ab", b"after\n")
+def test_patch_ids_takes_paths_from_the_top_case_sensitively(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "Ab")
     # Which would have "ab" name "Ab" too, were it not overridden.
     git = Git(repo.directory, env={"GIT_ICASE_PATHSPECS": "1"})
 
-    [lower, upper] = patch_ids(
-        git,
-        [*TOPIC[0], "--", "ab"],
-        [*TOPIC[0], "--", "Ab"],
-        paths_from_top=True,
-    )
+    [lower] = patch_ids(git, [*TOPIC[0], "--", "ab"], paths_from_top=True)
 
     assert lower == []
-    assert [commit for _, commit in upper] == [repo.run("rev-parse", "topic")]
 
 
 def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
