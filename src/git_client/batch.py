@@ -151,10 +151,11 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         prefix = [] if where in known_prefixes else ["--show-prefix"]
         args = [arg for name in new for arg in ("--git-path", name)]
         output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
-        lines = output.split(b"\n")
+        # Not splitlines(): the prefix's line can be empty, and a path can't hold a line ending.
+        lines = output.removesuffix(b"\n").split(b"\n")
         if prefix:
             known_prefixes[where] = decode(lines.pop(0))
-        for name, line in zip(new, lines[: len(new)], strict=True):
+        for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
 

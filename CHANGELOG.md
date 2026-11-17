@@ -11,7 +11,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
   that cached them itself can drop its cache (and its `cdup` is
-  `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process. A
+  `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process: its
+  command is `rev-parse --show-prefix --path-format=absolute --git-path ...` while the
+  prefix isn't known, so a `FakeGit` answering it gives the prefix's line first. A
   repository moved or replaced under a client that keeps its directory isn't noticed; make a
   new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`

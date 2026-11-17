@@ -18,6 +18,7 @@ from git_client import (
     refs,
     update_refs,
 )
+from git_client.testing import FakeGit
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -594,7 +595,9 @@ def test_update_refs_makes_none_if_any_cant_be_made(repo: Git) -> None:
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main"}
 
 
-@pytest.mark.parametrize(("where", "prefix"), [(".", ""), ("sub/deep", "sub/deep/"), (".git", "")])
+@pytest.mark.parametrize(
+    ("where", "prefix"), [(".", ""), ("sub/deep", "sub/deep/"), (" a/b", " a/b/"), (".git", "")]
+)
 def test_git_paths_learns_the_prefix_in_the_same_process(
     repo: Git, git_calls: list[list[str]], where: str, prefix: str
 ) -> None:
@@ -609,3 +612,10 @@ def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]
     repo.prefix()
     git_paths(repo, "HEAD")
     assert "--show-prefix" not in git_calls[-1]
+
+
+def test_git_paths_refuses_an_answer_a_line_short() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
+    with pytest.raises(ValueError):
+        git_paths(git, "HEAD")
