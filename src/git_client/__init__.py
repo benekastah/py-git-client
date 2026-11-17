@@ -43,6 +43,7 @@ from git_client.errors import (
     WrongTypeError,
 )
 from git_client.paths import git_common_dir
+from git_client.snapshot import RefSnapshot
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -63,6 +64,7 @@ __all__ = [
     "ReadOnlyError",
     "ReadOnlyGit",
     "Ref",
+    "RefSnapshot",
     "RefUpdate",
     "RemoteError",
     "Timeout",

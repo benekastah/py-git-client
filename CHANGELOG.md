@@ -33,6 +33,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `WrongTypeError`, a `GitError` whose `expected` and `found` say which type git wanted and
   which it found.
 - `CorruptObjectError`, a `GitError` for an object git found damaged as it read it.
+- `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
+  until a command that may change a ref or a branch's upstream runs through any `Git` (or
+  `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
+  that change them, can go.
 
 ## 0.0.2 (2026-11-17)
 
