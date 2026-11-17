@@ -739,6 +739,18 @@ def test_only_passthrough_reads_the_tools_stdin(repo: Git) -> None:
     ]
 
 
+def test_importing_the_library_leaves_tempfile_out() -> None:
+    # In a Python of its own, as pytest has imported it here: tempfile takes a few
+    # milliseconds to import, which every tool would pay at its start.
+    script = "import sys, git_client; print('tempfile' in sys.modules)"
+
+    imported = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, check=True
+    ).stdout
+
+    assert imported.strip() == b"False"
+
+
 def test_runs_in_its_directory_wherever_we_are(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
