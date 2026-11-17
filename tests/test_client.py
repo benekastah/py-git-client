@@ -321,20 +321,6 @@ def test_text_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> No
     assert repo.run_bytes("log", "-1", "--format=%an %s") == "Zoë 张 Zoë 张\n".encode()
 
 
-@pytest.fixture
-def german(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A user who reads git in German, if git's translations are installed."""
-    monkeypatch.setenv("LANGUAGE", "de")
-    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
-    said = subprocess.run(
-        [repo.program, "-C", repo.directory, "rev-parse", "--verify", "no-such-branch"],
-        capture_output=True,
-        check=False,
-    ).stderr
-    if b"Needed a single revision" in said:
-        pytest.skip("git's German translation isn't installed")
-
-
 @pytest.mark.usefixtures("german")
 def test_captured_messages_are_in_the_users_language(repo: Git) -> None:
     # The library has no German patterns, so it can't say which failure this is.
@@ -343,6 +329,17 @@ def test_captured_messages_are_in_the_users_language(repo: Git) -> None:
 
     assert type(raised.value) is GitError
     assert "Benötigte einen einzelnen Commit" in raised.value.stderr
+
+
+@pytest.mark.usefixtures("german")
+def test_a_failure_isnt_read_in_a_language_with_no_file(repo: Git) -> None:
+    # git translates the wrong type's line, but not "Not a valid commit name": read in English,
+    # that would say the name names nothing.
+    with pytest.raises(GitError) as raised:
+        repo.run("merge-base", "HEAD", "HEAD^{tree}")
+
+    assert type(raised.value) is GitError
+    assert "Not a valid commit name" in raised.value.stderr
 
 
 @pytest.mark.usefixtures("german")
