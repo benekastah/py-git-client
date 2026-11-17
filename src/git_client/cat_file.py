@@ -21,7 +21,14 @@ from git_client.client import (
     decode,
     object_header,
 )
-from git_client.errors import WRONG_TYPE, GitError, UnknownRevisionError, WrongTypeError
+from git_client.errors import (
+    CORRUPT_OBJECT,
+    WRONG_TYPE,
+    CorruptObjectError,
+    GitError,
+    UnknownRevisionError,
+    WrongTypeError,
+)
 
 _COMMAND = ("cat-file", "--batch-command")
 
@@ -60,9 +67,10 @@ class CatFile:
     resolves to nothing, and the next request starts another process. One that stopped
     between requests (killed, say) is started again for the request that finds it gone. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
-    git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
-    Damage git finds only as it reads a name (e.g. a corrupt object) makes that name resolve
-    to nothing, like a name git exits on.
+    git can't read the repository at all (e.g. NotARepositoryError, or a broken config), and
+    CorruptObjectError if an object git reads for it is damaged (e.g. a corrupt loose object),
+    rather than say the name names nothing: git can't tell what it would name. A ref git
+    ignores as broken names nothing, as `git rev-parse --verify` finds it.
 
     Its process stops when it's no longer used, as Python frees it (or, at exit, as its stdin
     closes). With `weak`, it holds
@@ -143,8 +151,9 @@ class CatFile:
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
         ("blob", "commit", "tag" or "tree"), the object must be of that type, or peel to one
         as `<id>^{<type>}` does (e.g. a commit to its tree): else it raises WrongTypeError.
-        Raises UnknownRevisionError if there's no such object, and GitError if git stops
-        partway through it, or can't read it at all (see CatFile)."""
+        Raises UnknownRevisionError if there's no such object, CorruptObjectError if it's
+        damaged, and GitError if git stops partway through it, or can't read it at all (see
+        CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         if type is not None and type not in _TYPES:
@@ -162,8 +171,12 @@ class CatFile:
             content = self._process.stdout.read(size)
             newline = self._process.stdout.read(1)
             if len(content) != size or newline != b"\n":
-                # It stopped partway through (killed, say): what came is no object's content.
+                # It stopped partway through (killed, or on a corrupt object in a pack): what
+                # came is no object's content.
+                assert self._stderr is not None
+                reason = _said(self._stderr)
                 self._stop()
+                _check_intact(reason, FATAL)
                 raise GitError(
                     _COMMAND, 1, f"cat-file stopped after {len(content)} of its {size} bytes"
                 )
@@ -174,7 +187,8 @@ class CatFile:
         if git exits rather than answer, as it does on some names that name nothing: the next
         request starts another process), and if that's no object's header, what git said of
         the request on stderr. A process that stopped between requests (killed, say) is
-        started again, for one more try. Raises GitError if a new process exits before it has
+        started again, for one more try. Raises CorruptObjectError if git found an object it
+        read for the request damaged, and GitError if a new process exits before it has
         answered anything for another reason: a usage error, as a git older than 2.36 gives at
         --batch-command, or what's wrong with the repository (e.g. NotARepositoryError). Hold
         the lock."""
@@ -216,7 +230,9 @@ class CatFile:
             if object_header(reply) is not None:
                 return reply, ""
             if reply:
-                return reply, _said(stderr)
+                reason = _said(stderr)
+                _check_intact(reason, 1)
+                return reply, reason
             # It has closed its stdout, exiting: all it said is in the file.
             reason = _said(stderr)
             self._stop()
@@ -228,6 +244,7 @@ class CatFile:
                 return reply, reason
             if new or process.returncode == FATAL:
                 # It exited on this name, after answering _PROBE or other requests.
+                _check_intact(reason, FATAL)
                 return reply, reason
             # It stopped some other way (killed, say), maybe before this request reached it.
 
@@ -242,6 +259,13 @@ def _said(stderr: IO[bytes]) -> str:
     """What cat-file wrote to its stderr file since it was last emptied."""
     stderr.seek(0)
     return decode(stderr.read()).strip()
+
+
+def _check_intact(reason: str, returncode: int) -> None:
+    """Raise CorruptObjectError if what cat-file said of a request, `reason`, is that an object
+    it read is damaged: then it can't tell what the name names."""
+    if CORRUPT_OBJECT.search(reason):
+        raise CorruptObjectError(_COMMAND, returncode, reason)
 
 
 def _failure(name: str, reply: bytes, reason: str) -> GitError:

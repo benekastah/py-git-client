@@ -219,6 +219,7 @@ said and raises a subclass:
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
+| `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |

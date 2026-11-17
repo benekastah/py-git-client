@@ -97,6 +97,11 @@ class WrongTypeError(GitError):
         self.found: str | None = None if said is None else said["found"] or said["found2"]
 
 
+class CorruptObjectError(GitError):
+    """An object git found damaged as it read it (e.g. a loose object, or a pack's copy of
+    one, that won't inflate): not one that isn't there, an UnknownRevisionError."""
+
+
 class ConfigLockedError(GitError):
     """Another process has the config file locked, and kept it so for as long as git
     retries (core.configLockTimeout, a second by default, since git 2.56); a write can be
@@ -124,6 +129,13 @@ class ConflictError(GitError):
 _STDOUT_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (ConflictError, re.compile(r"^CONFLICT \(", re.MULTILINE)),
 )
+# What git says of an object it found damaged as it read it: as it exits, or (from cat-file)
+# before saying the name is missing.
+CORRUPT_OBJECT = re.compile(
+    r"^fatal: (loose|packed) object \S+ \(stored in .*\) is corrupt$"
+    r"|^error: unable to unpack \S+ header$",
+    re.MULTILINE,
+)
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
     (
@@ -138,6 +150,8 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     ),
     # Not for another reason the lock file can't be made (e.g. "No such file or directory").
     (ConfigLockedError, re.compile("could not lock config file .*: File exists$", re.MULTILINE)),
+    # Not UnknownRevisionError: what git says of the object, then of the name it can't read.
+    (CorruptObjectError, CORRUPT_OBJECT),
     # The second is -C's, for a directory that isn't there.
     (NotARepositoryError, re.compile("not a git repository|cannot change to '")),
     (

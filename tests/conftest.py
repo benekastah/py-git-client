@@ -47,3 +47,40 @@ def repo_from(repo_templates: RepoTemplates, tmp_path: Path) -> Callable[[str, C
         return Git(repo_templates.copy(name, tmp_path / "copy") / "repo")
 
     return copy
+
+
+def corrupt_loose_commit(git: Git) -> None:
+    """Make the commit at HEAD, a loose object, garbage, as a disk's damage could."""
+    commit = git.run("rev-parse", "HEAD")
+    path = Path(git.directory) / ".git" / "objects" / commit[:2] / commit[2:]
+    path.chmod(0o644)  # git makes it read-only
+    path.write_bytes(b"garbage")
+
+
+def corrupt_packed_commit(git: Git) -> None:
+    """Pack every object, then make the commit at HEAD's data in the pack garbage, past the
+    header that says its type and size."""
+    commit = git.run("rev-parse", "HEAD")
+    git.run("repack", "-a", "-d", "-q")
+    pack_dir = Path(git.directory) / ".git" / "objects" / "pack"
+    (index,) = pack_dir.glob("*.idx")
+    # "<id> <type> <size> <size in the pack> <offset>"
+    (line,) = (
+        line
+        for line in git.run("verify-pack", "-v", str(index)).splitlines()
+        if line.startswith(commit)
+    )
+    offset = int(line.split()[4])
+    pack = index.with_suffix(".pack")
+    data = bytearray(pack.read_bytes())
+    for i in range(offset + 3, offset + 12):
+        data[i] ^= 0xFF
+    pack.chmod(0o644)
+    pack.write_bytes(bytes(data))
+
+
+@pytest.fixture(params=[corrupt_loose_commit, corrupt_packed_commit])
+def damaged_repo(request: pytest.FixtureRequest, repo_from: Callable[[str, Changes], Git]) -> Git:
+    """make_repo's repository with its commit's object corrupt: loose, or in a pack."""
+    corrupt: Changes = request.param
+    return repo_from(corrupt.__name__, corrupt)

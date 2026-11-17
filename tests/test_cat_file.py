@@ -15,6 +15,7 @@ import pytest
 from git_client import (
     Arg,
     CatFile,
+    CorruptObjectError,
     EnvValue,
     Git,
     GitError,
@@ -308,6 +309,32 @@ def test_reading_an_object_that_isnt_there_fails(repo: Git) -> None:
             cat_file.read("main")
         # And it's still in step.
         assert cat_file.read(repo.run("rev-parse", "HEAD:a")) == ("blob", b"a\n")
+
+
+def test_a_corrupt_object_isnt_taken_for_a_missing_one(damaged_repo: Git) -> None:
+    commit = damaged_repo.run("rev-parse", "HEAD")
+    blob = damaged_repo.run("hash-object", "a")  # HEAD:a would read the commit
+
+    with CatFile(damaged_repo) as cat_file:
+        # cat-file exits on it, at a new process's first request.
+        with pytest.raises(CorruptObjectError, match=f"object {commit} .* is corrupt"):
+            cat_file.resolve("main^{tree}")
+        # Loose, it says the name is missing; packed, it exits.
+        with pytest.raises(CorruptObjectError):
+            cat_file.verify("HEAD~1")
+        # Loose, it says the object is missing; packed, it stops after the header.
+        with pytest.raises(CorruptObjectError):
+            cat_file.read(commit)
+        with pytest.raises(CorruptObjectError):
+            cat_file.read(commit, "tree")
+        # What isn't damaged is read, and what isn't there is still missing.
+        assert cat_file.read(blob) == ("blob", b"a\n")
+        assert cat_file.resolve("no-such-branch") is None
+        assert cat_file.resolve("main@{u}") is None
+        with pytest.raises(UnknownRevisionError):
+            cat_file.verify("no-such-branch")
+        with pytest.raises(UnknownRevisionError):
+            cat_file.read("0" * 40)
 
 
 def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:

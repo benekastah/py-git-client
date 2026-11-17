@@ -13,6 +13,7 @@ import pytest
 from git_client import (
     ConfigLockedError,
     ConflictError,
+    CorruptObjectError,
     Git,
     GitError,
     NotARepositoryError,
@@ -108,6 +109,12 @@ def test_a_wrong_type_git_doesnt_name_has_no_types() -> None:
     error = WrongTypeError(["log"], 1, "not a commit")
 
     assert (error.expected, error.found) == (None, None)
+
+
+def test_a_corrupt_object(damaged_repo: Git) -> None:
+    # "fatal: loose object <id> (stored in <path>) is corrupt", or "packed object".
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.run("rev-parse", "--verify", "main^{tree}")
 
 
 def test_a_locked_config_file(repo: Git) -> None:

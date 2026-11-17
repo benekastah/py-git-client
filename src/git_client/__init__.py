@@ -32,6 +32,7 @@ from git_client.client import (
 from git_client.errors import (
     ConfigLockedError,
     ConflictError,
+    CorruptObjectError,
     GitError,
     GitTimeoutError,
     NotARepositoryError,
@@ -50,6 +51,7 @@ __all__ = [
     "CatFile",
     "ConfigLockedError",
     "ConflictError",
+    "CorruptObjectError",
     "EnvValue",
     "Git",
     "GitError",

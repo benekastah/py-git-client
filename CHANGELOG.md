@@ -17,6 +17,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
   GitError` no longer holds, and a tool that told it apart by git's message can catch
   `WrongTypeError` instead.
+- An object git finds damaged as it reads a name (e.g. a corrupt loose object) raises
+  `CorruptObjectError` from `CatFile`, where the name resolved to None (or `verify` and
+  `read` raised `UnknownRevisionError`): a missing name is still None. `run` and the like
+  raise it too, for git's own words of a corrupt object, where they raised a plain
+  `GitError`.
 
 ### Added
 
@@ -27,6 +32,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   but holds paths from the top of the worktree, as git reports them, as `patch_ids` has.
 - `WrongTypeError`, a `GitError` whose `expected` and `found` say which type git wanted and
   which it found.
+- `CorruptObjectError`, a `GitError` for an object git found damaged as it read it.
 
 ## 0.0.2 (2026-11-17)
 
