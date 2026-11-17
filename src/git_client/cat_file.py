@@ -68,7 +68,9 @@ class CatFile:
     them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
     no upstream), git cat-file exits rather than saying they name nothing; then that name
     resolves to nothing, and the next request starts another process. One that stopped
-    between requests (killed, say) is started again for the request that finds it gone. Any
+    between requests (killed, say) is started again for the request that finds it gone. A
+    request interrupted once sent (e.g. by KeyboardInterrupt) kills the process, whose answer
+    would otherwise answer the next request, which starts another. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config), and
     CorruptObjectError if an object git reads for it is damaged (e.g. a corrupt loose object),
@@ -174,8 +176,12 @@ class CatFile:
                 raise _failure(name, reply, reason)
             assert self._process is not None and self._process.stdout is not None
             _, kind, size = header
-            content = self._process.stdout.read(size)
-            newline = self._process.stdout.read(1)
+            try:
+                content = self._process.stdout.read(size)
+                newline = self._process.stdout.read(1)
+            except BaseException:
+                self._kill()
+                raise
             if len(content) != size or newline != b"\n":
                 # It stopped partway through (killed, or on a corrupt object in a pack): what
                 # came is no object's content.
@@ -227,13 +233,17 @@ class CatFile:
             # Whether it has answered a request: _PROBE, for a new process.
             answered = not new
             reply = b""
-            with contextlib.suppress(OSError):
-                process.stdin.write(_PROBE + command if new else command)
-                process.stdin.flush()
-                if new:
-                    answered = bool(process.stdout.readline())
-                if answered:
-                    reply = process.stdout.readline()
+            try:
+                with contextlib.suppress(OSError):
+                    process.stdin.write(_PROBE + command if new else command)
+                    process.stdin.flush()
+                    if new:
+                        answered = bool(process.stdout.readline())
+                    if answered:
+                        reply = process.stdout.readline()
+            except BaseException:
+                self._kill()
+                raise
             if (header := object_header(reply)) is not None:
                 if self._where is not None and (git := self._git()) is not None:
                     learn_object_id_length(git, self._where, header[0])
@@ -257,6 +267,14 @@ class CatFile:
                 _check_intact(reason, FATAL)
                 return reply, reason
             # It stopped some other way (killed, say), maybe before this request reached it.
+
+    def _kill(self) -> None:
+        """Kill the process, after a request was interrupted (e.g. by KeyboardInterrupt) once
+        it was sent: the answer left unread would answer the next request, and the process,
+        writing it, might not exit. The next request starts another. Hold the lock."""
+        if self._process is not None:
+            self._process.kill()
+        self._stop()
 
     def _stop(self) -> None:
         """Stop the process, if one is running. Hold the lock."""

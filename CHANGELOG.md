@@ -69,6 +69,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
   that change them, can go (#50).
 
+### Fixed
+
+- A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
+  answer unread, to answer the next request: `resolve("HEAD")` could give another name's
+  id. It now kills the process, and the next request starts another (#53).
+
 ## 0.0.2 (2026-11-17)
 
 ### What a tool may need to change

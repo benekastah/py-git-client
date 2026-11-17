@@ -1,4 +1,5 @@
 import gc
+import io
 import os
 import re
 import subprocess
@@ -184,6 +185,61 @@ time.sleep(0.2)
     )
 
     assert b"Exception in thread" not in result.stderr
+
+
+class InterruptedPipe(io.BufferedWriter):
+    """CatFile's end of its process's stdin, which raises KeyboardInterrupt from a flush (once
+    it has sent what was written) while `interrupt` says so, as Ctrl-C could as CatFile waits
+    for the answer."""
+
+    def __init__(self, pipe: io.FileIO) -> None:
+        super().__init__(pipe)
+        self.interrupt = False
+
+    def flush(self) -> None:
+        super().flush()
+        if self.interrupt:
+            self.interrupt = False
+            raise KeyboardInterrupt
+
+
+class InterruptibleGit(StartsKeepingGit):
+    """A Git whose long-lived processes' stdin is an InterruptedPipe."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        process = super().popen(*args, env=env, stderr=stderr)
+        assert process.stdin is not None
+        pipe = io.FileIO(os.dup(process.stdin.fileno()), "w")
+        process.stdin.close()
+        process.stdin = InterruptedPipe(pipe)
+        return process
+
+    def interrupt(self) -> None:
+        """Interrupt the next request, once it's sent."""
+        stdin = self.started[-1].stdin
+        assert isinstance(stdin, InterruptedPipe)
+        stdin.interrupt = True
+
+
+def test_a_request_interrupted_once_sent_leaves_no_answer_for_the_next(repo: Git) -> None:
+    git = InterruptibleGit(repo.directory)
+    commit, blob = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD:a")
+
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+        git.interrupt()
+        with pytest.raises(KeyboardInterrupt):
+            cat_file.resolve("HEAD^{tree}")
+        assert cat_file.resolve("HEAD") == commit
+        git.interrupt()
+        with pytest.raises(KeyboardInterrupt):
+            cat_file.read(commit)
+        assert cat_file.read(blob) == ("blob", b"a\n")
 
 
 class KeepsItsCatFile(StartsKeepingGit):
