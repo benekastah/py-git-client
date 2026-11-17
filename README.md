@@ -39,6 +39,7 @@ or `pip install git+https://github.com/benekastah/py-git-client`.
 from git_client import (
     CatFile,
     Git,
+    ObjectType,
     RefUpdate,
     config,
     config_key,
@@ -76,7 +77,8 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:
         kind, content = cat_file.read(readme)
-    _, tree = cat_file.read(upstream, "tree")  # its tree; WrongTypeError if it has none
+    wanted: ObjectType = "tree"  # or "blob", "commit", "tag"
+    _, tree = cat_file.read(upstream, wanted)  # its tree; WrongTypeError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
 push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them

@@ -14,7 +14,7 @@ from git_client.batch import (
     refs,
     update_refs,
 )
-from git_client.cat_file import CatFile, ObjectInfo
+from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
     CLOSE_FDS,
@@ -60,6 +60,7 @@ __all__ = [
     "NotARepositoryError",
     "NotStartedError",
     "ObjectInfo",
+    "ObjectType",
     "PushRejectedError",
     "ReadOnlyError",
     "ReadOnlyGit",
