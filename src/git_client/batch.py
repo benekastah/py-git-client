@@ -173,18 +173,19 @@ def patch_ids(
     git: ReadOnlyGit, *commands: Sequence[str], paths_from_top: bool = False
 ) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
-    "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
-    in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. A diff of
-    two revisions (two arguments before `--`, and no options, which are taken as revisions:
-    name paths after `--`; neither holding a `:`, as a blob's name does) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no index;
-    another (of the index or the worktree) runs as `git diff`, which a ReadOnlyGit doesn't
-    run (see there). Whatever
-    the user's config says, each command shows changes in the whole repository (not only
-    under `git.directory`, as diff.relative would) and in every submodule, none through a
-    textconv, with git's usual a/ and b/ prefixes, renames, 3 lines of context (and none more
-    between hunks) and the myers algorithm, and checks no signatures; and `log` and
-    `show` print each commit's full id, as patch-id needs (a command's own `--format` still
-    wins).
+    "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints, in
+    order, as `git patch-id --stable` gives them. A diff's commit is all zeros. A diff of two
+    revisions (two arguments before `--`, and no options, which are taken as revisions: name
+    paths after `--`) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no
+    index. Any other runs as `git diff`, which a ReadOnlyGit doesn't run (see there): of the
+    index or the worktree, of one argument (`a..b`), or of a revision holding a `:`: a blob's
+    name (`a:path`), which diff-tree doesn't take, but also `:/text`, a tree's `a:` and
+    `@{<date> <time>}`, which it would. Whatever the user's config says, each command shows
+    changes in the whole repository (not only under `git.directory`, as diff.relative would) and
+    in every submodule, none through a textconv, with git's usual a/ and b/ prefixes, renames, 3
+    lines of context (and none more between hunks) and the myers algorithm, and checks no
+    signatures; and `log` and `show` print each commit's full id, as patch-id needs (a command's
+    own `--format` still wins).
 
     Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff

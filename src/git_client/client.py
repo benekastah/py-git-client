@@ -494,27 +494,28 @@ class ReadOnlyGit:
     command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ, and which index and paths
     git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
 
-    What it runs, it runs so that what the repository's config, or the tool's environment,
-    tells git to run doesn't write: `log`, `show` and `blame` get `--no-textconv` (a textconv
-    whose driver has cachetextconv writes its cache, refs/notes/textconv/<driver>), so they
-    show git's own diff of a file a textconv would show otherwise; every command but `config`
-    gets `-c core.fsmonitor=false -c diff.submodule=short`, which win over the config git
-    inherits too, so no core.fsmonitor hook runs, and diff.submodule can't ask for a
-    submodule's `git diff` (`log -p` and `show` show a submodule's change as its commits'
-    ids, whatever diff.submodule, `log` or `diff`, says); and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
-    the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
-    (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
-    fails: the commands that read a blob's content to diff or search it (`log -p`, `show
-    <commit>`, `diff-tree -p`, ...) raise MissingObjectError, but those given a blob's name
-    don't (see the README), and `resolve` and CatFile take it as a name that names nothing. What git
-    still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
-    --filters`, or its clean, which `status` runs on a file whose stat information changed),
-    a merge driver (merge.<driver>.driver, which `log --remerge-diff` runs, as does `log -m`
-    under log.diffMerges=remerge), the program gpg.program or gpg.ssh.program names (`log
-    --show-signature`, or log.showSignature), and, through `passthrough`, the pager. The rest of the tool's environment reaches git as it is: GIT_DIR (which `Git`
-    follows too), GIT_TRACE* (which write where they name), GIT_EXTERNAL_DIFF (which git
-    runs only for `--ext-diff`, and in a submodule's `git diff`, both refused), and config
-    from GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, which can't get past the above.
+    What it runs, it runs so that what the repository's config, or the tool's environment, tells
+    git to run doesn't write: `log`, `show` and `blame` get `--no-textconv` (a textconv whose
+    driver has cachetextconv writes its cache, refs/notes/textconv/<driver>), so they show git's
+    own diff of a file a textconv would show otherwise; every command but `config` gets `-c
+    core.fsmonitor=false -c diff.submodule=short`, which win over the config git inherits too,
+    so no core.fsmonitor hook runs, and diff.submodule can't ask for a submodule's `git diff`
+    (`log -p` and `show` show a submodule's change as its commits' ids, whatever diff.submodule,
+    `log` or `diff`, says); and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write the
+    index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
+    2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one fails: the
+    commands that read a blob's content to diff or search it (`log -p`, `show <commit>`,
+    `diff-tree -p`, ...) raise MissingObjectError, but those given a blob's name don't (see the
+    README), and `resolve` and CatFile take it as a name that names nothing. What git still runs
+    can write: a filter (e.g. git-lfs's smudge, run by `cat-file --filters`, or its clean, which
+    `status` runs on a file whose stat information changed), a merge driver
+    (merge.<driver>.driver, which `log --remerge-diff` runs, as does `log -m` under
+    log.diffMerges=remerge), the program gpg.program or gpg.ssh.program names (`log
+    --show-signature`, or log.showSignature), and, through `passthrough`, the pager. The rest of
+    the tool's environment reaches git as it is: GIT_DIR (which `Git` follows too), GIT_TRACE*
+    (which write where they name), GIT_EXTERNAL_DIFF (which git runs only for `--ext-diff`, and
+    in a submodule's `git diff`, both refused), and config from GIT_CONFIG_PARAMETERS or
+    GIT_CONFIG_COUNT, which can't get past the above.
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
@@ -859,13 +860,13 @@ class ReadOnlyGit:
         return result.returncode == 0
 
     def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
-        """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it
-        names nothing: as `git rev-parse --verify` finds it, but only if the repository has
-        that object (not for a full id it lacks, nor for a submodule's commit). Raises
-        CorruptObjectError if an object git reads for it is damaged, MissingObjectError if
-        it's in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives
-        None), and GitError for another failure (e.g. NotARepositoryError). It takes one process; for many names, a CatFile
-        takes one for all of them."""
+        """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it names
+        nothing: as `git rev-parse --verify` finds it, but only if the repository has that
+        object (not for a full id it lacks, nor for a submodule's commit). Raises
+        CorruptObjectError if an object git reads for it is damaged, MissingObjectError if it's
+        in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives None), and
+        GitError for another failure (e.g. NotARepositoryError). It takes one process; for many
+        names, a CatFile takes one for all of them."""
         line = batch_line(name)
         if line is None:
             return None

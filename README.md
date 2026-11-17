@@ -239,9 +239,9 @@ except ReadOnlyError:
 ```
 
 A tool with a `Git` for the commands that write gives the paths that only read its
-`read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit`
-refuses. It's of the client's own class, so a subclass's own `process` and other methods still run, and it shares
-what git told the client about where things are (`prefix()`, `object_id_length()`,
+`read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
+It's of the client's own class, so a subclass's own `process` and other methods still run, and
+it shares what git told the client about where things are (`prefix()`, `object_id_length()`,
 `git_paths`). It raises `ReadOnlyError` if the client's `env` holds a variable a `ReadOnlyGit`
 doesn't take.
 
@@ -250,25 +250,25 @@ git = Git("path/to/repo")
 refs(git.read_only(), "refs/heads/")
 ```
 
-It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
-`count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`,
-`ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`, `rev-parse`,
-`shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that reads (`--get`,
-`--list`, `get`, ...) or a lone key, after options that say which files it reads and how it
-gives values (`--global`, `-f <file>`, `--type=bool`, `--default <value>`, `-z`, ...),
-`branch --show-current`, `symbolic-ref` naming one ref (`--quiet`, `--short`), `remote`
-(`-v`), `remote get-url` and `worktree list`. It doesn't run `diff`, which writes the index
-when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't; `patch_ids`
-runs a diff of two revisions as `diff-tree -p`), `range-diff`, whose log runs a textconv
-whatever it's told, `merge-tree`, which writes the merge's objects (with `--quiet`, from git
-2.50, still those of the merge it makes of several merge bases), nor `ls-remote`, which runs ssh or credential helpers that may store what
+It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`, `count-objects`,
+`describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`, `ls-files`,
+`ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`, `rev-parse`, `shortlog`, `show`,
+`show-ref`, `status`, `var`, `config` with an action that reads (`--get`, `--list`, `get`, ...)
+or a lone key, after options that say which files it reads and how it gives values (`--global`,
+`-f <file>`, `--type=bool`, `--default <value>`, `-z`, ...), `branch --show-current`,
+`symbolic-ref` naming one ref (`--quiet`, `--short`), `remote` (`-v`), `remote get-url` and
+`worktree list`. It doesn't run `diff`, which writes the index when it compares the worktree
+(`diff-index`, `diff-files` and `diff-tree` don't; `patch_ids` runs a diff of two revisions as
+`diff-tree -p`), `range-diff`, whose log runs a textconv whatever it's told, `merge-tree`, which
+writes the merge's objects (with `--quiet`, from git 2.50, still those of the merge it makes of
+several merge bases), nor `ls-remote`, which runs ssh or credential helpers that may store what
 they're given. It doesn't take options that write: `--output`, describe's `--dirty` and
 `--broken`, `--textconv` and status's `-v` (a textconv's cache), `--ext-diff`, and
 `--submodule=diff` (which runs a `git diff` in each submodule, which does all of that). It
 checks every argument, after `--` too (which can be another option's value), and `config`'s
 action must come first. Of git's options before the command, it takes only those that name no
-config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
-locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`).
+config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the locale,
+`TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`).
 
 What it runs, it runs so that what the repository's config or the tool's environment tells
 git to run doesn't write:

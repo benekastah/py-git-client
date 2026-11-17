@@ -40,18 +40,19 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `:`, so not blobs) as `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no
   index: a `FakeGit` answering it responds to `diff-tree`, and a path given as the second
   argument, without `--`, is taken as a revision (#55).
-- `patch_ids` runs every command with `-M -U3 --inter-hunk-context=0
-  --diff-algorithm=myers`, so a diff and a log give a change the same id whatever
-  `diff.renames`, `diff.context`, `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones git gives by default (#55).
+- `patch_ids` runs every command with `-M -U3 --inter-hunk-context=0 --diff-algorithm=myers`, so
+  a diff and a log give a change the same id whatever `diff.renames`, `diff.context`,
+  `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones
+  git gives by default (#55).
 - `RefSnapshot` keeps what it read past `remote -v`, and past the `git config` reads a
   `ReadOnlyGit` now runs (#55).
-- A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to
-  run from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose
-  driver has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own
-  diff; every command but `config` runs with `-c core.fsmonitor=false -c
-  diff.submodule=short`, so whatever a repository's `diff.submodule` (`log` or `diff`) says,
-  `log -p` and `show` show a submodule's change as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`, `--ext-diff` and
-  `--submodule=diff`; a tool that needs them uses a `Git` (#55).
+- A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to run
+  from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose driver
+  has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own diff;
+  every command but `config` runs with `-c core.fsmonitor=false -c diff.submodule=short`, so
+  whatever a repository's `diff.submodule` (`log` or `diff`) says, `log -p` and `show` show a
+  submodule's change as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`,
+  `--ext-diff` and `--submodule=diff`; a tool that needs them uses a `Git` (#55).
 - An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
   `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor
   remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
