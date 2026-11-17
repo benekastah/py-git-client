@@ -262,9 +262,10 @@ when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't;
 runs a diff of two revisions as `diff-tree -p`), `range-diff`, whose log runs a textconv
 whatever it's told, nor `ls-remote`, which runs ssh or credential helpers that may store what
 they're given. It doesn't take options that write: `--output`, describe's `--dirty` and
-`--broken`, `--textconv` and status's `-v` (a textconv's cache), and `--ext-diff`. It checks
-every argument, after `--` too (which can be another option's value), and `config`'s action
-must come first. Of git's options before the command, it takes only those that name no
+`--broken`, `--textconv` and status's `-v` (a textconv's cache), `--ext-diff`, and
+`--submodule=diff` (which runs a `git diff` in each submodule, which does all of that). It
+checks every argument, after `--` too (which can be another option's value), and `config`'s
+action must come first. Of git's options before the command, it takes only those that name no
 config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
 locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`).
 
@@ -274,8 +275,9 @@ git to run doesn't write:
 - `log`, `show` and `blame` get `--no-textconv`: a diff driver's textconv with
   `cachetextconv` writes its cache (`refs/notes/textconv/<driver>`). They show git's own diff
   of a file a textconv would show otherwise.
-- Every command but `config` gets `-c core.fsmonitor=false`, which wins over the config git
-  inherits too, so no `core.fsmonitor` hook runs.
+- Every command but `config` gets `-c core.fsmonitor=false -c diff.submodule=short`, which
+  win over the config git inherits too, so no `core.fsmonitor` hook runs, and
+  `diff.submodule` can't ask for a submodule's `git diff`.
 - `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
 - `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
   2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs
@@ -285,8 +287,9 @@ What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --fi
 clean, which `status` runs on a file whose stat information changed), gpg (`log
 --show-signature`, or `log.showSignature`), and, through `passthrough`, the pager. The rest of
 the tool's environment reaches git as it is: `GIT_DIR` (which a `Git` follows too),
-`GIT_TRACE*` (which write where they name), and config from `GIT_CONFIG_PARAMETERS` or
-`GIT_CONFIG_COUNT`, which can't get past the above.
+`GIT_TRACE*` (which write where they name), `GIT_EXTERNAL_DIFF` (which git runs only for
+`--ext-diff`, and in a submodule's `git diff`, both refused), and config from
+`GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_COUNT`, which can't get past the above.
 
 ### Errors
 

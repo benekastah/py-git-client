@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -187,6 +188,8 @@ def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
         ("status", "--verb"),
         ("range-diff", "HEAD~1..HEAD", "HEAD~1..HEAD"),  # its log takes no --no-textconv
         ("log", "-p", "--ext-diff"),  # runs GIT_EXTERNAL_DIFF, or a diff driver's command
+        ("log", "-p", "--submodule=diff"),  # runs `git diff` in each submodule (see
+        ("diff-files", "-p", "--submodule=diff"),  # test_..._runs_no_diff_in_a_submodule)
     ],
 )
 def test_a_read_only_client_refuses_any_other_command_without_starting_git(
@@ -348,22 +351,69 @@ def python_command(script: Path, *args: Path) -> str:
     return " ".join(f'"{path.as_posix()}"' for path in (Path(sys.executable), script, *args))
 
 
-@pytest.fixture
-def textconv_cached(repo: Git, tmp_path: Path) -> Path:
-    """repo with a second commit, changing `a`, whose diff driver has a textconv that git
-    caches (in refs/notes/textconv/upper), as `diff.<driver>.cachetextconv` asks."""
-    directory = Path(repo.directory)
-    (directory / "a").write_bytes(b"b\n")
-    repo.run("commit", "--quiet", "-am", "second")
-    (directory / ".git" / "info" / "attributes").write_text("a diff=upper\n", encoding="utf-8")
+def cache_textconv(git: Git, tmp_path: Path) -> None:
+    """Give `a` in git's repository a diff driver whose textconv git caches (in
+    refs/notes/textconv/upper), as `diff.<driver>.cachetextconv` asks."""
+    info = Path(git.run("rev-parse", "--path-format=absolute", "--git-path", "info"))
+    info.mkdir(exist_ok=True)
+    (info / "attributes").write_text("a diff=upper\n", encoding="utf-8")
     script = tmp_path / "upper.py"
     script.write_text(
         "import sys\nsys.stdout.buffer.write(open(sys.argv[1], 'rb').read().upper())\n",
         encoding="utf-8",
     )
-    repo.run("config", "diff.upper.textconv", python_command(script))
-    repo.run("config", "diff.upper.cachetextconv", "true")
+    git.run("config", "diff.upper.textconv", python_command(script))
+    git.run("config", "diff.upper.cachetextconv", "true")
+
+
+@pytest.fixture
+def textconv_cached(repo: Git, tmp_path: Path) -> Path:
+    """repo with a second commit, changing `a`, whose textconv git caches (cache_textconv)."""
+    directory = Path(repo.directory)
+    (directory / "a").write_bytes(b"b\n")
+    repo.run("commit", "--quiet", "-am", "second")
+    cache_textconv(repo, tmp_path)
     return directory
+
+
+def move_submodule(repo: Git) -> None:
+    """Add a clone of repo to it as a submodule, `mod`, then commit a change to mod's `a`, and
+    to where repo has mod."""
+    module = Path(repo.directory).parent / "module"
+    repo.run("clone", "--quiet", repo.directory, str(module))
+    repo.run("-c", "protocol.file.allow=always", "submodule", "add", "--quiet", str(module), "mod")
+    repo.run("commit", "--quiet", "-m", "add mod")
+    mod = Git(Path(repo.directory) / "mod")
+    (Path(mod.directory) / "a").write_bytes(b"b\n")
+    mod.run("commit", "--quiet", "-am", "change a")
+    repo.run("commit", "--quiet", "-am", "move mod")
+
+
+@pytest.mark.parametrize("args", [("log", "-p", "-1"), ("show",)])
+@pytest.mark.parametrize("external", [False, True])
+def test_a_read_only_client_runs_no_diff_in_a_submodule_its_config_asks_for(
+    repo_from: Callable[[str, Callable[[Git], None]], Git],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: tuple[str, ...],
+    external: bool,
+) -> None:
+    repo = repo_from("moved-submodule", move_submodule)
+    # Which has git run `git diff` in mod, which would cache its textconv, or run an external
+    # diff the environment names, in its place.
+    repo.run("config", "diff.submodule", "diff")
+    cache_textconv(Git(Path(repo.directory) / "mod"), tmp_path)
+    ran = tmp_path / "external-diff-ran"
+    if external:
+        script = tmp_path / "external.py"
+        script.write_text("import sys\nopen(sys.argv[1], 'w').close()\n", encoding="utf-8")
+        monkeypatch.setenv("GIT_EXTERNAL_DIFF", python_command(script, ran))
+    before = files(Path(repo.directory))
+
+    ReadOnlyGit(repo.directory).run(*args)
+
+    assert files(Path(repo.directory)) == before
+    assert not ran.exists()
 
 
 @pytest.mark.parametrize("args", [("log", "-p"), ("show",), ("blame", "a")])

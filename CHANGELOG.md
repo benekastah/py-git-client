@@ -48,9 +48,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to
   run from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose
   driver has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own
-  diff; every command but `config` runs with `-c core.fsmonitor=false`. It refuses
-  `range-diff`, `--textconv`, `status -v` and `--ext-diff`; a tool that needs them uses a
-  `Git` (#55).
+  diff; every command but `config` runs with `-c core.fsmonitor=false -c
+  diff.submodule=short`, so a repository's `diff.submodule=diff` shows a submodule's change
+  as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`, `--ext-diff` and
+  `--submodule=diff`; a tool that needs them uses a `Git` (#55).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).

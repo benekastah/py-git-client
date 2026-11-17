@@ -302,13 +302,20 @@ _WRITING_OPTIONS = (
 # What git takes as an abbreviation of one of _WRITING_OPTIONS but is an option of its own.
 _NOT_WRITING_OPTIONS = frozenset({"--text"})
 
+# Arguments that write through what they have git run: `--submodule=diff` runs a porcelain
+# `git diff` in each changed submodule, which runs a textconv (and caches it), an external
+# diff (GIT_EXTERNAL_DIFF) and refreshes the submodule's index, none of which it's told not
+# to. (Diff's options take no abbreviation; nor does --submodule's value.)
+_WRITING_ARGUMENTS = frozenset({"--submodule=diff"})
+
 # The commands that run a diff driver's textconv unless told not to; a ReadOnlyGit tells them.
 _TEXTCONV_COMMANDS = frozenset({"log", "show", "blame"})
 
 # What a ReadOnlyGit gives git before any command but config (whose output it would join):
 # config that the repository's, or the tool's environment's, can't override (ours comes last),
-# so git runs no core.fsmonitor hook, a program that could write anything.
-_READ_ONLY_CONFIG = ("-c", "core.fsmonitor=false")
+# so git runs no core.fsmonitor hook, a program that could write anything, and, whatever
+# diff.submodule says, no `--submodule=diff` (see _WRITING_ARGUMENTS).
+_READ_ONLY_CONFIG = ("-c", "core.fsmonitor=false", "-c", "diff.submodule=short")
 
 # What git's options before the command may be: none that names another config (-c),
 # repository or program.
@@ -382,8 +389,9 @@ def _refuse_writes(args: Sequence[Arg]) -> int:
     if command not in READING_COMMANDS and not reading_form(command, rest):
         raise ReadOnlyError(f"ReadOnlyGit runs only commands that read, not git {texts}")
     for arg in rest:
-        if arg not in _NOT_WRITING_OPTIONS and any(
-            names(arg, option) for option in _WRITING_OPTIONS
+        if arg in _WRITING_ARGUMENTS or (
+            arg not in _NOT_WRITING_OPTIONS
+            and any(names(arg, option) for option in _WRITING_OPTIONS)
         ):
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
         # status -v shows the index's diff through a textconv, which caches it; even bundled
@@ -472,8 +480,9 @@ class ReadOnlyGit:
     `--short`), `remote` (`-v`) and `remote get-url`, and `worktree list`; git's options
     before them only if they name no config, repository or program (e.g. `--no-pager`, not
     `-c`); and none of the options that write: `--output`, describe's `--dirty` and
-    `--broken` (the index), `--textconv` and status's `-v` (a textconv's cache), and
-    `--ext-diff` (which runs a program). Not `diff`, which writes the index when it compares
+    `--broken` (the index), `--textconv` and status's `-v` (a textconv's cache),
+    `--ext-diff` (which runs a program), and `--submodule=diff` (which runs a `git diff` in
+    each submodule, which does all of that). Not `diff`, which writes the index when it compares
     the worktree: `diff-index`, `diff-files` and `diff-tree` don't. Not `range-diff`, whose
     log runs a textconv whatever it's told. Not `ls-remote`, which runs ssh or credential
     helpers, which may store what they're given. Each argument is checked, wherever it is
@@ -485,16 +494,18 @@ class ReadOnlyGit:
     tells git to run doesn't write: `log`, `show` and `blame` get `--no-textconv` (a textconv
     whose driver has cachetextconv writes its cache, refs/notes/textconv/<driver>), so they
     show git's own diff of a file a textconv would show otherwise; every command but `config`
-    gets `-c core.fsmonitor=false`, which wins over the config git inherits too, so no
-    core.fsmonitor hook runs; and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
+    gets `-c core.fsmonitor=false -c diff.submodule=short`, which win over the config git
+    inherits too, so no core.fsmonitor hook runs, and diff.submodule can't ask for a
+    submodule's `git diff`; and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
     the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
     (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
     fails. What git still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
     --filters`, or its clean, which `status` runs on a file whose stat information changed),
     gpg (`log --show-signature`, or log.showSignature), and, through `passthrough`, the
     pager. The rest of the tool's environment reaches git as it is: GIT_DIR (which `Git`
-    follows too), GIT_TRACE* (which write where they name), and config from
-    GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, which can't get past the above.
+    follows too), GIT_TRACE* (which write where they name), GIT_EXTERNAL_DIFF (which git
+    runs only for `--ext-diff`, and in a submodule's `git diff`, both refused), and config
+    from GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, which can't get past the above.
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
