@@ -11,11 +11,13 @@ from pathlib import Path
 import pytest
 
 from git_client import (
+    CatFile,
     ConfigLockedError,
     ConflictError,
     CorruptObjectError,
     Git,
     GitError,
+    MissingObjectError,
     NotARepositoryError,
     PushRejectedError,
     RemoteError,
@@ -285,3 +287,52 @@ def diverged(repo_from: RepoFrom) -> Git:
 def test_a_conflict(diverged: Git, args: tuple[str, ...]) -> None:
     with pytest.raises(ConflictError):
         diverged.run(*args)
+
+
+def make_partial_clone(origin: Git) -> None:
+    """Give make_repo's repository a second commit, changing `a`, and clone it beside it, as
+    `clone`, without blobs: a partial clone, whose promisor remote is the repository."""
+    origin.run("config", "uploadpack.allowFilter", "true")
+    (Path(origin.directory) / "a").write_bytes(b"b\n")
+    origin.run("commit", "--quiet", "-am", "second")
+    url = Path(origin.directory).as_uri()
+    Git(Path(origin.directory).parent).run(
+        "clone", "--quiet", "--no-checkout", "--filter=blob:none", url, "clone"
+    )
+
+
+@pytest.fixture
+def partial_clone(repo_from: RepoFrom) -> Git:
+    """A client of make_partial_clone's clone."""
+    return Git(Path(repo_from("partial-clone", make_partial_clone).directory).parent / "clone")
+
+
+@pytest.fixture
+def unfetchable(partial_clone: Git) -> Git:
+    """partial_clone, its promisor remote gone, so it can't fetch the blobs it lacks."""
+    partial_clone.run("config", "remote.origin.url", str(Path(partial_clone.directory) / "gone"))
+    return partial_clone
+
+
+@pytest.mark.parametrize(
+    "args", [("log", "-p", "-1"), ("show", "HEAD"), ("diff-tree", "-p", "HEAD")]
+)
+def test_an_object_a_read_only_client_doesnt_fetch(
+    partial_clone: Git, args: tuple[str, ...]
+) -> None:
+    with pytest.raises(MissingObjectError):
+        partial_clone.read_only().run(*args)
+
+
+def test_an_object_a_partial_clone_cant_fetch(unfetchable: Git) -> None:
+    blob = unfetchable.run("rev-parse", "HEAD:a")
+
+    with pytest.raises(MissingObjectError):
+        unfetchable.run("log", "-p", "-1")
+    with pytest.raises(MissingObjectError):
+        unfetchable.resolve(blob)
+    with CatFile(unfetchable) as cat_file:
+        with pytest.raises(MissingObjectError):
+            cat_file.info(blob)
+        with pytest.raises(MissingObjectError):
+            cat_file.read(blob)

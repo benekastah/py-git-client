@@ -19,10 +19,12 @@ from typing import IO, Final, Literal
 
 from git_client.errors import (
     CORRUPT_OBJECT,
+    MISSING_OBJECT,
     ConfigLockedError,
     CorruptObjectError,
     GitError,
     GitTimeoutError,
+    MissingObjectError,
     NotStartedError,
     error_for,
 )
@@ -854,7 +856,8 @@ class ReadOnlyGit:
         """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it
         names nothing: as `git rev-parse --verify` finds it, but only if the repository has
         that object (not for a full id it lacks, nor for a submodule's commit). Raises
-        CorruptObjectError if an object git reads for it is damaged, and GitError for another
+        CorruptObjectError if an object git reads for it is damaged, MissingObjectError if
+        it's in a partial clone that couldn't fetch it, and GitError for another
         failure (e.g. NotARepositoryError). It takes one process; for many names, a CatFile
         takes one for all of them."""
         line = batch_line(name)
@@ -880,6 +883,8 @@ class ReadOnlyGit:
             # Unless an object git read for it was damaged, as CatFile tells it.
             if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
                 raise CorruptObjectError(args, result.returncode, stderr)
+            if MISSING_OBJECT.search(stderr):
+                raise MissingObjectError(args, result.returncode, stderr)
             return None  # if it exited, it was on the name, which names nothing
         learn_object_id_length(self, where, header[0])
         return header[0]

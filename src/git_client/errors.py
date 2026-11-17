@@ -134,6 +134,12 @@ class CorruptObjectError(GitError):
     one, that won't inflate): not one that isn't there, an UnknownRevisionError."""
 
 
+class MissingObjectError(GitError):
+    """An object a partial clone lacks, which git couldn't fetch from its promisor remote: a
+    ReadOnlyGit fetches none (see there), and a Git fails to when the remote can't be reached
+    (its reasons are in `stderr` too). A tool can catch it and try again with a Git."""
+
+
 class ConfigLockedError(GitError):
     """Another process has the config file locked, and kept it so for as long as git
     retries (core.configLockTimeout, a second by default, since git 2.56); a write can be
@@ -168,8 +174,12 @@ CORRUPT_OBJECT = re.compile(
     r"|^error: unable to unpack \S+ header$",
     re.MULTILINE,
 )
+# What git says as it exits for an object a partial clone lacks and couldn't fetch.
+MISSING_OBJECT = re.compile(r"^fatal: could not fetch \S+ from promisor remote$", re.MULTILINE)
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
+    # Before RemoteError: what's missing is what the tool can act on (see MissingObjectError).
+    (MissingObjectError, MISSING_OBJECT),
     (
         RemoteError,
         re.compile(

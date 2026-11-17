@@ -32,10 +32,12 @@ from git_client.client import (
 )
 from git_client.errors import (
     CORRUPT_OBJECT,
+    MISSING_OBJECT,
     WRONG_TYPE,
     CorruptObjectError,
     GitError,
     GitTimeoutError,
+    MissingObjectError,
     UnknownRevisionError,
     WrongTypeError,
 )
@@ -373,9 +375,12 @@ def _said(stderr: IO[bytes]) -> str:
 
 def _check_intact(reason: str, returncode: int) -> None:
     """Raise CorruptObjectError if what cat-file said of a request, `reason`, is that an object
-    it read is damaged: then it can't tell what the name names."""
+    it read is damaged, and MissingObjectError if it's that a partial clone couldn't fetch it:
+    then it can't tell what the name names."""
     if CORRUPT_OBJECT.search(reason):
         raise CorruptObjectError(_COMMAND, returncode, reason)
+    if MISSING_OBJECT.search(reason):
+        raise MissingObjectError(_COMMAND, returncode, reason)
 
 
 def _failure(name: str, said: str, *, exited: bool) -> GitError:
