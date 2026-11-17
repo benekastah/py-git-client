@@ -1,7 +1,6 @@
 import gc
 import io
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -85,19 +84,26 @@ def test_verify_gives_the_id_or_git_s_reason_without_another_process(
 ) -> None:
     with CatFile(repo) as cat_file:
         main = cat_file.verify("main")
-        # Names cat-file says nothing of but "missing" (or "ambiguous").
-        with pytest.raises(UnknownRevisionError, match="no-such-branch missing"):
-            cat_file.verify("no-such-branch")
-        with pytest.raises(UnknownRevisionError, match="'' names nothing"):
+        # Names cat-file says nothing of but "missing" (or "ambiguous"): in rev-parse's words.
+        with pytest.raises(UnknownRevisionError) as missing:
+            cat_file.verify("refs/heads/nope")
+        with pytest.raises(UnknownRevisionError) as empty:
             cat_file.verify("")
         # Names git exits on, at a later request, then at a new process's first.
-        with pytest.raises(UnknownRevisionError, match="no upstream configured for branch 'main'"):
+        with pytest.raises(UnknownRevisionError) as no_upstream:
             cat_file.verify("main@{u}")
         with pytest.raises(UnknownRevisionError, match="log for 'HEAD' only has 1 entries"):
             cat_file.verify("HEAD@{999}")
 
     assert git_calls == [["cat-file", "--batch-command"]] * 2
     assert main == repo.run("rev-parse", "main")
+    assert (missing.value.stderr, missing.value.reason) == (
+        "fatal: bad revision 'refs/heads/nope'",
+        "",
+    )
+    assert (empty.value.stderr, empty.value.reason) == ("fatal: bad revision ''", "")
+    assert no_upstream.value.stderr == "fatal: no upstream configured for branch 'main'"
+    assert no_upstream.value.reason == no_upstream.value.stderr
 
 
 def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git) -> None:
@@ -122,7 +128,7 @@ def test_verify_gives_only_what_git_said_of_that_name(
         with pytest.raises(UnknownRevisionError) as raised:
             cat_file.verify("no-such-branch")
 
-    assert raised.value.stderr == "no-such-branch missing"
+    assert raised.value.stderr == "fatal: bad revision 'no-such-branch'"
 
 
 class StartsKeepingGit(Git):
@@ -474,12 +480,15 @@ class GitThatDropsStderr(Git):
         return super().popen(*args, env=env)
 
 
-def test_verify_names_the_name_when_git_said_nothing_of_it(repo: Git) -> None:
+def test_verify_says_so_when_git_said_nothing_of_the_name(repo: Git) -> None:
     with (
         CatFile(GitThatDropsStderr(repo.directory)) as cat_file,
-        pytest.raises(UnknownRevisionError, match=re.escape("main@{u} missing")),
+        pytest.raises(UnknownRevisionError) as raised,
     ):
         cat_file.verify("main@{u}")
+
+    assert raised.value.stderr == "fatal: bad revision 'main@{u}': git exited without saying why"
+    assert raised.value.reason == ""
 
 
 class GitWithoutBatchCommand(Git):

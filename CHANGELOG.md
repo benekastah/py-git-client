@@ -26,6 +26,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `read` raised `UnknownRevisionError`): a missing name is still None. `run` and the like
   raise it too, for git's own words of a corrupt object, where they raised a plain
   `GitError` (#50).
+- `CatFile.verify` (and `read`) word a name cat-file says only "<name> missing" of as
+  rev-parse does, `fatal: bad revision '<name>'`, adding ": git exited without saying why"
+  where cat-file exited saying nothing: a tool that compared `stderr` with
+  `f"{name} missing"` (as git-recommit does) tests `reason == ""` instead (#53).
 - A `CatFile` whose client has a `timeout` holds each request to it: one its process doesn't
   answer in time (e.g. waiting on a lazy fetch in a partial clone) kills the process and
   raises `GitTimeoutError`, where it waited as long as it took. A tool whose requests may
@@ -72,6 +76,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   until a command that may change a ref or a branch's upstream runs through any `Git` (or
   `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
   that change them, can go (#50).
+- `UnknownRevisionError.reason`: why the name names nothing, as git said it, or "" when it
+  gave no reason (as for most names from `CatFile`) (#53).
 
 ### Fixed
 

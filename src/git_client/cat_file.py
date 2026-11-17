@@ -155,18 +155,20 @@ class CatFile:
 
     def verify(self, name: str) -> str:
         """The id of the object `name` names, as `resolve` finds it. If it names nothing,
-        raises UnknownRevisionError, whose `stderr` is git's reason (e.g. "fatal: no upstream
-        configured for branch 'main'", or only "<name> missing"); if it names an object of
-        the wrong type (e.g. `<tree>^{commit}`), WrongTypeError, saying so. It takes no
-        process of its own to find the reason: cat-file's own messages give it."""
+        raises UnknownRevisionError, whose `reason` is git's (e.g. "fatal: no upstream
+        configured for branch 'main'"), or "" if it gave none (cat-file says only "<name>
+        missing" of most names): its `stderr` is then rev-parse's "fatal: bad revision
+        '<name>'". If it names an object of the wrong type (e.g. `<tree>^{commit}`), it raises
+        WrongTypeError, saying so. It takes no process of its own to find the reason:
+        cat-file's own messages give it."""
         line = batch_line(name)
         if line is None:
-            raise UnknownRevisionError(_COMMAND, 1, f"{name!r} names nothing")
+            raise _failure(name, "", exited=False)
         with self._lock:
             reply, reason = self._request(b"info " + line, name, self._deadline())
         header = object_header(reply)
         if header is None:
-            raise _failure(name, reply, reason)
+            raise _failure(name, reason, exited=not reply)
         return header[0]
 
     def read(self, object_id: str, type: ObjectType | None = None) -> tuple[str, bytes]:
@@ -189,7 +191,7 @@ class CatFile:
             if header is None:
                 if not reply:
                     raise GitError(_COMMAND, 1, reason or f"cat-file exited at {name}")
-                raise _failure(name, reply, reason)
+                raise _failure(name, reason, exited=False)
             output = self._output
             assert output is not None
             _, kind, size = header
@@ -331,13 +333,18 @@ def _check_intact(reason: str, returncode: int) -> None:
         raise CorruptObjectError(_COMMAND, returncode, reason)
 
 
-def _failure(name: str, reply: bytes, reason: str) -> GitError:
-    """The error for `name`, which cat-file found nothing for: it answered `reply` (empty if
-    it exited), saying `reason` on stderr (empty if its stderr didn't reach the file, as from
-    a popen that doesn't pass it on)."""
-    reason = reason or decode(reply).strip() or f"{name} missing"
-    error = WrongTypeError if WRONG_TYPE.search(reason) else UnknownRevisionError
-    return error(_COMMAND, FATAL if not reply else 1, reason)
+def _failure(name: str, reason: str, *, exited: bool) -> GitError:
+    """The error for `name`, which cat-file found nothing for, saying `reason` on stderr
+    (empty if it said nothing, or its stderr didn't reach the file, as from a popen that
+    doesn't pass it on), and whether it `exited` rather than answer. Without a reason, it
+    says the name names nothing in rev-parse's words."""
+    returncode = FATAL if exited else 1
+    if WRONG_TYPE.search(reason):
+        return WrongTypeError(_COMMAND, returncode, reason)
+    if reason:
+        return UnknownRevisionError(_COMMAND, returncode, reason)
+    said = f"fatal: bad revision '{name}'" + (": git exited without saying why" if exited else "")
+    return UnknownRevisionError(_COMMAND, returncode, said, reason="")
 
 
 def _end(process: subprocess.Popen[bytes], output: _Output, stderr: IO[bytes]) -> None:

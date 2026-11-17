@@ -70,8 +70,10 @@ MISSING = "0123" * 10
     ],
 )
 def test_a_revision_that_names_nothing(repo: Git, args: tuple[str, ...]) -> None:
-    with pytest.raises(UnknownRevisionError):
+    with pytest.raises(UnknownRevisionError) as raised:
         repo.run(*args)
+
+    assert raised.value.reason == raised.value.stderr
 
 
 def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> None:
