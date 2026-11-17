@@ -629,11 +629,15 @@ class ReadOnlyGit:
         return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
 
     def popen(
-        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
-        """Start git with pipes for its stdin and stdout (its stderr goes nowhere), for a
-        process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
-        has no timeout, and its messages are in English (see `process`). Raises
+        """Start git with pipes for its stdin and stdout, for a process that answers requests
+        until its stdin closes (e.g. `cat-file --batch`). Its stderr goes nowhere, or to
+        `stderr`: a file, say, not a pipe, which nothing would read until it filled and git
+        stopped. It has no timeout, and its messages are in English (see `process`). Raises
         NotStartedError, starting nothing, once `stopping` says so."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
@@ -641,7 +645,7 @@ class ReadOnlyGit:
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr,
             env=self.environment(env, english=True),
             # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
             # non-inheritable, so a process that lives as long as the tool could hold the pipe

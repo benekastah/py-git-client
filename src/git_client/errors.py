@@ -146,7 +146,7 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 # What git says first of a name that names an object of the wrong type (e.g. a tree where it
 # wants a commit), before what it says of a name that names nothing: most commands' words,
 # then merge's.
-_WRONG_TYPE = re.compile(
+WRONG_TYPE = re.compile(
     r"^error: object \S+ is a \w+, not an? \w+$"
     r"|^error: .*: expected \w+ type, but the object dereferences to \w+ type$",
     re.MULTILINE,
@@ -160,7 +160,7 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
             return error
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
-            if error is UnknownRevisionError and _WRONG_TYPE.search(stderr):
+            if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
                 return GitError  # it names something
             return error
     return GitError
