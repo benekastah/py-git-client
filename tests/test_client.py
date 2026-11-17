@@ -566,6 +566,23 @@ def test_what_git_runs_keeps_the_users_locale(
     assert seen.read_text(encoding="utf-8").strip() == "de_DE.UTF-8 fr_FR.UTF-8"
 
 
+@pytest.mark.usefixtures("german")
+def test_a_git_that_a_hook_runs_speaks_english_too(repo: Git, tmp_path: Path) -> None:
+    # Its environment is the captured git's: GIT_TEXTDOMAINDIR, which git has no other way to
+    # be given, reaches what git runs.
+    said = tmp_path / "said"
+    hook = Path(repo.directory) / ".git" / "hooks" / "pre-commit"
+    hook.write_text(
+        f'#!/bin/sh\ngit rev-parse --verify no-such-branch 2> "{said.as_posix()}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "hooked")
+
+    assert "Needed a single revision" in said.read_text(encoding="utf-8")
+
+
 def test_only_passthrough_reads_the_tools_stdin(repo: Git) -> None:
     # In a Python of its own, given stdin: on Windows, git inherits the process's standard
     # handle, not fd 0, so the tests' process can't stand in for it.
