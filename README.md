@@ -414,15 +414,17 @@ python3 dev.py release 0.0.1
 It needs git, uv and gh (logged in). Every one of origin's fetch and push URLs, after git's
 URL rewriting (`insteadOf`, `pushInsteadOf`), must name the same github.com repository. After fetching
 origin, it refuses unless the version is `pyproject.toml`'s on `origin/main`, neither its tag nor the
-next version's branch (`start-X.Y.Z+1`) exists yet, locally or on origin, and every GitHub
+next version's branch (`start-X.Y.Z+1`) exists yet, locally or on origin, the version's
+section of CHANGELOG.md on `origin/main` is dated and not empty, and every GitHub
 Actions run of the "CI passed" check succeeded on `origin/main`'s latest commit (if one is
 still running, wait and run it again). Then it tags that commit (not your checkout's)
-`vX.Y.Z`, pushes the tag, and, in a temporary worktree, opens a PR moving `main` to the next
+`vX.Y.Z`, pushes the tag, publishes it as a GitHub release whose notes are that
+CHANGELOG.md section, and, in a temporary worktree, opens a PR moving `main` to the next
 patch version (`start-X.Y.Z+1`). That PR merges like any other, once CI passes. If anything
 stops it after the tag is pushed, the command says how to finish by hand.
 
-Before releasing, date the version's section of CHANGELOG.md (`## X.Y.Z (unreleased)`) in
-a PR of its own; and add the next version's section to the PR the command opens.
+So before releasing, date the version's section of CHANGELOG.md (`## X.Y.Z (unreleased)`)
+in a PR of its own; and add the next version's section to the PR the command opens.
 
 ### CI and dependencies
 

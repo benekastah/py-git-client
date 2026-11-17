@@ -31,7 +31,8 @@ the shape of the code or a rule here changes.
   or newer, the oldest supported). They depend on
   `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
   their uv.lock.
-- **Versions** are 0.0.N, each released as a git tag, `v0.0.N`, as often as needed, with
+- **Versions** are 0.0.N, each released as a git tag, `v0.0.N`, and a GitHub release whose
+  notes are its CHANGELOG.md section, as often as needed, with
   `python3 dev.py release 0.0.N` (see the README). After each release, `main` carries the
   next version (the release command opens that PR), so a change that could break git-stack,
   git-recommit or move-forward is simply released as the next patch version. PRs never change

@@ -22,6 +22,23 @@ version = "0.0.1"
 [dependency-groups]
 dev = []
 """
+CHANGELOG = """\
+# Changelog
+
+## 0.0.2 (unreleased)
+
+- Next.
+
+## 0.0.1 (2026-01-02)
+
+### Added
+
+- First.
+
+## 0.0.0 (2026-01-01)
+
+- Before.
+"""
 
 
 @pytest.mark.parametrize("text", ["0.0.1", "1.20.300", "0.0.0"])
@@ -59,6 +76,27 @@ def test_set_pyproject_version_refuses_without_one() -> None:
         dev_project.set_pyproject_version('[project]\nname = "x"\n', "0.0.2")
 
 
+def test_changelog_notes_are_the_versions_section() -> None:
+    assert dev_project.changelog_notes(CHANGELOG, "0.0.1") == "### Added\n\n- First."
+    assert dev_project.changelog_notes(CHANGELOG, "0.0.0") == "- Before."
+
+
+def test_changelog_notes_refuse_an_undated_section() -> None:
+    with pytest.raises(ReleaseError, match=r"0\.0\.2's section .* unreleased.*date it"):
+        dev_project.changelog_notes(CHANGELOG, "0.0.2")
+
+
+@pytest.mark.parametrize("changelog", [CHANGELOG.replace("## 0.0.1 ", "## 0.0.10 "), ""])
+def test_changelog_notes_refuse_a_missing_section(changelog: str) -> None:
+    with pytest.raises(ReleaseError, match=r"CHANGELOG\.md has no section for 0\.0\.1"):
+        dev_project.changelog_notes(changelog, "0.0.1")
+
+
+def test_changelog_notes_refuse_an_empty_section() -> None:
+    with pytest.raises(ReleaseError, match=r"0\.0\.1's section .* is empty"):
+        dev_project.changelog_notes("## 0.0.1 (2026-01-02)\n\n## 0.0.0 (2026-01-01)\n", "0.0.1")
+
+
 def make_origin_and_clone(directory: Path) -> None:
     """origin.git, a bare repository whose main has pyproject.toml (version 0.0.1) and uv.lock,
     and clone, a clone of it."""
@@ -67,7 +105,8 @@ def make_origin_and_clone(directory: Path) -> None:
     clone = Git(directory / "clone")
     (directory / "clone" / "pyproject.toml").write_bytes(PYPROJECT.encode())
     (directory / "clone" / "uv.lock").write_bytes(b'version = "0.0.1"\n')
-    clone.run("add", "pyproject.toml", "uv.lock")
+    (directory / "clone" / "CHANGELOG.md").write_bytes(CHANGELOG.encode())
+    clone.run("add", "pyproject.toml", "uv.lock", "CHANGELOG.md")
     clone.run("commit", "--quiet", "-m", "first")
     clone.run("push", "--quiet", "origin", "main")
 
@@ -115,9 +154,11 @@ class FakeRun:
     def __init__(self, output: str) -> None:
         self.output = output
         self.commands: list[list[str]] = []
+        self.stdins: list[str | None] = []
 
     def __call__(self, args: list[str], cwd: Path, stdin: str | None = None) -> str:
         self.commands.append(args)
+        self.stdins.append(stdin)
         return self.output
 
 
@@ -189,6 +230,31 @@ def test_open_pr_opens_it_on_the_repository_and_returns_its_url(
     ]
 
 
+def test_create_release_publishes_the_tag_with_notes_and_returns_its_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = FakeRun("https://github.com/example/repo/releases/tag/v0.0.1")
+    monkeypatch.setattr(dev_project, "_run", run)
+    url = dev_project.create_release(Path(), "example/repo", "v0.0.1", "- First.")
+    assert url == "https://github.com/example/repo/releases/tag/v0.0.1"
+    assert run.commands == [
+        [
+            "gh",
+            "release",
+            "create",
+            "v0.0.1",
+            "--repo",
+            "example/repo",
+            "--verify-tag",
+            "--title",
+            "v0.0.1",
+            "--notes-file",
+            "-",
+        ]
+    ]
+    assert run.stdins == ["- First."]
+
+
 class FakeGitHub:
     """Stands in for what dev_project asks of gh and uv, which would reach the network: the CI
     status of a commit, the PRs opened, and the lock files updated; and for origin's URLs."""
@@ -198,6 +264,7 @@ class FakeGitHub:
         self.asked: list[str] = []
         self.prs: list[tuple[str, str, str]] = []
         self.locked: list[Path] = []
+        self.releases: list[tuple[str, str]] = []
         self.urls = [GITHUB_ORIGIN]
 
     def origin_urls(self, repo: Path) -> list[str]:
@@ -215,6 +282,11 @@ class FakeGitHub:
         self.prs.append((branch, title, body))
         return f"https://github.com/example/pull/{len(self.prs)}"
 
+    def create_release(self, repo: Path, github: str, tag: str, notes: str) -> str:
+        assert github == "example/repo"
+        self.releases.append((tag, notes))
+        return f"https://github.com/example/repo/releases/tag/{tag}"
+
     def uv_lock(self, worktree: Path) -> None:
         self.locked.append(worktree)
         lock = worktree / "uv.lock"
@@ -226,6 +298,7 @@ def github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
     fake = FakeGitHub()
     monkeypatch.setattr(dev_project, "ci_status", fake.ci_status)
     monkeypatch.setattr(dev_project, "open_pr", fake.open_pr)
+    monkeypatch.setattr(dev_project, "create_release", fake.create_release)
     monkeypatch.setattr(dev_project, "uv_lock", fake.uv_lock)
     monkeypatch.setattr(dev_project, "origin_urls", fake.origin_urls)
     return fake
@@ -244,16 +317,21 @@ def repos(repo_templates: RepoTemplates, tmp_path: Path) -> Path:
     return directory
 
 
-def test_release_tags_origins_main_and_opens_the_next_versions_pr(
+def test_release_tags_origins_main_publishes_it_and_opens_the_next_versions_pr(
     repos: Path, github: FakeGitHub
 ) -> None:
     origin = Git(repos / "origin.git")
     main = origin.run("rev-parse", "main")
 
-    tag, url = dev_project.publish(repos / "clone", "0.0.1")
+    tag, release, url = dev_project.publish(repos / "clone", "0.0.1")
 
-    assert (tag, url) == ("v0.0.1", "https://github.com/example/pull/1")
+    assert (tag, release, url) == (
+        "v0.0.1",
+        "https://github.com/example/repo/releases/tag/v0.0.1",
+        "https://github.com/example/pull/1",
+    )
     assert github.asked == [main]
+    assert github.releases == [("v0.0.1", "### Added\n\n- First.")]
     assert origin.run("cat-file", "-t", "v0.0.1") == "tag"
     assert origin.run("rev-parse", "v0.0.1^{commit}") == main
     start = origin.run("rev-parse", "start-0.0.2")
@@ -312,6 +390,38 @@ def test_release_refuses_until_ci_passed(
     assert not Git(repos / "clone").ok("rev-parse", "--verify", "--quiet", "refs/tags/v0.0.1")
 
 
+def test_release_refuses_an_undated_changelog_before_tagging(
+    repos: Path, github: FakeGitHub
+) -> None:
+    clone = Git(repos / "clone")
+    clone.run("switch", "--quiet", "-c", "undated", "origin/main")
+    changelog = repos / "clone" / "CHANGELOG.md"
+    changelog.write_bytes(CHANGELOG.replace("0.0.1 (2026-01-02)", "0.0.1 (unreleased)").encode())
+    clone.run("commit", "--quiet", "-am", "undate")
+    clone.run("push", "--quiet", "origin", "undated:main")
+    with pytest.raises(ReleaseError, match="unreleased"):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert Git(repos / "origin.git").run("tag") == ""
+    assert github.releases == []
+
+
+def test_release_says_how_to_finish_when_the_release_fails(
+    repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(repo: Path, github: str, tag: str, notes: str) -> str:
+        raise ReleaseError("gh release create failed")
+
+    monkeypatch.setattr(dev_project, "create_release", fail)
+    with pytest.raises(
+        ReleaseError,
+        match=r"(?s)pushed v0\.0\.1.*gh release create failed.*by hand.*gh release create v0\.0\.1"
+        r".*start-0\.0\.2",
+    ):
+        dev_project.publish(repos / "clone", "0.0.1")
+    assert Git(repos / "origin.git").run("cat-file", "-t", "v0.0.1") == "tag"
+    assert github.prs == []
+
+
 def test_release_says_how_to_finish_when_the_next_version_fails(
     repos: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,8 +429,11 @@ def test_release_says_how_to_finish_when_the_next_version_fails(
         raise ReleaseError("gh pr create failed")
 
     monkeypatch.setattr(dev_project, "open_pr", fail)
-    with pytest.raises(ReleaseError, match=r"(?s)pushed v0\.0\.1.*gh pr create failed.*by hand"):
+    with pytest.raises(
+        ReleaseError, match=r"(?s)pushed v0\.0\.1.*gh pr create failed.*by hand"
+    ) as e:
         dev_project.publish(repos / "clone", "0.0.1")
+    assert "gh release create" not in str(e.value)  # published already
     assert Git(repos / "origin.git").run("cat-file", "-t", "v0.0.1") == "tag"
     assert len(Git(repos / "clone").run("worktree", "list").splitlines()) == 1
 
