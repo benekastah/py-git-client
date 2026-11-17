@@ -221,8 +221,10 @@ def _own_process_group(timeout: float | None, process_groups: bool) -> bool:
 def _has_terminal(pid: int, session: int) -> bool:
     """Whether the tool has a controlling terminal: probed once per process (`pid`, so a
     forked child probes again) and session (`session`, which os.setsid, the usual way to lose
-    the terminal, changes). Not noticed: a session leader that takes a terminal of its own
-    later, which a tool doesn't do once it runs git."""
+    the terminal, changes). Not noticed: a session leader that takes a terminal later, which
+    a tool doesn't do once it runs git; and a terminal lost in the same session (closed under
+    a tool that ignores SIGHUP, as under nohup, or given up with TIOCNOTTY). Then a command
+    with a timeout gets no group of its own, and what git started isn't stopped with it."""
     try:
         os.close(os.open("/dev/tty", os.O_RDWR))
     except OSError:
