@@ -245,10 +245,8 @@ def test_the_librarys_reads_take_a_read_only_client(repo: Git) -> None:
     assert git_paths(git, "HEAD")[0].name == "HEAD"
 
 
-@pytest.mark.skipif(
-    tuple(int(part) for part in Git(".").run("version").split()[2].split(".")[:2]) < (2, 45),
-    reason="git before 2.45 (but for 2.39.4 to 2.44.1) ignores GIT_NO_LAZY_FETCH, and fetches",
-)
+# 2.45, or 2.39.4 to 2.44.1: older git ignores GIT_NO_LAZY_FETCH, and fetches.
+@pytest.mark.needs_git(2, 45, reason="for GIT_NO_LAZY_FETCH")
 def test_in_a_partial_clone_a_read_only_client_fetches_no_missing_object(repo: Git) -> None:
     origin = Path(repo.directory)
     repo.run("config", "uploadpack.allowFilter", "true")

@@ -19,10 +19,7 @@ from git_client.testing import RepoTemplates
 
 README = Path(__file__).parent.parent / "README.md"
 
-# The oldest git py-git-client supports, as the README says: CatFile needs it.
-MINIMUM_GIT = (2, 36)
-
-# What starts a block that needs a newer git than MINIMUM_GIT.
+# What starts a block that needs a newer git than the oldest supported.
 NEEDS_GIT = re.compile(r"# Needs git (\d+)\.(\d+)\.\n")
 
 
@@ -51,14 +48,15 @@ def publish(git: Git) -> None:
     git.run("push", "origin", "main")
 
 
+# The oldest git py-git-client supports, as the README says: CatFile needs it.
+@pytest.mark.needs_git(2, 36, reason="the oldest supported")
 @pytest.mark.usefixtures("fresh_find_git")
 def test_the_readmes_python_examples_run(
-    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo_templates: RepoTemplates,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int],
 ) -> None:
-    version = Git(".").run("--version")
-    found = tuple(int(part) for part in re.findall(r"\d+", version)[:2])
-    if found < MINIMUM_GIT:
-        pytest.skip(f"{version}: the README's examples need git 2.36 or newer")
     repo_templates.build("readme", make_readme_repository)
     monkeypatch.chdir(repo_templates.copy("readme", tmp_path / "copy"))
     blocks = re.findall(r"```python\n(.*?)```", README.read_text(encoding="utf-8"), re.DOTALL)
@@ -80,7 +78,7 @@ def test_the_readmes_python_examples_run(
     on_sigterm = signal.getsignal(signal.SIGTERM)
     try:
         for block in blocks:
-            if not runs_on(textwrap.dedent(block), found):
+            if not runs_on(textwrap.dedent(block), git_version):
                 continue
             exec(textwrap.dedent(block), dict(names))  # noqa: S102 (the README's own code)
     finally:

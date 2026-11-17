@@ -78,5 +78,6 @@ the shape of the code or a rule here changes.
   `oldest-git` has 2 too: about a minute when it builds git, 15 seconds from its cache.
 - **`project.yml`'s `oldest-git` job runs the tests with git 2.36**, the oldest the README
   supports, built from kernel.org's tarball and cached; CI's other jobs run the newest. A test
-  of what older git can't do skips by git's version, saying which version it needs. Raising
-  the oldest supported git changes the job's `GIT_VERSION` and `GIT_SHA256`, and the README.
+  of what older git can't do is marked `needs_git(major, minor)` (see `tests/conftest.py`).
+  Raising the oldest supported git changes the job's `GIT_VERSION` and `GIT_SHA256`, the
+  README test's `needs_git`, and the README.
