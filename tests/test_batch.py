@@ -1,18 +1,12 @@
-import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO
 
 import pytest
 
 from git_client import (
-    CLIENT_TIMEOUT,
-    Arg,
-    EnvValue,
     Git,
     GitError,
     RefUpdate,
-    Timeout,
     config,
     config_key,
     hash_blobs,
@@ -300,39 +294,19 @@ def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
     assert "no-such-gpg" not in trace.read_text(encoding="utf-8")
 
 
-class CountingGit(Git):
-    """Counts the processes it starts."""
+def test_patch_ids_reads_the_object_format_once_per_client(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    patch_ids(repo, ["log", "-p", "HEAD"])
+    patch_ids(repo, ["log", "-p", "HEAD"])
 
-    started = 0
-
-    def process(
-        self,
-        *args: Arg,
-        capture_output: bool = False,
-        input: bytes | None = None,
-        stdout: int | IO[bytes] | IO[str] | None = None,
-        env: Mapping[str, EnvValue] | None = None,
-        timeout: Timeout = CLIENT_TIMEOUT,
-    ) -> subprocess.CompletedProcess[bytes]:
-        self.started += 1
-        return super().process(
-            *args,
-            capture_output=capture_output,
-            input=input,
-            stdout=stdout,
-            env=env,
-            timeout=timeout,
-        )
-
-
-def test_patch_ids_reads_the_object_format_once_per_client(repo: Git) -> None:
-    git = CountingGit(repo.directory)
-    patch_ids(git, ["log", "-p", "HEAD"])
-    git.started = 0
-
-    patch_ids(git, ["log", "-p", "HEAD"])
-
-    assert git.started == 2  # the command, and patch-id
+    assert [call[0] for call in git_calls] == [
+        "rev-parse",
+        "log",
+        "patch-id",
+        "log",
+        "patch-id",
+    ]
 
 
 def test_hash_blobs_writes_each_as_it_is(repo: Git) -> None:
