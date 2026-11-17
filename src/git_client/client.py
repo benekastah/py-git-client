@@ -644,8 +644,8 @@ class ReadOnlyGit:
     interrupt, only git is stopped, and what it started (hooks, ssh, credential helpers) runs
     on, as with a terminal. In exchange, starting git costs less: on macOS, a group of its own
     keeps Python from using posix_spawn, and on Linux it costs about 50 µs a command (a
-    twentieth of what starting git costs). For a tool that runs many short commands with a timeout and
-    without a terminal, whose git starts nothing that could outlive it.
+    twentieth of what starting git costs). It suits a tool that runs many short commands
+    with a timeout and without a terminal, whose git starts nothing that could outlive it.
 
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
