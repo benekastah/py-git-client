@@ -69,9 +69,9 @@ update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; o
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
 filesystem's encoding; text, as str, which reaches git as UTF-8 whatever the locale's
 encoding. Both go for arguments and for values in `env`. Output is decoded as UTF-8 with
-surrogateescape, so bytes that aren't UTF-8 survive a round trip through `encode`. A tool that
-stores or shows text (JSON, a web page) can't write those surrogates: `printable(text)`, for
-what `run`, `config` or `refs` gave, replaces each such byte with U+FFFD. Commands
+surrogateescape, so bytes that aren't UTF-8 survive a round trip through `encode`. Those surrogates
+can't be written as UTF-8 (to a file, a web page, JSON), so for a tool that stores or shows
+text, `printable(text)`, for what `run`, `config` or `refs` gave, replaces each with U+FFFD. Commands
 whose output the library reads run with `LC_ALL=C`, so git's messages are in English
 whatever the user's language; `passthrough`, whose output is the user's, keeps their locale.
 

@@ -13,6 +13,7 @@ from git_client import (
     NotARepositoryError,
     ReadOnlyGit,
     UnknownRevisionError,
+    decode,
     find_git,
     printable,
 )
@@ -259,10 +260,13 @@ def test_text_that_isnt_utf8_comes_back_as_it_was(repo: Git) -> None:
     assert repo.run_bytes("cat-file", "blob", blob) == b"caf\xe9\n"
 
 
-def test_printable_replaces_the_bytes_that_arent_utf8(repo: Git) -> None:
-    blob = repo.run("hash-object", "-w", "--stdin", input="caf\udce9 \u00e9t\u00e9")
+def test_printable_replaces_the_bytes_that_arent_utf8() -> None:
+    assert printable(decode(b"caf\xe9 \xc3\xa9t\xc3\xa9")) == "caf\ufffd \u00e9t\u00e9"
 
-    assert printable(repo.run("cat-file", "blob", blob)) == "caf\ufffd \u00e9t\u00e9"
+
+def test_printable_replaces_any_other_surrogate_too() -> None:
+    # Not from decode: e.g. from json.loads('"\\ud800"').
+    assert printable("caf\udce9 \ud800") == "caf\ufffd \ufffd"
 
 
 def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
