@@ -246,6 +246,20 @@ def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:
     assert [commit for _, commit in patches] == [repo.run("rev-parse", "topic")]
 
 
+def test_patch_ids_takes_paths_from_the_top_as_they_are(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "top")
+    (Path(repo.directory) / "sub").mkdir()
+    sub = Git(Path(repo.directory) / "sub")
+
+    from_top, as_pattern = patch_ids(
+        sub, [*TOPIC[0], "--", "top"], [*TOPIC[0], "--", "to*"], paths_from_top=True
+    )
+
+    assert [commit for _, commit in from_top] == [repo.run("rev-parse", "topic")]
+    # "to*" names no path: it's taken as a name, not a pattern.
+    assert as_pattern == []
+
+
 def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
     repo = topic_changing(repo_from, "b.txt")
     expected = patch_ids(repo, *TOPIC)

@@ -98,7 +98,9 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
-def patch_ids(git: ReadOnlyGit, *commands: Sequence[str]) -> list[list[tuple[str, str]]]:
+def patch_ids(
+    git: ReadOnlyGit, *commands: Sequence[str], paths_from_top: bool = False
+) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
     in order, as `git patch-id --stable` gives them. A diff's commit is all zeros; a
@@ -109,8 +111,10 @@ def patch_ids(git: ReadOnlyGit, *commands: Sequence[str]) -> list[list[tuple[str
     `show` print each commit's full id, as patch-id needs (a command's own `--format` still
     wins).
 
-    Paths after `--` are pathspecs, relative to `git.directory`: mark a path git reported
-    (from the top of the worktree, which may hold `*` or `:`) as `":(top,literal)" + path`.
+    Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
+    is instead a path from the top of the worktree, as git reports one (e.g. `git diff
+    --name-only`), taken as it is, even if it holds `*` or `:`: patch_ids marks each
+    `:(top,literal)`.
 
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
@@ -129,6 +133,9 @@ def patch_ids(git: ReadOnlyGit, *commands: Sequence[str]) -> list[list[tuple[str
             if command in _SHOWING_COMMITS
             else _PATCH_SETTINGS
         )
+        if paths_from_top and "--" in rest:
+            paths = rest.index("--") + 1
+            rest = [*rest[:paths], *(f":(top,literal){path}" for path in rest[paths:])]
         patches.append(git.run(command, *settings, *rest))
         patches.append(f"commit {i:0{length}x}\n\n{_END_MARKER_DIFF}")
     results: list[list[tuple[str, str]]] = [[]]
