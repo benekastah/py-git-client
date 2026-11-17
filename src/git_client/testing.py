@@ -129,11 +129,13 @@ def git_config_text() -> str:
 def _temporary_roots(tmp_path_factory: pytest.TempPathFactory) -> list[Path]:
     """The directories temporary ones are made in: pytest's (`tmp_path`, `tmp_path_factory`,
     whatever --basetemp says) and Python's (`tempfile.gettempdir()`, from TMPDIR, TEMP or
-    TMP), resolved, as git compares them (on Windows, long names rather than 8.3 short ones).
-    git runs with them in GIT_CEILING_DIRECTORIES, so in a directory made in one it looks no
-    higher than that directory, even if a tool's TMPDIR, or the project's --basetemp, is in a
-    repository: a test that runs git in a directory that isn't a repository gets
-    NotARepositoryError, rather than the repository around it (and changing its config)."""
+    TMP), resolved, for Windows: TEMP is often an 8.3 short name there (`RUNNER~1`), and
+    resolving gives the long name a working directory has, whatever Git for Windows makes of
+    a short one. git runs with them in GIT_CEILING_DIRECTORIES, so in a directory made in one
+    it looks no higher than that directory, even if a tool's TMPDIR, or the project's
+    --basetemp, is in a repository: a test that runs git in a directory that isn't a
+    repository gets NotARepositoryError, rather than the repository around it (and changing
+    its config)."""
     return [
         tmp_path_factory.getbasetemp().resolve(),
         Path(tempfile.gettempdir()).resolve(),
@@ -158,13 +160,12 @@ def git_client_isolation(
             patch.delenv(name, raising=False)
         patch.setenv("GIT_CONFIG_GLOBAL", str(config))
         patch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-        ceilings = os.environ.get("GIT_CEILING_DIRECTORIES")
-        patch.setenv(
-            "GIT_CEILING_DIRECTORIES",
-            os.pathsep.join(
-                [*map(str, _temporary_roots(tmp_path_factory)), *([ceilings] if ceilings else [])]
-            ),
-        )
+        # The user's own ceilings, if any, after the temporary roots.
+        ceilings = [
+            *map(str, _temporary_roots(tmp_path_factory)),
+            os.environ.get("GIT_CEILING_DIRECTORIES"),
+        ]
+        patch.setenv("GIT_CEILING_DIRECTORIES", os.pathsep.join(filter(None, ceilings)))
         for name, value in GIT_SETTINGS.items():
             patch.setenv(name, value)
         yield config
