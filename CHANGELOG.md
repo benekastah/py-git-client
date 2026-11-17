@@ -90,6 +90,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   needs no change, and now lets these through; one that catches it to report any failure
   (e.g. at its top level) catches `(GitError, NoAnswerError)`; and one that caught
   `GitTimeoutError` or `NotStartedError` by name still does (#54).
+- A command whose output the library reads (`run`, `run_bytes`, `ok`, `succeeds`,
+  `process(capture_output=True)`) reads nothing from stdin, as from /dev/null, unless given
+  `input`: it read the tool's, so `run("shortlog", "-s")` waited on it. A tool that has git
+  read its own stdin (e.g. `cat file | tool` running `hash-object -w --stdin` or `apply`)
+  now hashes or applies nothing, and must pass it on: `input=sys.stdin.buffer.read()` to
+  `run_bytes` (or to `run`, decoded), or run git with `passthrough` (#52).
 
 ### Added
 
@@ -167,10 +173,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `patch_ids` keeps a commit that only moves a submodule, and gives a submodule's patches
   the same ids, whatever diff.submodule says, and keeps a root commit's patch whatever
   log.showRoot says (#52).
-- A command whose output the library reads (`run`, `ok`, `process(capture_output=True)`
-  and the like) reads nothing from stdin, as from /dev/null, unless given `input`: it read
-  the tool's, so `run("shortlog", "-s")` waited on it and `run("hash-object", "--stdin")`
-  hashed it. `passthrough` still gives git the tool's stdin (#52).
 - On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
   Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
   started are killed; a timeout still kills them at once (#52).
