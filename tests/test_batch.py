@@ -619,3 +619,12 @@ def test_git_paths_refuses_an_answer_a_line_short() -> None:
     git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
     with pytest.raises(ValueError):
         git_paths(git, "HEAD")
+
+
+def test_git_paths_refuses_an_empty_answer() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse", "--show-prefix"], stdout="\n")
+    git.prefix()
+    git.respond(["rev-parse", "--path-format=absolute"])  # nothing
+    with pytest.raises(ValueError):
+        git_paths(git, "HEAD")
