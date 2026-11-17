@@ -731,7 +731,7 @@ def test_an_object_id_length_learned_counts_only_where_it_was_read(
 ) -> None:
     git = Git(make_sha256_repo(tmp_path).directory)
     with CatFile(git) as cat_file:
-        cat_file.resolve("HEAD")
+        assert cat_file.resolve("nothing") is None  # starts its process, reading no id
         git.directory = repo.directory
         # Its process is still the SHA-256 repository's.
         assert cat_file.resolve("HEAD") is not None
