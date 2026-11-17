@@ -404,9 +404,7 @@ def test_git_paths_asks_git_once_per_name(repo: Git, git_calls: list[list[str]])
     assert len(git_calls) == 2
 
 
-def test_git_paths_follows_a_change_of_directory_or_environment(
-    repo: Git, tmp_path: Path, git_calls: list[list[str]]
-) -> None:
+def test_git_paths_follows_a_change_of_directory_or_environment(repo: Git, tmp_path: Path) -> None:
     linked = tmp_path / "linked"
     repo.run("worktree", "add", "--quiet", str(linked))
     git = Git(repo.directory)

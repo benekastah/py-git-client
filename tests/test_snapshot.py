@@ -1,9 +1,13 @@
+import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from git_client import Git, RefSnapshot, refs
+from git_client import Git, GitError, RefSnapshot, refs
 from git_client.testing import FakeGit, GitCall
+
+SLEEP = f'"{Path(sys.executable).as_posix()}" -c "import time; time.sleep(10)"'
 
 
 def counting() -> tuple[Callable[[], int], list[int]]:
@@ -26,6 +30,8 @@ def answering_anything() -> FakeGit:
 @pytest.mark.parametrize(
     "args",
     [
+        # Past an option of git's own that takes a value.
+        ["--attr-source", "HEAD", "log", "-1"],
         # What a ReadOnlyGit runs.
         ["log", "-1"],
         ["rev-parse", "HEAD"],
@@ -90,6 +96,8 @@ def test_snapshot_outlives_commands_that_cant_change_refs(args: list[str]) -> No
         ["gc"],
         # An alias, which could be anything.
         ["co", "main"],
+        # Past an option of git's own that takes a value.
+        ["--attr-source", "HEAD", "branch", "-D", "topic"],
         # Settings that say a branch's upstream, or what a remote's refs are called.
         ["config", "branch.topic.merge", "refs/heads/topic"],
         ["config", "set", "branch.topic.remote", "origin"],
@@ -176,3 +184,24 @@ def test_a_long_lived_process_that_may_change_refs_counts_when_it_starts(repo: G
         process.wait()
 
     assert snapshot.get() == {"refs/heads/main", "refs/heads/topic"}
+
+
+@pytest.mark.parametrize(
+    ("args", "timeout"),
+    [
+        (["branch", "not..a-name"], None),
+        # An alias, which runs past its timeout.
+        (["-c", f"alias.wait=!{SLEEP}", "wait"], 0.2),
+    ],
+)
+def test_a_command_that_fails_or_times_out_is_counted(
+    repo: Git, args: list[str], timeout: float | None
+) -> None:
+    read, reads = counting()
+    snapshot = RefSnapshot(read)
+    snapshot.get()
+    with pytest.raises(GitError):
+        repo.run(*args, timeout=timeout)
+
+    snapshot.get()
+    assert reads == [2]

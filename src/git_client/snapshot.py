@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 
 # Options to git itself, before the command, whose value is the next argument.
 _GIT_OPTIONS_WITH_VALUES = frozenset(
-    {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"}
+    {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
 )
 
 # Commands that change no ref (HEAD included), and no setting that says what a ref's upstream

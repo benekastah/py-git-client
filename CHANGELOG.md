@@ -8,20 +8,24 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
-- `ReadOnlyGit.prefix()` and `git_paths` (except "hooks" and what's under it) ask git once
-  per client, directory and `env`, and remember the answer: a tool that cached them itself
-  can drop its cache (and its `cdup` is `"../" * prefix().count("/")`). A repository moved
-  or replaced under a client that keeps its directory isn't noticed; make a new client.
+- `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
+  under it) ask git once per client, directory and `env`, and remember the answer: a tool
+  that cached them itself can drop its cache (and its `cdup` is
+  `"../" * prefix().count("/")`). A repository moved or replaced under a client that keeps
+  its directory isn't noticed; make a new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
   GitError` no longer holds, and a tool that told it apart by git's message can catch
-  `WrongTypeError` instead.
+  `WrongTypeError` instead (#50).
 - An object git finds damaged as it reads a name (e.g. a corrupt loose object) raises
   `CorruptObjectError` from `CatFile`, where the name resolved to None (or `verify` and
   `read` raised `UnknownRevisionError`): a missing name is still None. `run` and the like
   raise it too, for git's own words of a corrupt object, where they raised a plain
-  `GitError`.
+  `GitError` (#50).
+- A `Git` subclass that overrides `process` calls `super().process` to start git: one that
+  starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
+  changed (#50).
 
 ### Added
 
@@ -29,14 +33,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).
 - `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
-  but holds paths from the top of the worktree, as git reports them, as `patch_ids` has.
+  but holds paths from the top of the worktree, as git reports them, as `patch_ids` has
+  (#50).
 - `WrongTypeError`, a `GitError` whose `expected` and `found` say which type git wanted and
-  which it found.
-- `CorruptObjectError`, a `GitError` for an object git found damaged as it read it.
+  which it found (#50).
+- `CorruptObjectError`, a `GitError` for an object git found damaged as it read it (#50).
 - `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
   until a command that may change a ref or a branch's upstream runs through any `Git` (or
   `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
-  that change them, can go.
+  that change them, can go (#50).
 
 ## 0.0.2 (2026-11-17)
 

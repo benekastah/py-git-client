@@ -64,7 +64,8 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 # names nothing: True for exit 0, False for any other
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
-git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top
+git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
+# asked of git once per client (and directory), as are git_paths and object_id_length()
 git.write_config("branch.a.description", "x")  # git config, tried again while locked
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised
@@ -178,6 +179,8 @@ A tool that asks about the same few refs over and over can read them once with a
 again when next asked:
 
 ```python
+from git_client import Git, RefSnapshot, refs
+
 git = Git("path/to/repo")
 branches = RefSnapshot(lambda: refs(git, "refs/heads/"))
 branches.get()["refs/heads/main"].upstream  # one git for-each-ref...

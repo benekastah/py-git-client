@@ -7,7 +7,16 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from git_client.client import Arg, EnvValue, Git, ReadOnlyGit, decode, encode, error_from
+from git_client.client import (
+    Arg,
+    EnvValue,
+    Git,
+    ReadOnlyGit,
+    decode,
+    encode,
+    error_from,
+    location,
+)
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -104,7 +113,7 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
-# Where git keeps each name, per client and `ReadOnlyGit.location()`.
+# Where git keeps each name, per client and `location`.
 _git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[object, str], Path]] = (
     weakref.WeakKeyDictionary()
 )
@@ -120,7 +129,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     whose path couldn't be told from the next one's, and GitError if git fails (e.g.
     NotARepositoryError).
 
-    Each name is asked of git once per client and `ReadOnlyGit.location()` (its directory and
+    Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config."""
     if not names:
@@ -128,7 +137,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths can't take a name with a line ending: {names}")
     known = _git_paths.setdefault(git, {})
-    where = git.location()
+    where = location(git)
     new = [
         name
         for name in dict.fromkeys(names)

@@ -87,14 +87,23 @@ def test_prefix_is_asked_of_git_once_per_directory_and_environment(
     assert len(git_calls) == 3
 
 
-def test_a_failed_prefix_is_not_remembered(tmp_path: Path, repo: Git) -> None:
+def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
     git = Git(tmp_path / "later")
     (tmp_path / "later").mkdir()
     with pytest.raises(GitError):
         git.prefix()
 
-    git.directory = repo.directory
+    Git(tmp_path).run("init", "--quiet", "later")
     assert git.prefix() == ""
+
+
+def test_object_id_length_follows_a_change_of_directory(repo: Git, tmp_path: Path) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(repo.directory)
+    assert git.object_id_length() == 40
+
+    git.directory = str(tmp_path / "sha256")
+    assert git.object_id_length() == 64
 
 
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:

@@ -420,6 +420,18 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
 
 
+type Location = tuple[str, tuple[tuple[str, EnvValue], ...]]
+
+
+def location(git: ReadOnlyGit) -> Location:
+    """What decides where git finds `git`'s repository: its directory, as an absolute path
+    (so a change of the process's directory counts for a relative one), and its `env` (e.g.
+    GIT_DIR); not the process's own environment, which a tool sets before it makes clients.
+    The key under which a client's answers about where things are are kept, so reassigning
+    `directory` or changing `env` asks git again."""
+    return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
+
+
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
     each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
@@ -525,23 +537,20 @@ class ReadOnlyGit:
         self.timeout = timeout
         self.stopping = stopping
         self._object_id_length = object_id_length
-        self._prefixes: dict[tuple[str, tuple[tuple[str, EnvValue], ...]], str] = {}
-
-    def location(self) -> tuple[str, tuple[tuple[str, EnvValue], ...]]:
-        """What decides where git finds the repository: the directory, as an absolute path
-        (so a change of the process's directory counts for a relative one), and the client's
-        `env` (e.g. GIT_DIR). The key under which answers about where things are are kept, so
-        reassigning `directory` or changing `env` asks git again."""
-        return os.path.abspath(self.directory), tuple(sorted(self.env.items()))
+        self._object_id_lengths: dict[Location, int] = {}
+        self._prefixes: dict[Location, str] = {}
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
-        SHA-256: the client's `object_id_length` if given, else read from git the first time
-        it's asked (a repository's can't change)."""
-        if self._object_id_length is None:
+        SHA-256: the client's `object_id_length` if given, else asked of git once per
+        `location` (the directory and `env`, which a tool may change) and remembered."""
+        if self._object_id_length is not None:
+            return self._object_id_length
+        key = location(self)
+        if key not in self._object_id_lengths:
             sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
-            self._object_id_length = 64 if sha256 else 40
-        return self._object_id_length
+            self._object_id_lengths[key] = 64 if sha256 else 40
+        return self._object_id_lengths[key]
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
@@ -550,10 +559,10 @@ class ReadOnlyGit:
         Put it before a path from the directory to name that path from the top. Raises
         GitError if git fails (e.g. NotARepositoryError).
 
-        Asked of git once per `location()` (the directory and `env`, which a tool may change)
+        Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
         its directory isn't noticed."""
-        key = self.location()
+        key = location(self)
         if key not in self._prefixes:
             # Not run's, which would strip a directory's leading space.
             output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
@@ -622,8 +631,9 @@ class ReadOnlyGit:
         before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the
         user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
         says so. Every git process but `popen`'s starts here, so a subclass can override this
-        to change how each runs. Once git ends, one that may have changed refs is counted for
-        RefSnapshot, whether it succeeded or not."""
+        to change how each runs, calling `super().process`: once git ends, it counts one that
+        may have changed refs for RefSnapshot, whether it succeeded or not, and an override
+        that starts git itself leaves RefSnapshot keeping what such a command changed."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
