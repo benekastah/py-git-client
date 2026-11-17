@@ -100,7 +100,9 @@ cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
 
 # A three-way merge of contents, writing nothing to the repository: the result, with conflict
 # markers, and how many conflicts it has (at most 127). GitError if git can't merge them.
-merged, conflicts = merge_file(git, b"ours\n", b"base\n", b"theirs\n", options=["--diff3"])
+merged, conflicts = merge_file(
+    git, ours=b"ours\n", base=b"base\n", theirs=b"theirs\n", options=["--diff3"]
+)
 ```
 
 Paths a tool got from the filesystem (rather than from git) can be given as bytes, in the
