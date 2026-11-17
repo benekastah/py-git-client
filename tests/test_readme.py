@@ -7,6 +7,7 @@ import re
 import signal
 import sys
 import textwrap
+import threading
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,7 @@ def test_the_readmes_python_examples_run(
         "publish": publish,
         "signal": signal,
         "sys": sys,
+        "threading": threading,
     }
 
     # Examples set os.environ["MY_TOOL_GIT"], as a conftest would, and a SIGTERM handler, as a

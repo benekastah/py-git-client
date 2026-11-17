@@ -37,6 +37,7 @@ from git_client.client import (
     decode,
     encode,
     find_git,
+    refuse_if_stopping,
 )
 
 TEST_GIT_CONFIG = """\
@@ -429,7 +430,9 @@ def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
     process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
 
     def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
-        git.command(*args)  # raises ReadOnlyError, starting nothing, for one it refuses
+        # Each raises, starting nothing: for a command a ReadOnlyGit refuses, then once stopping.
+        git.command(*args)
+        refuse_if_stopping(git, args)
         if not _setting_up.get():
             calls.append(GitCall([os.fsdecode(arg) for arg in args], git.program))
 
@@ -477,7 +480,8 @@ class FakeGit(Git):
     Assert the commands where they're the behavior (what's pushed, deleted or rewritten;
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
-    so CatFile needs a real Git.
+    so CatFile needs a real Git. Like Git, it raises NotStartedError, recording nothing,
+    once its `stopping` says so.
 
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
@@ -497,9 +501,15 @@ class FakeGit(Git):
         env_var: str | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
+        stopping: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(
-            directory, program=program or "git", env_var=env_var, env=env, timeout=timeout
+            directory,
+            program=program or "git",
+            env_var=env_var,
+            env=env,
+            timeout=timeout,
+            stopping=stopping,
         )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
@@ -535,6 +545,7 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
+        refuse_if_stopping(self, args)
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
         for prefix, completed in self._responses:
@@ -545,6 +556,7 @@ class FakeGit(Git):
     def popen(
         self, *args: Arg, env: Mapping[str, EnvValue] | None = None
     ) -> subprocess.Popen[bytes]:
+        refuse_if_stopping(self, args)
         raise UnexpectedCommand(
             f"FakeGit can't start a long-lived git {' '.join(map(os.fsdecode, args))}"
         )

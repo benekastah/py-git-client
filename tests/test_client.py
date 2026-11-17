@@ -9,11 +9,14 @@ from pathlib import Path
 import pytest
 
 from git_client import (
+    CatFile,
     ConfigLockedError,
     Git,
     GitError,
     GitTimeoutError,
     NotARepositoryError,
+    NotStartedError,
+    ReadOnlyError,
     ReadOnlyGit,
     UnknownRevisionError,
     decode,
@@ -84,11 +87,11 @@ def test_a_failures_message_cuts_a_long_command_short() -> None:
 
 
 def test_a_failures_message_says_timed_out_only_of_a_timeout() -> None:
-    # A tool may raise a GitError with no exit status for a command it never ran.
-    not_run = GitError(["fetch"], None, "not run: the tool is shutting down")
+    # A tool may raise a GitError with no exit status for a command it refused.
+    refused = GitError(["fetch"], None, "refused: an untrusted remote")
     timed_out = GitTimeoutError(["fetch"], None, "")
 
-    assert str(not_run) == "git fetch failed (no exit status):\nnot run: the tool is shutting down"
+    assert str(refused) == "git fetch failed (no exit status):\nrefused: an untrusted remote"
     assert str(timed_out) == "git fetch failed (timed out):\n"
     assert str(pickle.loads(pickle.dumps(timed_out))) == str(timed_out)
 
@@ -145,6 +148,45 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
 def test_succeeds_raises_rather_than_say_no_past_a_timeout(waiting: Git) -> None:
     with pytest.raises(GitTimeoutError):
         waiting.succeeds("wait", timeout=0.2)
+
+
+def test_once_stopping_says_so_no_git_starts(repo: Git) -> None:
+    stop = threading.Event()
+    git = Git(repo.directory, stopping=stop.is_set)
+    git.run("branch", "before")
+    stop.set()
+
+    with pytest.raises(NotStartedError) as raised:
+        git.run("branch", "after")
+    with pytest.raises(NotStartedError):
+        git.passthrough("branch", "after")
+
+    assert str(raised.value) == "git branch after failed (not started):\nthe tool is stopping"
+    assert raised.value.returncode is None
+    assert repo.resolve("before") is not None
+    assert repo.resolve("after") is None
+
+
+def test_stopping_starts_no_cat_file_but_leaves_a_running_one(repo: Git) -> None:
+    stop = threading.Event()
+    git = Git(repo.directory, stopping=stop.is_set)
+    with CatFile(git) as running:
+        head = running.resolve("HEAD")
+        stop.set()
+
+        assert running.resolve("HEAD") == head
+        with CatFile(git) as new, pytest.raises(NotStartedError, match="cat-file"):
+            new.resolve("HEAD")
+
+
+def test_a_stopping_read_only_git_still_refuses_what_it_wont_run(repo: Git) -> None:
+    # A programming error, which a tool's shutdown mustn't pass off as stopping.
+    git = ReadOnlyGit(repo.directory, stopping=lambda: True)
+
+    with pytest.raises(ReadOnlyError):
+        git.run("commit", "--allow-empty", "-m", "x")
+    with pytest.raises(ReadOnlyError):
+        git.popen("commit", "--allow-empty", "-m", "x")
 
 
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:

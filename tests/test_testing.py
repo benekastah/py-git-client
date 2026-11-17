@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import IO
@@ -13,6 +14,7 @@ from git_client import (
     CatFile,
     EnvValue,
     Git,
+    NotStartedError,
     ReadOnlyError,
     ReadOnlyGit,
     Timeout,
@@ -318,6 +320,20 @@ def test_git_calls_records_a_read_only_clients_processes_but_not_what_it_refuses
     assert git_calls == [["log", "-1"]]
 
 
+def test_git_calls_records_no_process_a_stopping_client_doesnt_start(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    git = Git(repo.directory, stopping=lambda: True)
+    with pytest.raises(NotStartedError):
+        git.run("log", "-1")
+    with CatFile(git) as cat_file, pytest.raises(NotStartedError):
+        cat_file.resolve("HEAD")
+    with pytest.raises(ReadOnlyError):  # not NotStartedError: a programming error
+        ReadOnlyGit(repo.directory, stopping=lambda: True).run("commit", "-m", "x")
+
+    assert git_calls == []
+
+
 @pytest.mark.usefixtures("fresh_find_git")
 def test_git_calls_records_the_git_each_process_ran(
     repo: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
@@ -617,6 +633,20 @@ def test_fake_git_records_what_each_command_added_to_the_environment() -> None:
 def test_fake_git_cant_start_a_long_lived_git() -> None:
     with CatFile(FakeGit()) as cat_file, pytest.raises(UnexpectedCommand, match="cat-file"):
         cat_file.resolve("HEAD")
+
+
+def test_fake_git_starts_nothing_once_stopping() -> None:
+    stop = threading.Event()
+    git = FakeGit(stopping=stop.is_set)
+    git.respond(["rev-parse"], stdout="main\n")
+    git.run("rev-parse", "HEAD")
+    stop.set()
+
+    with pytest.raises(NotStartedError):
+        git.run("rev-parse", "HEAD")
+    with CatFile(git) as cat_file, pytest.raises(NotStartedError):
+        cat_file.resolve("HEAD")
+    assert git.commands == [["rev-parse", "HEAD"]]
 
 
 def test_fake_git_fails_on_a_command_it_has_no_response_for() -> None:
