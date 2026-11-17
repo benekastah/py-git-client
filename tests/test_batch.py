@@ -477,6 +477,24 @@ def test_hash_blob_at_takes_a_path_from_the_clients_directory(repo: Git) -> None
     assert hash_blob_at(repo, "notes.txt", b"one\r\n") != as_it_is
 
 
+def test_hash_blob_at_takes_a_path_from_the_top_if_asked(repo: Git) -> None:
+    top = Path(repo.directory)
+    (top / ".gitattributes").write_bytes(b"*.txt text\n")
+    (top / "sub" / "deep").mkdir(parents=True)
+    (top / "sub" / ".gitattributes").write_bytes(b"*.txt -text\n")
+    as_it_is = blob_id(repo, b"one\r\n")
+    converted = blob_id(repo, b"one\n")
+
+    for directory in (top / "sub", top / "sub" / "deep"):
+        client = Git(directory)
+        assert hash_blob_at(client, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
+        assert hash_blob_at(client, "notes.txt", b"one\r\n", paths_from_top=True) == converted
+        # A path as the filesystem has it, in bytes, as well.
+        assert hash_blob_at(client, b"sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
+    # At the top, from the top is from the directory.
+    assert hash_blob_at(repo, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
+
+
 def test_hash_blob_at_writes_the_blob_only_if_asked(repo: Git) -> None:
     (Path(repo.directory) / ".gitattributes").write_bytes(b"*.txt text\n")
 

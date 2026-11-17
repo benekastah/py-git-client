@@ -100,6 +100,7 @@ common = git_common_dir("path/to/repo")
 # ...or as `git add` would store one at a path (its clean filter, `text`, core.autocrlf), and
 # written only if asked.
 cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
+# From a subdirectory, for a path as git reports it (from the top): paths_from_top=True.
 
 # A three-way merge of contents, writing nothing to the repository: the result, with conflict
 # markers, and how many conflicts it has (at most 127). GitError if git can't merge them.

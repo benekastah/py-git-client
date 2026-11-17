@@ -229,7 +229,9 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
         ).split()
 
 
-def hash_blob_at(git: Git, path: Arg, content: bytes, *, write: bool = False) -> str:
+def hash_blob_at(
+    git: Git, path: Arg, content: bytes, *, write: bool = False, paths_from_top: bool = False
+) -> str:
     """The id of content as `git add` would store it at `path`, whether or not a file is
     there: through the filters that path's attributes and the config give it, e.g. a clean
     filter (such as git-lfs's), or line-ending conversion (`text`, `eol`, core.autocrlf),
@@ -237,8 +239,13 @@ def hash_blob_at(git: Git, path: Arg, content: bytes, *, write: bool = False) ->
     object database too. One `git hash-object --path`, which runs the filter's program, if
     any. Raises GitError if git fails (e.g. a required filter does).
 
-    `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"): give a
-    path git printed (from the top of the worktree) to a client at the top."""
+    `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
+    `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
+    (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
+    top (`git.prefix()`'s, asked of git once per client) and down to the path, taking it as it
+    is, with no magic."""
+    if paths_from_top:
+        path = b"../" * git.prefix().count("/") + os.fsencode(path)
     output = git.run_bytes(
         "hash-object", *(["-w"] if write else []), "--path", path, "--stdin", input=content
     )

@@ -18,6 +18,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).
+- `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
+  but holds paths from the top of the worktree, as git reports them, as `patch_ids` has.
 
 ## 0.0.2 (2026-11-17)
 
