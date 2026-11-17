@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from git_client import Git, GitTimeoutError
+from git_client.client import _stop  # pyright: ignore[reportPrivateUsage]
 
 NO_TERMINAL_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32",
@@ -357,3 +358,27 @@ def test_a_timeout_stops_git_when_taskkill_cant_run(
 
     # Not the hook's 10 seconds, which git, if it weren't killed, would wait out.
     assert time.monotonic() - started < 3.5
+
+
+def test_a_second_interrupt_while_git_cleans_up_still_kills_it(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A git that waits for its stdin, and a second Ctrl-C as _stop waits for it to clean up.
+    process = repo.popen("cat-file", "--batch")
+    killed: list[bool] = []
+    kill = process.kill
+    monkeypatch.setattr(process, "kill", lambda: (killed.append(True), kill()))
+
+    wait = process.wait
+
+    def interrupted(timeout: float | None = None) -> int:
+        if timeout is not None:  # _stop's wait for git, not Popen's on the way out
+            raise KeyboardInterrupt
+        return wait()
+
+    monkeypatch.setattr(process, "wait", interrupted)
+
+    with process, pytest.raises(KeyboardInterrupt):
+        _stop(process, False, interrupted=True)
+
+    assert killed

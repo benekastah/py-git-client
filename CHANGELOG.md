@@ -143,7 +143,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   log.showRoot says (#52).
 - On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
   Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
-  started are killed; a timeout still kills them at once (#52).
+  started are killed; a timeout still kills them at once. What outlives git's own exit runs
+  on (#52).
+- A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git
+  (and its group or tree) at once, where it skipped the kill and left them running (#52).
 - Starting git costs less: per command (of about 1 ms), about 70 µs less when the tool has
   no terminal, and about 120 µs less for a command with a timeout, terminal or not. The
   environment built for git is kept until os.environ, the client's `env` or the command's
