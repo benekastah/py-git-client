@@ -147,6 +147,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   environment built for git is kept until os.environ, the client's `env` or the command's
   changes, rather than copied from os.environ every time, and whether the tool has a
   terminal is asked once per process and session (#52).
+- `import git_client` takes about 3 ms less (of about 19): `tempfile` is imported only
+  where it's used (#52).
 
 ## 0.0.2 (2026-11-17)
 

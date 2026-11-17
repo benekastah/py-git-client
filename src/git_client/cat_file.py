@@ -9,7 +9,6 @@ import queue
 import select
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import weakref
@@ -249,6 +248,10 @@ class CatFile:
                 # names nothing, or its warnings of one it resolves (e.g. a name that's both a
                 # branch and a tag). _end closes it, with the process; or here, if the process
                 # can't start.
+                # Here, not at the top: importing it takes a few milliseconds, which every
+                # tool would pay at its start.
+                import tempfile
+
                 file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
                 process = None
                 stopper: _Stopper | None = None

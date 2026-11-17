@@ -1,7 +1,6 @@
 """Reads and writes that answer many questions, or make many changes, with one git process."""
 
 import os
-import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -254,6 +253,10 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
     hash_blob_at."""
     if not contents:
         return []
+    # Here, not at the top: importing it takes a few milliseconds, which every tool would
+    # pay at its start.
+    import tempfile
+
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[str] = []
         for i, content in enumerate(contents):
@@ -308,6 +311,10 @@ def merge_file(
     written to the repository: the three are put in temporary files for git, which merge-file
     needs. Raises GitError if git can't merge them (e.g. binary content). It takes a Git, as
     a ReadOnlyGit doesn't run merge-file."""
+    # Here, not at the top: importing it takes a few milliseconds, which every tool would
+    # pay at its start.
+    import tempfile
+
     with tempfile.TemporaryDirectory() as scratch:
         paths: list[bytes] = []
         for name, content in (("ours", ours), ("base", base), ("theirs", theirs)):
