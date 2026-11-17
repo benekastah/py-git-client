@@ -4,7 +4,7 @@ What each version of py-git-client changes for a tool that uses it. Versions are
 as git tags (`vX.Y.Z`); see the README's "Releasing". The version `main` carries, not yet
 released, says "(unreleased)".
 
-## 0.0.2 (unreleased)
+## 0.0.2 (2026-11-16)
 
 ### What a tool may need to change
 
@@ -18,6 +18,18 @@ released, says "(unreleased)".
   (#34).
 - A `Git` subclass that overrides `popen` takes its new `stderr` keyword and passes it on to
   `super().popen`: CatFile reads git's reasons there (#32).
+- Captured commands no longer run with `LC_ALL=C`: git's own messages are still English
+  (through `GIT_TEXTDOMAINDIR`), but the hooks, filters, gpg and ssh git starts keep the
+  user's locale, and from git 2.39 `log --grep`, `-G`, `-i` and `git grep` match in the
+  user's `LC_CTYPE`. A tool that overrode `environment` to keep its users' locale can drop
+  the override (#28).
+- A tool that overrode `process` and `popen` to start no git at shutdown can pass
+  `stopping=` instead, and catch `NotStartedError` (#37).
+- A tool that keeps a `CatFile` of its own client can make it with `weak=True`, so the two
+  make no reference cycle; `CatFile.git` is now read-only (#31).
+- Damage git finds only as it reads a name (e.g. a corrupt object) makes that name resolve
+  to None in `CatFile`, as a name git exits on does, where a new process's first request
+  raised `GitError` (#31).
 
 ### Added
 
@@ -33,6 +45,13 @@ released, says "(unreleased)".
 - `patch_ids(..., paths_from_top=True)`, for paths as git reports them (#24).
 - Testing: `git_calls` records the program each process ran, and `FakeGit` takes `Git`'s
   keywords, so it can stand in for a tool's own `Git` subclass (#26).
+- `Git.write_config(...)`: `git config`, tried again while another process holds the
+  config's lock (#30).
+- `merge_file`, a three-way merge of contents, and `hash_blob_at`, a blob as `git add`
+  would store it at a path, through its filters (#29).
+- `stopping=`, a client option (e.g. `event.is_set`): once it says so, no git starts and
+  each command raises `NotStartedError` (#37).
+- `CatFile(git, weak=True)`, holding its client by a weak reference (#31).
 - `CatFile.verify(name)`: the id, or `UnknownRevisionError` with git's reason (e.g. no
   upstream configured), without another process; and `CatFile.read(object_id, type)`, an
   object of that type, peeled as `<id>^{type}` is, else a `GitError` (#32).
@@ -43,6 +62,11 @@ released, says "(unreleased)".
   `GitTimeoutError` says (#20).
 - Testing: tests' git no longer finds a repository above `tempfile`'s temporary directory,
   as it couldn't above pytest's (#25).
+- `CatFile` starts no extra cat-file or rev-parse when git exits on a name (`@{u}` with no
+  upstream, say), and its process stops when it's no longer used, rather than when the
+  garbage collector runs (#31).
+- `patch_ids(..., paths_from_top=True)` matches paths case-sensitively, even with
+  `GIT_ICASE_PATHSPECS` set (#35).
 
 ## 0.0.1 (2026-11-16)
 
