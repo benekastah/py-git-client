@@ -41,6 +41,8 @@ git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (
 
 git.run("rev-parse", "--abbrev-ref", "HEAD")  # "main"; raises GitError on failure
 git.ok("merge-base", "--is-ancestor", "a", "b")  # True for exit 0, False for 1 (git's no)
+git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False also if a or b
+# names nothing: True for exit 0, False for any other
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
@@ -149,7 +151,11 @@ said and raises a subclass:
 
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
-`passthrough` says whether git succeeded instead, but raises `GitTimeoutError` past a timeout.
+`succeeds` and `passthrough` say whether git succeeded instead (exit status 0, not any
+other). They still raise when git gives no answer: `GitTimeoutError` past a timeout, an
+`OSError` if git can't be started, and a `ReadOnlyGit`'s `ReadOnlyError` for a command it
+refuses. Use `succeeds` where any failure of git's means no, and `ok` where a failure other
+than git's no should be reported.
 
 An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
 is git's exit status or, without one, `timed out` for a `GitTimeoutError` and `no exit status`
