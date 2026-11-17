@@ -113,6 +113,19 @@ def encode(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
+# The surrogates that don't stand for a byte decode couldn't read (e.g. from json.loads).
+_NOT_A_BYTE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
+
+
+def printable(text: str) -> str:
+    """Text from decode (as `run`, `config` and `refs` give it) with each byte that isn't
+    UTF-8 replaced by U+FFFD, and any other surrogate too (`\\ud800`), as a tool that stores
+    or shows text needs: decode keeps such bytes as surrogates, which can't be written as
+    UTF-8 (to a file, a web page, JSON). Only for what's shown or stored: what printable
+    gives can't be given back to git for what git gave."""
+    return encode(_NOT_A_BYTE.sub("\ufffd", text)).decode("utf-8", "replace")
+
+
 OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 """A full object id: SHA-1 or SHA-256."""
 
@@ -614,15 +627,19 @@ class ReadOnlyGit:
         input: str | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
+        strip: bool = True,
     ) -> str:
-        """Run git and return its stdout as text, stripped. Raises GitError if it fails, as
-        `run_bytes` does.
+        """Run git and return its stdout as text (see decode), stripped of space at both ends
+        unless `strip` is False: then as git wrote it, for output whose edges matter (e.g.
+        `status --porcelain`'s " M file", or a name that starts or ends with a space).
+        Raises GitError if it fails, as `run_bytes` does.
 
         Input and output pass as bytes, so line endings stay as they are: text mode would
         write each \\n as \\r\\n on Windows.
         """
         encoded = None if input is None else encode(input)
-        return decode(self.run_bytes(*args, input=encoded, env=env, timeout=timeout)).strip()
+        output = decode(self.run_bytes(*args, input=encoded, env=env, timeout=timeout))
+        return output.strip() if strip else output
 
     def ok(
         self,

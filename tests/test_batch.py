@@ -17,6 +17,7 @@ from git_client import (
     config_key,
     hash_blobs,
     patch_ids,
+    printable,
     refs,
     update_refs,
 )
@@ -46,6 +47,16 @@ def test_config_tells_a_key_with_no_value_from_an_empty_one(repo: Git) -> None:
     # git reads the first as true and the second as false.
     assert entries["flags.bare"] == [None]
     assert entries["flags.empty"] == [""]
+
+
+def test_config_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) -> None:
+    with (Path(repo.directory) / ".git" / "config").open("ab") as f:
+        f.write(b"[tool]\n\tname = caf\xe9\n")
+
+    [name] = config(repo)["tool.name"]
+
+    assert name == "caf\udce9"
+    assert printable(name) == "caf\ufffd"
 
 
 def test_config_key_names_a_key_as_config_does(repo: Git) -> None:
@@ -116,6 +127,21 @@ def test_refs_reads_the_fields_asked_for_in_the_same_process(repo: Git) -> None:
 
     assert found["refs/heads/topic"].fields == {"upstream:track": "[behind 1]", "subject": "first"}
     assert found["refs/heads/main"].fields == {"upstream:track": "", "subject": "second"}
+
+
+def test_refs_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) -> None:
+    # In a commit's subject rather than a branch's name, which macOS and Windows can't store.
+    # Written with hash-object, as commit-tree would store the byte as Latin-1's é in UTF-8.
+    headers = repo.run("cat-file", "commit", "HEAD").split("\n\n")[0]
+    commit = repo.run(
+        "hash-object", "-t", "commit", "-w", "--stdin", input=f"{headers}\n\ncaf\udce9\n"
+    )
+    repo.run("update-ref", "refs/heads/topic", commit)
+
+    fields = refs(repo, "refs/heads/topic", fields=["subject"])["refs/heads/topic"].fields
+
+    assert fields == {"subject": "caf\udce9"}
+    assert printable(fields["subject"]) == "caf\ufffd"
 
 
 def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:

@@ -37,7 +37,7 @@ class GitError(RuntimeError):
         if len(line) > MAX_COMMAND_IN_MESSAGE:
             line = line[: MAX_COMMAND_IN_MESSAGE - 1] + "…"
         status = self._without_exit_status if returncode is None else returncode
-        super().__init__(_printable(f"git {line} failed ({status}):\n{stderr.strip()}"))
+        super().__init__(_escaped(f"git {line} failed ({status}):\n{stderr.strip()}"))
 
     def __reduce__(
         self,
@@ -51,7 +51,7 @@ class GitError(RuntimeError):
         )
 
 
-def _printable(text: str) -> str:
+def _escaped(text: str) -> str:
     r"""text, with the surrogates that stand for bytes that aren't UTF-8 (see `decode`) as
     escapes (`\xe9`), and any other surrogate too (`\ud800`)."""
     try:

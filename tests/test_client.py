@@ -13,7 +13,9 @@ from git_client import (
     NotARepositoryError,
     ReadOnlyGit,
     UnknownRevisionError,
+    decode,
     find_git,
+    printable,
 )
 
 
@@ -38,6 +40,13 @@ def test_find_git_otherwise_finds_git_on_path_by_its_full_path(
 
 def test_run_returns_stdout_stripped(repo: Git) -> None:
     assert repo.run("rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+def test_run_can_leave_the_output_as_git_wrote_it(repo: Git) -> None:
+    (Path(repo.directory) / "a").write_bytes(b"changed\n")
+
+    assert repo.run("status", "--porcelain", strip=False) == " M a\n"
+    assert repo.run("status", "--porcelain") == "M a"
 
 
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
@@ -249,6 +258,17 @@ def test_text_that_isnt_utf8_comes_back_as_it_was(repo: Git) -> None:
 
     assert repo.run("cat-file", "blob", blob) == "caf\udce9"
     assert repo.run_bytes("cat-file", "blob", blob) == b"caf\xe9\n"
+
+
+def test_printable_replaces_the_bytes_that_arent_utf8() -> None:
+    assert printable(decode(b"caf\xe9 \xc3\xa9t\xc3\xa9")) == "caf\ufffd \u00e9t\u00e9"
+
+
+def test_printable_replaces_any_other_surrogate_too() -> None:
+    # Not from decode: e.g. from json.loads('"\\ud800"').
+    assert printable("caf\udce9 \ud800") == "caf\ufffd \ufffd"
+    # A truncated sequence is one U+FFFD, as without the other surrogate.
+    assert printable(decode(b"\xf0\x9f") + "\ud800") == "\ufffd\ufffd"
 
 
 def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
