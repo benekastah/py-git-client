@@ -74,7 +74,8 @@ the shape of the code or a rule here changes.
 - **main's ruleset requires the "CI passed" check.**
 - **`ci.yml`'s time limits are this project's**, lower than the template's 5 minutes: static
   and coverage 1 minute, the tests 2 (they take up to about a minute, on macOS and Windows).
-  Where an update changes one of those lines, keep this project's limit.
+  Where an update changes one of those lines, keep this project's limit. `project.yml`'s
+  `oldest-git` has 2 too: about a minute when it builds git, 15 seconds from its cache.
 - **`project.yml`'s `oldest-git` job runs the tests with git 2.36**, the oldest the README
   supports, built from kernel.org's tarball and cached; CI's other jobs run the newest. A test
   of what older git can't do skips by git's version, saying which version it needs. Raising
