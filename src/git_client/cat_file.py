@@ -82,9 +82,10 @@ class CatFile:
     no upstream), git cat-file exits rather than saying they name nothing; then that name
     resolves to nothing, and the next request starts another process. One that stopped
     between requests (killed, say) is started again for the request that finds it gone. A
-    request interrupted once sent (e.g. by KeyboardInterrupt) kills the process, whose answer
-    would otherwise answer the next request, which starts another; so does one that isn't
-    answered within the client's `timeout` (if it has one), raising GitTimeoutError. Any
+    request interrupted before all its answer is read (e.g. by KeyboardInterrupt) leaves the
+    rest to the process, which the next request kills, and starts another; a request that
+    isn't answered within the client's `timeout` (if it has one) kills it at once, raising
+    GitTimeoutError. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config), and
     CorruptObjectError if an object git reads for it is damaged (e.g. a corrupt loose object),
@@ -113,6 +114,10 @@ class CatFile:
         # The client's `location` when the process started, where its ids are from, until its
         # first id has told the client its object id length there.
         self._where: Location | None = None
+        # Whether a request was sent whose answer hasn't all been read: interrupted (e.g. by
+        # KeyboardInterrupt), its answer would answer the next request, which kills the
+        # process first.
+        self._unanswered = False
 
     @property
     def git(self) -> ReadOnlyGit:
@@ -149,6 +154,7 @@ class CatFile:
             return None
         with self._lock:
             reply, said = self._request(b"info " + line, name, self._deadline())
+            self._unanswered = False
         header = object_header(reply)
         return None if header is None else ObjectInfo(*header, tuple(said.splitlines()))
 
@@ -170,6 +176,7 @@ class CatFile:
             raise _failure(name, "", exited=False)
         with self._lock:
             reply, reason = self._request(b"info " + line, name, self._deadline())
+            self._unanswered = False
         header = object_header(reply)
         if header is None:
             raise _failure(name, reason, exited=not reply)
@@ -193,6 +200,7 @@ class CatFile:
             reply, reason = self._request(b"contents " + name.encode() + b"\n", name, deadline)
             header = object_header(reply)
             if header is None:
+                self._unanswered = False
                 if not reply:
                     raise GitError(_COMMAND, 1, reason or f"cat-file exited at {name}")
                 raise _failure(name, reason, exited=False)
@@ -202,6 +210,7 @@ class CatFile:
             with self._exchange(name):
                 content = output.read(size, deadline)
                 newline = output.read(1, deadline)
+            self._unanswered = False
             if len(content) != size or newline != b"\n":
                 # It stopped partway through (killed, or on a corrupt object in a pack): what
                 # came is no object's content.
@@ -224,6 +233,8 @@ class CatFile:
         answered anything for another reason: a usage error, as a git older than 2.36 gives at
         --batch-command, or what's wrong with the repository (e.g. NotARepositoryError). Hold
         the lock."""
+        if self._unanswered:
+            self._kill()
         while True:
             new = self._process is None
             if self._process is None:
@@ -255,6 +266,7 @@ class CatFile:
             # Whether it has answered a request: _PROBE, for a new process.
             answered = not new
             reply = b""
+            self._unanswered = True
             with self._exchange(name), contextlib.suppress(OSError):
                 process.stdin.write(_PROBE + command if new else command)
                 process.stdin.flush()
@@ -296,9 +308,8 @@ class CatFile:
     @contextlib.contextmanager
     def _exchange(self, name: str) -> Generator[None]:
         """Around writing a request about `name` to the process and reading its answer: if
-        that's interrupted (e.g. by KeyboardInterrupt), or the answer doesn't come by the
-        request's deadline (raising GitTimeoutError), kill the process (see _kill). Hold the
-        lock."""
+        the answer doesn't come by the request's deadline, kill the process (see _kill) and
+        raise GitTimeoutError. Hold the lock."""
         try:
             yield
         except _PastDeadline:
@@ -306,14 +317,11 @@ class CatFile:
             raise GitTimeoutError(
                 _COMMAND, None, f"{name}: no answer within {self.git.timeout} seconds"
             ) from None
-        except BaseException:
-            self._kill()
-            raise
 
     def _kill(self) -> None:
-        """Kill the process, after a request was sent but not answered: the answer left
-        unread would answer the next request, and the process, writing it, might not exit.
-        The next request starts another. Hold the lock."""
+        """Kill the process, after a request was sent but not all of its answer read: what's
+        left would answer the next request, and the process, writing it, might not exit. The
+        next request starts another. Hold the lock."""
         if self._process is not None:
             self._process.kill()
         self._stop()
@@ -323,6 +331,7 @@ class CatFile:
         if self._stopper is not None:
             self._stopper()
         self._process = self._output = self._stderr = self._stopper = None
+        self._unanswered = False
 
 
 def _said(stderr: IO[bytes]) -> str:

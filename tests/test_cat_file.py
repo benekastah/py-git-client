@@ -24,6 +24,7 @@ from git_client import (
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client.client import object_header
 from git_client.testing import real_git
 
 
@@ -263,6 +264,28 @@ def test_a_request_interrupted_once_sent_leaves_no_answer_for_the_next(repo: Git
         with pytest.raises(KeyboardInterrupt):
             cat_file.read(commit)
         assert cat_file.read(blob) == ("blob", b"a\n")
+
+
+def test_a_read_interrupted_before_its_content_leaves_none_for_the_next(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Content whose first line reads as an object's header: the answer to the next request,
+    # if it were left in the pipe.
+    blob = repo.run("hash-object", "-w", "--stdin", input=f"{'1' * 40} commit 1\n")
+
+    def interrupted(line: bytes) -> tuple[str, str, int] | None:
+        """object_header, interrupted at the header of blob's content (by Ctrl-C, say)."""
+        header = object_header(line)
+        if header is not None and header[0] == blob:
+            raise KeyboardInterrupt
+        return header
+
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+        with monkeypatch.context() as patched, pytest.raises(KeyboardInterrupt):
+            patched.setattr("git_client.cat_file.object_header", interrupted)
+            cat_file.read(blob)
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
 
 
 class KeepsItsCatFile(StartsKeepingGit):
