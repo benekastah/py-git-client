@@ -147,11 +147,13 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   on (#52).
 - A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git
   (and its group or tree) at once, where it skipped the kill and left them running (#52).
-- Starting git costs less: per command (of about 1 ms), about 70 µs less when the tool has
-  no terminal, and about 120 µs less for a command with a timeout, terminal or not. The
-  environment built for git is kept until os.environ, the client's `env` or the command's
-  changes, rather than copied from os.environ every time, and whether the tool has a
-  terminal is asked once per process and session (#52).
+
+### Changed
+
+- Starting git costs less, a command with a timeout most: the environment built for git is
+  kept until os.environ, the client's `env` or the command's changes, rather than copied
+  from os.environ every time, and whether the tool has a terminal is asked once per process
+  and session (#52).
 - `import git_client` takes about 3 ms less (of about 19): `tempfile` is imported only
   where it's used (#52).
 
