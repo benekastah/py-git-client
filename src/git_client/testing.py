@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -125,6 +126,20 @@ def git_config_text() -> str:
     return TEST_GIT_CONFIG
 
 
+def _temporary_roots(tmp_path_factory: pytest.TempPathFactory) -> list[Path]:
+    """The directories temporary ones are made in: pytest's (`tmp_path`, `tmp_path_factory`,
+    whatever --basetemp says) and Python's (`tempfile.gettempdir()`, from TMPDIR, TEMP or
+    TMP), resolved, as git compares them (on Windows, long names rather than 8.3 short ones).
+    git runs with them in GIT_CEILING_DIRECTORIES, so in a directory made in one it looks no
+    higher than that directory, even if a tool's TMPDIR, or the project's --basetemp, is in a
+    repository: a test that runs git in a directory that isn't a repository gets
+    NotARepositoryError, rather than the repository around it (and changing its config)."""
+    return [
+        tmp_path_factory.getbasetemp().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+    ]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def git_client_isolation(
     tmp_path_factory: pytest.TempPathFactory, git_config_text: str
@@ -133,7 +148,8 @@ def git_client_isolation(
     its global config is the tests' own (git_config_text, in a file of the session's, which
     each test then swaps for its own: see git_config), with no system config, GIT_SETTINGS,
     and none of GIT_ENVIRONMENT_VARIABLES, nor any GIT_CONFIG_KEY_n or GIT_CONFIG_VALUE_n.
-    Yields the session's config file."""
+    And it finds no repository above a temporary directory (see _temporary_roots), even if
+    they're in one. Yields the session's config file."""
     config = tmp_path_factory.mktemp("git-config") / "config"
     config.write_text(git_config_text, encoding="utf-8")
     counted = [n for n in os.environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))]
@@ -142,6 +158,13 @@ def git_client_isolation(
             patch.delenv(name, raising=False)
         patch.setenv("GIT_CONFIG_GLOBAL", str(config))
         patch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        ceilings = os.environ.get("GIT_CEILING_DIRECTORIES")
+        patch.setenv(
+            "GIT_CEILING_DIRECTORIES",
+            os.pathsep.join(
+                [*map(str, _temporary_roots(tmp_path_factory)), *([ceilings] if ceilings else [])]
+            ),
+        )
         for name, value in GIT_SETTINGS.items():
             patch.setenv(name, value)
         yield config
@@ -365,16 +388,11 @@ def outside_any_repository(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     """Runs the test from an empty directory where git finds no repository, even if pytest's
-    temporary directories are in one (GIT_CEILING_DIRECTORIES stops it looking above), so a
-    git run without a directory (e.g. a `Git()` the code under test forgot to give one) fails
-    rather than change the repository the tests were started in. Opt-in: a project makes it
-    automatic with an autouse fixture of its own that asks for it. Returns the directory."""
+    temporary directories are in one (see _temporary_roots), so a git run without a directory
+    (e.g. a `Git()` the code under test forgot to give one) fails rather than change the
+    repository the tests were started in. Opt-in: a project makes it automatic with an
+    autouse fixture of its own that asks for it. Returns the directory."""
     directory = tmp_path_factory.mktemp("outside-any-repository")
-    ceilings = os.environ.get("GIT_CEILING_DIRECTORIES")
-    monkeypatch.setenv(
-        "GIT_CEILING_DIRECTORIES",
-        os.pathsep.join([str(directory.parent), *([ceilings] if ceilings else [])]),
-    )
     monkeypatch.chdir(directory)
     return directory
 
