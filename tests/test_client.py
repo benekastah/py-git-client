@@ -350,6 +350,22 @@ def test_passthrough_speaks_the_users_language(repo: Git, tmp_path: Path) -> Non
     assert "Auf Branch main" in (tmp_path / "out").read_text(encoding="utf-8")
 
 
+def test_what_git_runs_keeps_the_users_locale(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only recorded, so it needn't be installed. Hooks run in git's sh on every system.
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+    seen = tmp_path / "seen"
+    hook = Path(repo.directory) / ".git" / "hooks" / "pre-commit"
+    hook.write_text(f'#!/bin/sh\necho "$LC_ALL $LANG" > "{seen.as_posix()}"\n', encoding="utf-8")
+    hook.chmod(0o755)
+
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "hooked")
+
+    assert seen.read_text(encoding="utf-8").strip() == "de_DE.UTF-8 fr_FR.UTF-8"
+
+
 def test_runs_in_its_directory_wherever_we_are(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
