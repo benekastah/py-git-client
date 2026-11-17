@@ -5,7 +5,7 @@ import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from git_client.client import Git, ReadOnlyGit, decode, encode
+from git_client.client import EnvValue, Git, ReadOnlyGit, decode, encode
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -114,7 +114,8 @@ def patch_ids(
     Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff
     --name-only`), taken as it is, even if it holds `*` or `:`: patch_ids marks each
-    `:(top,literal)`.
+    `:(top,literal)`, and runs that command with GIT_LITERAL_PATHSPECS=0, which would
+    otherwise take the mark as part of the name.
 
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
@@ -133,10 +134,13 @@ def patch_ids(
             if command in _SHOWING_COMMITS
             else _PATCH_SETTINGS
         )
+        env: dict[str, EnvValue] = {}
         if paths_from_top and "--" in rest:
             paths = rest.index("--") + 1
             rest = [*rest[:paths], *(f":(top,literal){path}" for path in rest[paths:])]
-        patches.append(git.run(command, *settings, *rest))
+            # Which would take the marks as part of each name; `literal` does its work.
+            env["GIT_LITERAL_PATHSPECS"] = "0"
+        patches.append(git.run(command, *settings, *rest, env=env))
         patches.append(f"commit {i:0{length}x}\n\n{_END_MARKER_DIFF}")
     results: list[list[tuple[str, str]]] = [[]]
     for line in git.run("patch-id", "--stable", input="\n".join(patches) + "\n").splitlines():

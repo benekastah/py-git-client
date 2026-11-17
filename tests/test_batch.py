@@ -243,15 +243,22 @@ def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:
 def test_patch_ids_takes_paths_from_the_top_as_they_are(repo_from: RepoFrom) -> None:
     repo = topic_changing(repo_from, "top")
     (Path(repo.directory) / "sub").mkdir()
-    sub = Git(Path(repo.directory) / "sub")
+    # Which would have git take ":(top,literal)top" as a name, were it not overridden.
+    sub = Git(Path(repo.directory) / "sub", env={"GIT_LITERAL_PATHSPECS": "1"})
 
-    from_top, as_pattern = patch_ids(
-        sub, [*TOPIC[0], "--", "top"], [*TOPIC[0], "--", "to*"], paths_from_top=True
+    from_top, as_pattern, no_paths = patch_ids(
+        sub,
+        [*TOPIC[0], "--", "no-such-path", "top"],
+        [*TOPIC[0], "--", "to*"],
+        TOPIC[0],
+        paths_from_top=True,
     )
 
-    assert [commit for _, commit in from_top] == [repo.run("rev-parse", "topic")]
+    topic = [repo.run("rev-parse", "topic")]
+    assert [commit for _, commit in from_top] == topic
     # "to*" names no path: it's taken as a name, not a pattern.
     assert as_pattern == []
+    assert [commit for _, commit in no_paths] == topic
 
 
 def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
