@@ -23,7 +23,7 @@ import urllib.request
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
@@ -482,7 +482,8 @@ class FakeGit(Git):
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
     run over FakeGit's. Its constructor's arguments reach FakeGit's, Git's own, but FakeGit
-    runs "git" unless given `program`, without looking for one (`env_var` is ignored).
+    runs "git" unless given a `program` (None included), without looking for one (`env_var`
+    is ignored).
 
         class FakeMyGit(MyGit, FakeGit):
             pass
@@ -492,12 +493,14 @@ class FakeGit(Git):
         self,
         directory: str | os.PathLike[str] = ".",
         *,
-        program: str = "git",
+        program: str | None = None,
         env_var: str | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
     ) -> None:
-        super().__init__(directory, program=program, env_var=env_var, env=env, timeout=timeout)
+        super().__init__(
+            directory, program=program or "git", env_var=env_var, env=env, timeout=timeout
+        )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
 
@@ -528,7 +531,7 @@ class FakeGit(Git):
         *args: Arg,
         capture_output: bool = False,
         input: bytes | None = None,
-        stdout: object = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:

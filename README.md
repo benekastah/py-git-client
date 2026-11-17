@@ -238,6 +238,10 @@ otherwise (e.g. for a command a tool didn't run).
   def test_status_takes_one_process(clone: Git, git_calls: list[GitCall]) -> None:
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
+
+
+  def test_status_runs_my_tools_git(clone: Git, git_calls: list[GitCall]) -> None:
+      status(Git(clone.directory, env_var="MY_TOOL_GIT"))  # as your tool makes its client
       assert git_calls[0].program == os.environ["MY_TOOL_GIT"]
   ```
 - **`outside_any_repository`**: runs a test from an empty temporary directory, where git
@@ -269,8 +273,8 @@ otherwise (e.g. for a command a tool didn't run).
   If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
   so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
   calls `super().process`), run over its fake processes. Your constructor's arguments reach
-  `FakeGit`'s, which are `Git`'s, but it runs `"git"` unless given `program`, without looking
-  for one (it ignores `env_var`):
+  `FakeGit`'s, which are `Git`'s, but it runs `"git"` unless given a `program` (`None`
+  included), without looking for one (it ignores `env_var`):
 
   ```python
   class MyGit(Git):  # your tool's

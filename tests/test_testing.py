@@ -1,12 +1,24 @@
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import IO
 
 import pytest
 
-from git_client import Arg, CatFile, Git, ReadOnlyError, ReadOnlyGit, config, find_git
+from git_client import (
+    CLIENT_TIMEOUT,
+    Arg,
+    CatFile,
+    EnvValue,
+    Git,
+    ReadOnlyError,
+    ReadOnlyGit,
+    Timeout,
+    config,
+    find_git,
+)
 from git_client.testing import FakeGit, GitCall, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -281,7 +293,7 @@ def test_templates_build_under_the_sessions_config(
 
 
 def test_git_calls_records_each_git_process_and_lets_it_run(
-    repo: Git, git_calls: list[list[str]]
+    repo: Git, git_calls: list[GitCall]
 ) -> None:
     repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
     with CatFile(repo) as cat_file:
@@ -296,7 +308,7 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
 
 
 def test_git_calls_records_a_read_only_clients_processes_but_not_what_it_refuses(
-    repo: Git, git_calls: list[list[str]]
+    repo: Git, git_calls: list[GitCall]
 ) -> None:
     git = ReadOnlyGit(repo.directory)
     git.run("log", "-1")
@@ -334,7 +346,7 @@ def new_clone(request: pytest.FixtureRequest, repo_templates: RepoTemplates, tmp
 
 
 def test_git_calls_leaves_out_a_template_set_up_after_it(
-    git_calls: list[list[str]], new_clone: Git
+    git_calls: list[GitCall], new_clone: Git
 ) -> None:
     new_clone.run("status", "--porcelain")
 
@@ -342,7 +354,7 @@ def test_git_calls_leaves_out_a_template_set_up_after_it(
 
 
 def test_git_calls_leaves_out_a_template_set_up_before_it(
-    new_clone: Git, git_calls: list[list[str]]
+    new_clone: Git, git_calls: list[GitCall]
 ) -> None:
     new_clone.run("status", "--porcelain")
 
@@ -616,20 +628,38 @@ def test_fake_git_fails_on_a_command_it_has_no_response_for() -> None:
 
 class StoppingGit(Git):
     """A project's own Git, as move-forward's: its own constructor, which names git through
-    its variable, a method of its own, and a `process` that refuses once stopped."""
+    its variable (or the program it's given, None if not), a method of its own, and a
+    `process`, with Git's signature, that refuses once stopped."""
 
     stopped = False
 
-    def __init__(self, directory: Path, *, timeout: float | None = 5) -> None:
-        super().__init__(directory, env_var="NO_SUCH_TOOL_GIT", timeout=timeout)
+    def __init__(
+        self, directory: Path, *, program: str | None = None, timeout: float | None = 5
+    ) -> None:
+        super().__init__(directory, program=program, env_var="NO_SUCH_TOOL_GIT", timeout=timeout)
 
     def output(self, *args: str) -> str:
         return self.run(*args)
 
-    def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+    def process(
+        self,
+        *args: Arg,
+        capture_output: bool = False,
+        input: bytes | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> subprocess.CompletedProcess[bytes]:
         if self.stopped:
             raise RuntimeError("stopped")
-        return super().process(*args, **kwargs)
+        return super().process(
+            *args,
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            env=env,
+            timeout=timeout,
+        )
 
 
 class FakeStoppingGit(StoppingGit, FakeGit):
@@ -643,6 +673,7 @@ def test_fake_git_stands_in_for_a_projects_own_git(tmp_path: Path) -> None:
     assert git.output("rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert git.commands == [["rev-parse", "--abbrev-ref", "HEAD"]]
     assert (git.directory, git.timeout) == (str(tmp_path), 5)
+    assert git.program == "git"  # not looked for, though the subclass gave None
     git.stopped = True
     with pytest.raises(RuntimeError, match="stopped"):
         git.output("rev-parse", "HEAD")
