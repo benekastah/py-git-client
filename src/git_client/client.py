@@ -517,15 +517,12 @@ class ReadOnlyGit:
             *(arg if isinstance(arg, bytes) else encode(arg) for arg in args),
         ]
 
-    def environment(
-        self, env: Mapping[str, EnvValue] | None = None, *, english: bool = False
-    ) -> dict[str, str]:
+    def environment(self, env: Mapping[str, EnvValue] | None = None) -> dict[str, str]:
         """The environment for a command: ours, then this client's `env`, then `env`. git,
-        and what it runs, keep the user's locale. `english` changes nothing: it's taken so
-        that a subclass's override that takes it still works. Off Windows, git gets each
-        value as bytes, like `command`: text as UTF-8 (whatever the locale's encoding), and a
-        path given as bytes as it is. Each is given here as the str that os.fsdecode makes of
-        those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
+        and what it runs, keep the user's locale. Off Windows, git gets each value as bytes,
+        like `command`: text as UTF-8 (whatever the locale's encoding), and a path given as
+        bytes as it is. Each is given here as the str that os.fsdecode makes of those bytes,
+        which Python turns back into them as it starts git. A ReadOnlyGit's sets
         GIT_OPTIONAL_LOCKS=0 and GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a
         variable in `env` (or the client's) that it doesn't take."""
         added = {**self.env, **(env or {})}
