@@ -195,7 +195,9 @@ for its output. When the tool has no terminal (CI, a service), a command with a 
 in a process group of its own on Linux and macOS, so what git started (hooks, ssh, credential
 helpers) is stopped with it. With a terminal, git stays in its foreground, as from a shell, so
 it can ask for a password or open an editor whatever its timeout, and only git is stopped. On
-Windows, git and what it started are killed, with no chance to clean up.
+Windows, git and what it started are killed: past a timeout at once, with no chance to clean
+up, and on an interrupt once they've had a quarter of a second to handle the Ctrl-C that
+reached them too.
 
 A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM from
 `timeout`, or a CI runner cancelling a job), and Python's default SIGTERM ends the tool without

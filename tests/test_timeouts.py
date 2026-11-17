@@ -200,7 +200,19 @@ def test_without_a_terminal_a_timeout_stops_what_git_started(
     assert not hook.outlived_git()
 
 
-@NO_TERMINAL_ON_WINDOWS
+# On Windows, an interrupt is Ctrl-C, which reaches every process on the console, git too, and
+# _stop gives git _GRACE to handle it before taskkill. A test would need a console of its own
+# for the tool, and a process attached to it to send Ctrl-C (sending it from the tests'
+# console would interrupt them too); and whether git leaves index.lock without the wait is a
+# race between its own handler and taskkill's start, which such a test couldn't lose reliably.
+NO_INTERRUPT_TEST_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Ctrl-C reaches every process on a Windows console, so a test would need a console"
+    " of its own, and couldn't reliably show that git is given time to clean up (see above)",
+)
+
+
+@NO_INTERRUPT_TEST_ON_WINDOWS
 def test_without_a_terminal_an_interrupt_stops_git_and_lets_it_clean_up(
     repo: Git, hook: Hook, tmp_path: Path
 ) -> None:

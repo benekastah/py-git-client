@@ -168,6 +168,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   and the like) reads nothing from stdin, as from /dev/null, unless given `input`: it read
   the tool's, so `run("shortlog", "-s")` waited on it and `run("hash-object", "--stdin")`
   hashed it. `passthrough` still gives git the tool's stdin (#52).
+- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
+  Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
+  started are killed; a timeout still kills them at once (#52).
 
 ## 0.0.2 (2026-11-17)
 
