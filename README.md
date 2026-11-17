@@ -284,7 +284,9 @@ git to run doesn't write:
   one fails.
 
 What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --filters`, or its
-clean, which `status` runs on a file whose stat information changed), gpg (`log
+clean, which `status` runs on a file whose stat information changed), a merge driver
+(`merge.<driver>.driver`, which `log --remerge-diff` runs, as does `log -m` under
+`log.diffMerges=remerge`), the program `gpg.program` or `gpg.ssh.program` names (`log
 --show-signature`, or `log.showSignature`), and, through `passthrough`, the pager. The rest of
 the tool's environment reaches git as it is: `GIT_DIR` (which a `Git` follows too),
 `GIT_TRACE*` (which write where they name), `GIT_EXTERNAL_DIFF` (which git runs only for
