@@ -6,6 +6,7 @@ import pytest
 from git_client import (
     Git,
     GitError,
+    ReadOnlyError,
     RefUpdate,
     config,
     config_key,
@@ -331,6 +332,21 @@ def test_patch_ids_gives_a_diff_and_a_log_the_same_ids_whatever_the_config_says(
 
     assert [log, diff] == [patch for [patch] in expected]
     assert diff == (log[0], "0" * 40)
+
+
+def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(
+    repo_from: RepoFrom, git_calls: list[GitCall]
+) -> None:
+    # diff-tree takes only trees and commits.
+    repo = topic_changing(repo_from, "b")
+    blobs = ["diff", "main:b", "topic:b"]
+
+    [[(patch_id, _)]] = patch_ids(repo, blobs)
+
+    assert git_calls[-2][0] == "diff"
+    assert patch_id == patch_ids(repo, TOPIC[0])[0][0][0]
+    with pytest.raises(ReadOnlyError):
+        patch_ids(repo.read_only(), blobs)
 
 
 def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:

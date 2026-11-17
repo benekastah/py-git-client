@@ -36,10 +36,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   it waited as long as it took. Its `stderr` is what git said of the request, and a note
   names the request. A tool whose requests may take longer gives its CatFile a client with a
   longer timeout, or none (#53).
-- `patch_ids` runs a `diff` of two revisions (two arguments before `--`, and no options) as
-  `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no index: a `FakeGit`
-  answering it responds to `diff-tree`, and a path given as the second argument, without
-  `--`, is taken as a revision (#55).
+- `patch_ids` runs a `diff` of two revisions (two arguments before `--`, no options, and no
+  `:`, so not blobs) as `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no
+  index: a `FakeGit` answering it responds to `diff-tree`, and a path given as the second
+  argument, without `--`, is taken as a revision (#55).
 - `patch_ids` runs every command with `-M -U3 --inter-hunk-context=0
   --diff-algorithm=myers`, so a diff and a log give a change the same id whatever
   `diff.renames`, `diff.context`, `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones git gives by default (#55).

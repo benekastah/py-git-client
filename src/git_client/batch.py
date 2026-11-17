@@ -176,7 +176,7 @@ def patch_ids(
     "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints,
     in order, as `git patch-id --stable` gives them. A diff's commit is all zeros. A diff of
     two revisions (two arguments before `--`, and no options, which are taken as revisions:
-    name paths after `--`) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no index;
+    name paths after `--`; neither holding a `:`, as a blob's name does) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no index;
     another (of the index or the worktree) runs as `git diff`, which a ReadOnlyGit doesn't
     run (see there). Whatever
     the user's config says, each command shows changes in the whole repository (not only
@@ -205,9 +205,12 @@ def patch_ids(
             # Without a commit line, patch-id would take the diff as part of the marker
             # before it.
             patches.append(f"commit {'0' * length}")
-            # Two revisions and nothing else: an option's value could look like one.
+            # Two revisions and nothing else: an option's value could look like one. Not a
+            # blob's name (`<rev>:<path>`), which diff-tree doesn't take.
             revisions = rest[: rest.index("--")] if "--" in rest else rest
-            if len(revisions) == 2 and not any(arg.startswith("-") for arg in revisions):
+            if len(revisions) == 2 and not any(
+                arg.startswith("-") or ":" in arg for arg in revisions
+            ):
                 command, rest = "diff-tree", ["-p", *rest]
         settings = (
             (*_PATCH_SETTINGS, *_COMMIT_SETTINGS)
