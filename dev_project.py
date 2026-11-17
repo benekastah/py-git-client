@@ -139,7 +139,8 @@ def _is_date(text: str) -> bool:
 def _unwrapped(markdown: str) -> str:
     """`markdown` with each line that continues a paragraph or list item joined to it with a
     space: GitHub shows each line break in a release's notes, which would break wrapped
-    sentences. Code blocks, quotes, tables and headings keep their lines."""
+    sentences. Fenced code, quotes, tables with a leading `|` and headings keep their lines
+    (CHANGELOG.md uses no other block that has its own lines)."""
     lines: list[str] = []
     fenced = False  # inside a code block
     for line in markdown.splitlines():
@@ -279,7 +280,11 @@ def publish(repo: Path, version: str) -> tuple[str, str, str]:
             step = "publishing its GitHub release"
             kept = _kept(notes)
             notes_file = f'"{kept}"' if kept else "NOTES"
-            holding = "" if kept else f", NOTES holding CHANGELOG.md's section for {version}"
+            holding = (
+                ""
+                if kept
+                else f", NOTES holding CHANGELOG.md's section for {version}, its wrapped lines joined"
+            )
             left = (
                 f"`gh release create {tag} --repo {github} --verify-tag --title {tag}"
                 f" --notes-file {notes_file}`{holding}, then "
