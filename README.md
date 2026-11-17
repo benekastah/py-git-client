@@ -181,7 +181,8 @@ U+FFFD. Commands whose output the library reads run with `GIT_TEXTDOMAINDIR` nam
 directory, so git finds no translation and its messages are in English whatever the user's
 language, which is how the library tells its failures apart. The user's locale (`LC_ALL`,
 `LANG`, `LC_CTYPE`, ...) is left as it is, so what git runs (hooks, filters, credential
-helpers, gpg, ssh) runs in it; only a git that those start themselves speaks English too.
+helpers, gpg, ssh) runs in it; only a git that those start themselves (e.g. a hook's `git`)
+speaks English too, as git takes its language from its environment alone, which they inherit.
 git's own pattern matching (`log --grep`, `--author`, `-G`, `-i`, `git grep`) follows the
 user's `LC_CTYPE` from git 2.39, and C's before; `-P` patterns are UTF-8 on every version.
 `passthrough`, whose output is the user's, keeps the user's language for git's messages as

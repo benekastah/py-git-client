@@ -61,7 +61,9 @@ _SEVERAL_VALUES = re.compile(r"^warning: .* has multiple values$", re.MULTILINE)
 # What a git whose messages the library reads gets: as the directory of its translations, a
 # path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
 # English, with C's dates, while what git runs (hooks, filters, credential helpers, gpg, ssh)
-# keeps the user's locale. Only a git that one of those runs inherits it, and speaks English.
+# keeps the user's locale. Only a git that one of those runs inherits it, and speaks English:
+# git takes its messages' language from its environment alone, and passes that on to what it
+# runs, so no variable could reach git and not its hooks.
 # git itself keeps the user's LC_CTYPE (from 2.39), which its regex matching follows (see
 # ReadOnlyGit.process).
 _ENGLISH = {"GIT_TEXTDOMAINDIR": os.devnull}
