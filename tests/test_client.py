@@ -322,16 +322,23 @@ def test_text_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> No
 
 @pytest.fixture
 def german(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A user who reads git in German, if git's translations are installed."""
-    monkeypatch.setenv("LANGUAGE", "de")
-    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
-    said = subprocess.run(
-        [repo.program, "-C", repo.directory, "rev-parse", "--verify", "no-such-branch"],
-        capture_output=True,
-        check=False,
-    ).stderr
-    if b"Needed a single revision" in said:
-        pytest.skip("git's German translation isn't installed")
+    """A user who reads git in German, if git's translations are installed: through LANGUAGE,
+    which needs no German locale installed (glibc's gettext reads it in any locale but C), or
+    else through LC_ALL, which Git for Windows' gettext reads whatever the system has."""
+    for language, locale in (("de", "en_US.UTF-8"), (None, "de_DE.UTF-8")):
+        if language is None:
+            monkeypatch.delenv("LANGUAGE", raising=False)
+        else:
+            monkeypatch.setenv("LANGUAGE", language)
+        monkeypatch.setenv("LC_ALL", locale)
+        said = subprocess.run(
+            [repo.program, "-C", repo.directory, "rev-parse", "--verify", "no-such-branch"],
+            capture_output=True,
+            check=False,
+        ).stderr
+        if b"Needed a single revision" not in said:
+            return
+    pytest.skip("git's German translation isn't installed")
 
 
 @pytest.mark.usefixtures("german")
