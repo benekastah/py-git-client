@@ -75,6 +75,7 @@ git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
+    main = cat_file.info("main")  # its id, type, size and git's warnings (e.g. ambiguous), or None
     upstream = cat_file.verify("main@{u}")  # an object id, or UnknownRevisionError: git's reason
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:

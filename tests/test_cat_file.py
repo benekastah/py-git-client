@@ -114,13 +114,29 @@ def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git)
     assert "expected commit type, but the object dereferences to tree type" in str(raised.value)
 
 
+def tag_main(git: Git) -> None:
+    """Make a tag named main, like the branch: git warns that main is ambiguous, but
+    resolves it."""
+    git.run("tag", "main")
+
+
+def test_info_gives_what_git_warned_of_the_name(
+    repo_from: Callable[[str, Callable[[Git], None]], Git],
+) -> None:
+    repo = repo_from("main-tag", tag_main)
+
+    with CatFile(repo) as cat_file:
+        ambiguous = cat_file.info("main")
+        branch = cat_file.info("refs/heads/main")
+
+    assert ambiguous is not None and branch is not None
+    assert ambiguous.warnings == ("warning: refname 'main' is ambiguous.",)
+    assert branch.warnings == ()
+
+
 def test_verify_gives_only_what_git_said_of_that_name(
     repo_from: Callable[[str, Callable[[Git], None]], Git],
 ) -> None:
-    def tag_main(git: Git) -> None:
-        git.run("tag", "main")
-
-    # git warns that main is ambiguous, but resolves it.
     repo = repo_from("main-tag", tag_main)
 
     with CatFile(repo) as cat_file:

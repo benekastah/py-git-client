@@ -63,11 +63,14 @@ request's name, which needs no `rev-parse` to tell it from what's wrong with the
 
 @dataclass(frozen=True)
 class ObjectInfo:
-    """What `cat-file` says of an object: its id, type (e.g. "commit") and size in bytes."""
+    """What `cat-file` says of an object: its id, type (e.g. "commit") and size in bytes,
+    and what git warned of the name that names it, a line each (e.g. "warning: refname
+    'main' is ambiguous.", of a branch that's also a tag's name)."""
 
     id: str
     type: str
     size: int
+    warnings: tuple[str, ...] = ()
 
 
 class CatFile:
@@ -139,14 +142,15 @@ class CatFile:
 
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
-        --verify` would find it, or None if it names nothing (or is ambiguous)."""
+        --verify` would find it, with what git warned of it, or None if it names nothing (or
+        is ambiguous)."""
         line = batch_line(name)
         if line is None:
             return None
         with self._lock:
-            reply, _ = self._request(b"info " + line, name, self._deadline())
+            reply, said = self._request(b"info " + line, name, self._deadline())
         header = object_header(reply)
-        return None if header is None else ObjectInfo(*header)
+        return None if header is None else ObjectInfo(*header, tuple(said.splitlines()))
 
     def resolve(self, name: str) -> str | None:
         """The id of the object `name` names, or None if it names nothing."""
@@ -213,8 +217,8 @@ class CatFile:
     def _request(self, command: bytes, name: str, deadline: float | None) -> tuple[bytes, str]:
         """Send command (a line, about `name`), and return the first line of the reply (empty
         if git exits rather than answer, as it does on some names that name nothing: the next
-        request starts another process), and if that's no object's header, what git said of
-        the request on stderr. A process that stopped between requests (killed, say) is
+        request starts another process), and what git said of the request on stderr: its
+        reason, if that's no object's header, else its warnings. A process that stopped between requests (killed, say) is
         started again, for one more try. Raises CorruptObjectError if git found an object it
         read for the request damaged, and GitError if a new process exits before it has
         answered anything for another reason: a usage error, as a git older than 2.36 gives at
@@ -223,10 +227,10 @@ class CatFile:
         while True:
             new = self._process is None
             if self._process is None:
-                # Its stderr goes to a file, read only for what it says of a name that names
-                # nothing: it warns even of names it resolves (e.g. a name that's both a
-                # branch and a tag), as rev-parse --quiet doesn't. _end closes it, with the
-                # process; or here, if the process can't start.
+                # Its stderr goes to a file, for what it says of each request: why a name
+                # names nothing, or its warnings of one it resolves (e.g. a name that's both a
+                # branch and a tag). _end closes it, with the process; or here, if the process
+                # can't start.
                 file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
                 try:
                     self._where = location(self.git)
@@ -262,7 +266,8 @@ class CatFile:
                 if self._where is not None and (git := self._git()) is not None:
                     learn_object_id_length(git, self._where, header[0])
                     self._where = None
-                return reply, ""
+                # It writes its warnings before the reply.
+                return reply, _said(stderr) if os.fstat(stderr.fileno()).st_size else ""
             if reply:
                 reason = _said(stderr)
                 _check_intact(reason, 1)
