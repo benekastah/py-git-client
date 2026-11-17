@@ -24,6 +24,7 @@ from git_client.client import (
     decode,
     encode,
     find_git,
+    printable,
 )
 from git_client.errors import (
     ConfigLockedError,
@@ -64,6 +65,7 @@ __all__ = [
     "find_git",
     "hash_blobs",
     "patch_ids",
+    "printable",
     "refs",
     "update_refs",
 ]

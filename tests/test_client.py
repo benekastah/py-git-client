@@ -14,6 +14,7 @@ from git_client import (
     ReadOnlyGit,
     UnknownRevisionError,
     find_git,
+    printable,
 )
 
 
@@ -38,6 +39,13 @@ def test_find_git_otherwise_finds_git_on_path_by_its_full_path(
 
 def test_run_returns_stdout_stripped(repo: Git) -> None:
     assert repo.run("rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+def test_run_can_leave_the_output_as_git_wrote_it(repo: Git) -> None:
+    (Path(repo.directory) / "a").write_bytes(b"changed\n")
+
+    assert repo.run("status", "--porcelain", strip=False) == " M a\n"
+    assert repo.run("status", "--porcelain") == "M a"
 
 
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
@@ -249,6 +257,12 @@ def test_text_that_isnt_utf8_comes_back_as_it_was(repo: Git) -> None:
 
     assert repo.run("cat-file", "blob", blob) == "caf\udce9"
     assert repo.run_bytes("cat-file", "blob", blob) == b"caf\xe9\n"
+
+
+def test_printable_replaces_the_bytes_that_arent_utf8(repo: Git) -> None:
+    blob = repo.run("hash-object", "-w", "--stdin", input="caf\udce9 \u00e9t\u00e9")
+
+    assert printable(repo.run("cat-file", "blob", blob)) == "caf\ufffd \u00e9t\u00e9"
 
 
 def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
