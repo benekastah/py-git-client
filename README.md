@@ -554,7 +554,8 @@ CI (`.github/workflows/ci.yml`) runs the static checks once, on Linux, and the t
 macOS and Windows, with the oldest and newest Python py-git-client supports, for every pull
 request into `main` and every push to it (a stacked pull request gets CI once it targets
 `main` and is pushed), along with this project's own jobs, in
-`.github/workflows/project.yml`. Each job has a time limit of at most 5 minutes: on a system
+`.github/workflows/project.yml`: the tests on Linux with git 2.36, the oldest supported, which
+it builds once and caches. Each job has a time limit of at most 5 minutes: on a system
 where the tests take longer, they run in several jobs (shards), as many as the Copier answers'
 `test_shards_linux`, `test_shards_macos` or `test_shards_windows` say (AGENTS.md says how to
 change one). It installs from `uv.lock` and fails if it's out of date. A coverage job puts the
