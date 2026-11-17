@@ -1,9 +1,12 @@
 """This project's additions to dev.py (see its docstring), held to the same rules:
 
-python dev.py release X.Y.Z      # tag origin/main as vX.Y.Z, and open the next version's PR
+python dev.py release X.Y.Z      # tag origin/main as vX.Y.Z, publish its GitHub release,
+                                 # and open the next version's PR
 """
 
+import datetime
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +29,14 @@ GITHUB_URL = re.compile(
     re.IGNORECASE,
 )
 PROJECT_VERSION = re.compile(r'^(version\s*=\s*")[^"]*(")', re.MULTILINE)
+CHANGELOG_SECTION = re.compile(r"^## (\S+) \(([^)]*)\)[ \t]*$", re.MULTILINE)
+"""A version's heading in CHANGELOG.md: `## X.Y.Z (date)`, or `(unreleased)`."""
+DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+OWN_LINE = re.compile(r"\s*(?:#{1,6}(?:\s|$)|>|\||```|~~~)")
+"""A Markdown line that nothing joins and that joins nothing: a heading, a quote, a table row
+or a code fence."""
+LIST_ITEM = re.compile(r"\s*(?:[-*+]|[0-9]+[.)]) ")
+FENCE = re.compile(r"\s*(?:```|~~~)")
 
 
 class ReleaseError(Exception):
@@ -94,6 +105,63 @@ def set_pyproject_version(pyproject: str, version: str) -> str:
     raise ReleaseError("pyproject.toml's [project] has no version")
 
 
+def changelog_notes(changelog: str, version: str) -> str:
+    """What CHANGELOG.md's text says under `version`'s heading, up to the next version's, its
+    wrapped lines joined: its release notes. Refuses unless the section is there, dated
+    (YYYY-MM-DD) and not empty."""
+    headings = list(CHANGELOG_SECTION.finditer(changelog))
+    for index, heading in enumerate(headings):
+        if heading.group(1) == version:
+            date = heading.group(2)
+            if not _is_date(date):
+                raise ReleaseError(
+                    f"{version}'s section of CHANGELOG.md says ({date}), not a date (YYYY-MM-DD);"
+                    f" date it in a PR first"
+                )
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(changelog)
+            notes = _unwrapped(changelog[heading.end() : end].strip())
+            if not notes:
+                raise ReleaseError(f"{version}'s section of CHANGELOG.md is empty")
+            return notes
+    raise ReleaseError(f"CHANGELOG.md has no section for {version}")
+
+
+def _is_date(text: str) -> bool:
+    if DATE.fullmatch(text) is None:
+        return False
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError:  # e.g. a 13th month
+        return False
+    return True
+
+
+def _unwrapped(markdown: str) -> str:
+    """`markdown` with each line that continues a paragraph or list item joined to it with a
+    space: GitHub shows each line break in a release's notes, which would break wrapped
+    sentences. Fenced code, quotes, tables with a leading `|` and headings keep their lines
+    (CHANGELOG.md uses no other block that has its own lines)."""
+    lines: list[str] = []
+    fenced = False  # inside a code block
+    for line in markdown.splitlines():
+        previous = lines[-1] if lines else ""
+        joins = (
+            not fenced
+            and line.strip()
+            and previous.strip()
+            and OWN_LINE.match(previous) is None
+            and OWN_LINE.match(line) is None
+            and LIST_ITEM.match(line) is None
+        )
+        if joins:
+            lines[-1] = f"{previous} {line.strip()}"
+        else:
+            lines.append(line)
+        if FENCE.match(line):
+            fenced = not fenced
+    return "\n".join(lines)
+
+
 def _run(args: list[str], cwd: Path, stdin: str | None = None) -> str:
     """A command's output, stripped; its failure raises ReleaseError with what it said."""
     result = subprocess.run(
@@ -148,17 +216,26 @@ def open_pr(worktree: Path, github: str, branch: str, title: str, body: str) -> 
     return output.splitlines()[-1]
 
 
+def create_release(repo: Path, github: str, tag: str, notes: str) -> str:
+    """Publish `tag`, already on `github` (OWNER/REPO), as a GitHub release titled with it and
+    saying `notes`; returns its URL."""
+    args = ["gh", "release", "create", tag, "--repo", github, "--verify-tag", "--title", tag]
+    return _run([*args, "--notes-file", "-"], repo, notes).splitlines()[-1]
+
+
 def uv_lock(worktree: Path) -> None:
     """Bring uv.lock up to date with pyproject.toml."""
     _run(["uv", "lock", "--quiet"], worktree)
 
 
-def publish(repo: Path, version: str) -> tuple[str, str]:
+def publish(repo: Path, version: str) -> tuple[str, str, str]:
     """Release `version` from `repo`'s origin: tag origin/main's latest commit `vX.Y.Z` and
-    push the tag, then open a PR moving main to the next version. Returns the tag and the PR's
-    URL. Refuses, before changing anything, unless origin is on github.com, `version` is
-    origin/main's pyproject.toml version, neither its tag nor the next version's branch exists
-    yet, and CI passed on that commit."""
+    push the tag, publish it as a GitHub release whose notes are origin/main's CHANGELOG.md
+    section for `version`, then open a PR moving main to the next version. Returns the tag, the
+    release's URL and the PR's. Refuses, before changing anything, unless origin is on
+    github.com, `version` is origin/main's pyproject.toml version, its CHANGELOG.md section is
+    there, dated and not empty, neither its tag nor the next version's branch exists yet, and
+    CI passed on that commit."""
     parse_version(version)
     github = origin_github_repo(repo)
     tag = f"v{version}"
@@ -175,6 +252,7 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
     current = pyproject_version(_git(repo, "show", "origin/main:pyproject.toml"))
     if current != version:
         raise ReleaseError(f"pyproject.toml's version is {current} on origin/main, not {version}")
+    notes = changelog_notes(_git(repo, "show", "origin/main:CHANGELOG.md"), version)
     sha = _git(repo, "rev-parse", "origin/main^{commit}")
     status = ci_status(repo, github, sha)
     if status == "pending":
@@ -189,21 +267,49 @@ def publish(repo: Path, version: str) -> tuple[str, str]:
     except ReleaseError:
         _git(repo, "tag", "--delete", tag)  # so that a rerun isn't refused for it
         raise
+    upcoming = next_version(version)
+    url = None  # the release's, once published
     try:
-        return tag, _start_next_version(repo, github, version)
+        url = create_release(repo, github, tag, notes)
+        return tag, url, _start_next_version(repo, github, version)
     except BaseException as error:  # a Ctrl-C too: the tag is out, so say what's left
-        upcoming = next_version(version)
         why = str(error) or type(error).__name__  # e.g. KeyboardInterrupt, which says nothing
+        if url:
+            step, left = f"starting {upcoming}", ""
+        else:
+            step = "publishing its GitHub release"
+            kept = _kept(notes)
+            notes_file = f'"{kept}"' if kept else "NOTES"
+            holding = (
+                ""
+                if kept
+                else f", NOTES holding CHANGELOG.md's section for {version}, its wrapped lines joined"
+            )
+            left = (
+                f"`gh release create {tag} --repo {github} --verify-tag --title {tag}"
+                f" --notes-file {notes_file}`{holding}, then "
+            )
         message = (
-            f"pushed {tag}, but starting {upcoming} failed: {why}\n"
-            f"To finish by hand: on a branch from origin/main, set pyproject.toml's version to"
-            f" {upcoming}, run `uv lock`, commit, push, and open a PR into main (or, if"
+            f"pushed {tag}, but {step} failed: {why}\n"
+            f"To finish by hand: {left}on a branch from origin/main, set pyproject.toml's version"
+            f" to {upcoming}, run `uv lock`, commit, push, and open a PR into main (or, if"
             f" start-{upcoming} was pushed, just open its PR)."
         )
         if isinstance(error, ReleaseError):
             raise ReleaseError(message) from error
         print(f"release: {message}", file=sys.stderr)
         raise
+
+
+def _kept(notes: str) -> str | None:
+    """The path of a temporary file, kept, holding `notes`; None if one can't be written."""
+    try:
+        file, path = tempfile.mkstemp(prefix="release-notes-", suffix=".md")
+        with os.fdopen(file, "w", encoding="utf-8") as kept:
+            kept.write(notes)
+    except OSError:
+        return None
+    return path
 
 
 def _next_version_branch(released: str) -> str:
@@ -271,10 +377,11 @@ def release(args: list[str]) -> None:
     if missing:
         sys.exit(f"release: needs {' and '.join(missing)}, which isn't on PATH; install it")
     try:
-        tag, url = publish(ROOT, args[0])
+        tag, release_url, url = publish(ROOT, args[0])
     except ReleaseError as error:
         sys.exit(f"release: {error}")
     print(f"pushed {tag}")
+    print(f"published {release_url}")
     print(f"opened {url}")
 
 
