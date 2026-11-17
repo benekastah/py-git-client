@@ -92,12 +92,13 @@ from git_client import Git, GitTimeoutError
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 # As a tool started from a shell gets it, even if pytest was started with SIGINT ignored.
 signal.signal(signal.SIGINT, signal.default_int_handler)
-directory, timeout, terminal, *args = sys.argv[1:]
+directory, timeout, terminal, groups, *args = sys.argv[1:]
 if terminal == "terminal":
     import fcntl, termios
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)  # stdin's pty, as this session's terminal
+git = Git(directory, timeout=float(timeout), process_groups=groups == "groups")
 try:
-    print("ok:", Git(directory, timeout=float(timeout)).run(*args), flush=True)
+    print("ok:", git.run(*args), flush=True)
 except GitTimeoutError:
     print("timed out", flush=True)
 except KeyboardInterrupt:
@@ -106,20 +107,21 @@ except KeyboardInterrupt:
 
 
 def tool_command(
-    tmp_path: Path, repo: Git, timeout: float, terminal: bool, *args: str
+    tmp_path: Path, repo: Git, timeout: float, terminal: bool, *args: str, groups: bool = True
 ) -> list[str]:
     (tmp_path / "tool.py").write_text(TOOL, encoding="utf-8")
     mode = "terminal" if terminal else "none"
-    return [sys.executable, str(tmp_path / "tool.py"), repo.directory, str(timeout), mode, *args]
+    tool = [sys.executable, str(tmp_path / "tool.py"), repo.directory, str(timeout), mode]
+    return [*tool, "groups" if groups else "no-groups", *args]
 
 
 def without_terminal(
-    tmp_path: Path, repo: Git, timeout: float, *args: str
+    tmp_path: Path, repo: Git, timeout: float, *args: str, groups: bool = True
 ) -> subprocess.Popen[str]:
     """TOOL running `git <args>`, in a session of its own, which has no terminal (as in CI, or
-    a service)."""
+    a service), with a client whose `process_groups` is `groups`."""
     return subprocess.Popen(
-        tool_command(tmp_path, repo, timeout, False, *args),
+        tool_command(tmp_path, repo, timeout, False, *args, groups=groups),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         encoding="utf-8",
@@ -225,6 +227,21 @@ def test_without_a_terminal_an_interrupt_stops_git_and_lets_it_clean_up(
     assert output == "interrupted\n"
     assert not index_lock(repo).exists()
     assert not hook.outlived_git()
+
+
+@NO_TERMINAL_ON_WINDOWS
+@pytest.mark.parametrize("groups", [True, False])
+def test_without_a_terminal_process_groups_says_whether_git_gets_its_own(
+    repo: Git, tmp_path: Path, groups: bool
+) -> None:
+    # TOOL leads its session's process group: is what git runs in another?
+    own = f'"{Path(sys.executable).as_posix()}" -c "import os; print(os.getpgrp() != os.getsid(0))"'
+    repo.run("config", "alias.own", f"!{own}")
+    tool = without_terminal(tmp_path, repo, 60, "own", groups=groups)
+
+    output, _ = tool.communicate(timeout=10)
+
+    assert output == f"ok: {groups}\n"
 
 
 @NO_TERMINAL_ON_WINDOWS
