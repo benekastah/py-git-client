@@ -281,6 +281,20 @@ def test_resolve_reads_a_fakes_answer_after_its_answer_for_the_name_sent_first()
     assert git.calls[0].input == b"0" * 40 + b"\nHEAD\n"
 
 
+def test_resolve_gives_the_id_git_found_even_if_it_found_a_damaged_copy_first() -> None:
+    # As after a repack: git reads the object from another pack than the one it found damaged.
+    # Real git's words for a damaged object (see the test of a corrupt one), on a fake's answer:
+    # which pack git finds an object in can't be chosen.
+    git = FakeGit()
+    git.respond(
+        ["cat-file", "--batch-check"],
+        f"{'0' * 40} missing\n{'a' * 40} commit 100\n",
+        f"error: unable to unpack {'a' * 40} header\n",
+    )
+
+    assert git.resolve("HEAD") == "a" * 40
+
+
 @pytest.mark.parametrize("stdout", [f"{'a' * 40} commit 100\n", ""])
 def test_resolve_raises_for_a_fake_answer_without_one_for_the_name_sent_first(
     stdout: str,

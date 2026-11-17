@@ -854,12 +854,12 @@ class ReadOnlyGit:
                 f"cat-file answered {decode(answered)!r} for the name of all zeros sent first,"
                 " not that it's missing",
             )
-        if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
-            raise CorruptObjectError(args, result.returncode, stderr)
-        # If it exited, it was on the name, which names nothing.
         header = object_header(reply)
         if header is None:
-            return None
+            # Unless an object git read for it was damaged, as CatFile tells it.
+            if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
+                raise CorruptObjectError(args, result.returncode, stderr)
+            return None  # if it exited, it was on the name, which names nothing
         learn_object_id_length(self, where, header[0])
         return header[0]
 
