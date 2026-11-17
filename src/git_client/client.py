@@ -239,21 +239,42 @@ def _has_terminal(pid: int, session: int) -> bool:
 def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: bool) -> None:
     """Stop git, past its timeout or on an interrupt. On Linux and macOS, ask it to first, with
     SIGINT (to its group, if it has one of its own), as Ctrl-C would, so it removes its lock
-    files, and kill it (and its group) if it's still there after _GRACE. On Windows, kill its
-    process tree (taskkill /T) and git: Windows has no signal to ask a process with no console
-    of its own to stop. On an interrupt, though, Ctrl-C reached git too, from the console it
-    shares with the tool, so it's given _GRACE to clean up and exit first."""
+    files, and kill it (and its group) after _GRACE, or as soon as the wait is interrupted
+    (e.g. by a second Ctrl-C). On Windows, kill its process tree (taskkill /T) and git:
+    Windows has no signal to ask a process with no console of its own to stop. On an
+    interrupt, though, Ctrl-C reached git too, from the console it shares with the tool, so
+    it's given _GRACE to clean up and exit first. taskkill finds what git started through
+    git, so once git has exited, what outlived it runs on."""
     if sys.platform == "win32":
-        if interrupted:
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(_GRACE)
-            if process.returncode is not None:
-                return
-        # By its full path, as find_git finds git's: not from the current directory.
-        taskkill = os.path.join(
-            os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe"
-        )
-        # If taskkill can't run, git is still killed: what it started runs on.
+        try:
+            if interrupted:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(_GRACE)
+        finally:
+            _kill_tree(process)
+        return
+    try:
+        # Gone already, or (on macOS) only zombies left in its group.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if own_group:
+                os.killpg(process.pid, signal.SIGINT)
+            else:
+                process.send_signal(signal.SIGINT)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(_GRACE)
+    finally:
+        if own_group:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+        process.kill()
+
+
+def _kill_tree(process: subprocess.Popen[bytes]) -> None:
+    """On Windows, kill git and what it started (taskkill /F /T), or git alone if taskkill
+    can't run (what it started then runs on)."""
+    # By its full path, as find_git finds git's: not from the current directory.
+    taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
+    try:
         with contextlib.suppress(OSError):
             subprocess.run(
                 [taskkill, "/F", "/T", "/PID", str(process.pid)],
@@ -262,20 +283,8 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: boo
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
+    finally:
         process.kill()
-        return
-    # Gone already, or (on macOS) only zombies left in its group.
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        if own_group:
-            os.killpg(process.pid, signal.SIGINT)
-        else:
-            process.send_signal(signal.SIGINT)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(_GRACE)
-    if own_group:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGKILL)
-    process.kill()
 
 
 def _let_go_of_output(process: subprocess.Popen[bytes]) -> None:
@@ -608,15 +617,17 @@ class ReadOnlyGit:
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
     is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
-    quarter of a second later; the call then waits at most a second more for its output. On
+    quarter of a second later, or at once if the tool is interrupted again meanwhile; the call
+    then waits at most a second more for its output. On
     Linux and macOS it's asked with SIGINT, as Ctrl-C asks it. When the tool has no
     controlling terminal (as in CI, or a service), a command with a timeout runs in a process
     group of its own, so what git started (hooks, ssh, credential helpers) is stopped with
     it. With a terminal, git stays in its foreground, as from a shell, so it can ask for a
     password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
     Windows, git and what it started are killed (taskkill /T): past a timeout at once, with no
-    chance to clean up, and on an interrupt once they've had a quarter of a second to handle
-    the Ctrl-C that reached them too, from the tool's console.
+    chance to clean up, and on an interrupt once git has had a quarter of a second to handle
+    the Ctrl-C that reached it too, from the tool's console. taskkill finds what git started
+    through git, so what outlives git's own exit (e.g. a hook that ignores Ctrl-C) runs on.
 
     A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
     from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
