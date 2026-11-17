@@ -504,8 +504,9 @@ class ReadOnlyGit:
     ids, whatever diff.submodule, `log` or `diff`, says); and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write
     the index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched
     (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one
-    fails: most commands raise MissingObjectError, but cat-file says only that it's missing,
-    so `resolve` and CatFile take it as a name that names nothing (see the README). What git
+    fails: the commands that read a blob's content to diff or search it (`log -p`, `show
+    <commit>`, `diff-tree -p`, ...) raise MissingObjectError, but those given a blob's name
+    don't (see the README), and `resolve` and CatFile take it as a name that names nothing. What git
     still runs can write: a filter (e.g. git-lfs's smudge, run by `cat-file
     --filters`, or its clean, which `status` runs on a file whose stat information changed),
     a merge driver (merge.<driver>.driver, which `log --remerge-diff` runs, as does `log -m`
@@ -862,8 +863,8 @@ class ReadOnlyGit:
         names nothing: as `git rev-parse --verify` finds it, but only if the repository has
         that object (not for a full id it lacks, nor for a submodule's commit). Raises
         CorruptObjectError if an object git reads for it is damaged, MissingObjectError if
-        it's in a partial clone that couldn't fetch it, and GitError for another
-        failure (e.g. NotARepositoryError). It takes one process; for many names, a CatFile
+        it's in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives
+        None), and GitError for another failure (e.g. NotARepositoryError). It takes one process; for many names, a CatFile
         takes one for all of them."""
         line = batch_line(name)
         if line is None:

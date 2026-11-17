@@ -351,7 +351,16 @@ def test_a_read_only_client_takes_a_blob_a_partial_clone_lacks_as_naming_nothing
         assert cat_file.info("HEAD:a") is None
         with pytest.raises(UnknownRevisionError):
             cat_file.read(blob)
-    with pytest.raises(UnknownRevisionError):
-        reader.run("cat-file", "-p", "HEAD:a")
-    with pytest.raises(GitError, match="no such path"):
-        reader.run("blame", "HEAD", "--", "a")
+    for args in [("cat-file", "-p", "HEAD:a"), ("show", "HEAD:a")]:
+        with pytest.raises(UnknownRevisionError):
+            reader.run(*args)
+    for args in [
+        ("blame", "HEAD", "--", "a"),
+        ("cat-file", "blob", blob),
+        ("cat-file", "-s", blob),
+    ]:
+        with pytest.raises(GitError) as raised:
+            reader.run(*args)
+        assert type(raised.value) is GitError
+    # No error at all: its size is unknown.
+    assert reader.run("ls-tree", "-l", "HEAD").split()[3] == "BAD"

@@ -283,12 +283,14 @@ git to run doesn't write:
 - `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
 - `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
   2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs
-  one fails. Most (`log -p`, `show`, `diff-tree -p`, `log --stat`, ...) raise
-  `MissingObjectError`, which a tool can catch to try again with a `Git`. But `cat-file`
-  says only that the object is missing, as of a name that names nothing: `resolve` and
-  `CatFile` give None for it (and `verify` and `read` raise `UnknownRevisionError`), `git
-  cat-file -p <rev>:<path>` raises `UnknownRevisionError`, and `git blame` says the path
-  isn't there (a plain `GitError`).
+  one fails. The commands that read a blob's content to diff or search it (`log -p`, `show
+  <commit>`, `diff-tree -p`, `log --stat`, ...) raise `MissingObjectError`, which a tool can
+  catch to try again with a `Git`. Those given a blob's name don't: `show <rev>:<path>` and
+  `cat-file -p` raise `UnknownRevisionError`, `cat-file blob` and `cat-file -s` a plain
+  `GitError`, and `blame` says the path isn't there (a plain `GitError`). `ls-tree -l`
+  succeeds, with `BAD` as the blob's size. And cat-file's batch modes say only that the
+  object is missing, as of a name that names nothing: `resolve` and `CatFile` give None for
+  it (and `verify` and `read` raise `UnknownRevisionError`).
 
 What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --filters`, or its
 clean, which `status` runs on a file whose stat information changed), a merge driver

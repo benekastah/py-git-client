@@ -153,7 +153,8 @@ class CatFile:
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
         --verify` would find it, with what git warned of it, or None if it names nothing (or
-        is ambiguous)."""
+        is ambiguous). Raises MissingObjectError for an object a partial clone couldn't fetch
+        (from a Git: a ReadOnlyGit's gives None)."""
         line = batch_line(name)
         if line is None:
             return None
@@ -192,9 +193,10 @@ class CatFile:
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
         ("blob", "commit", "tag" or "tree"), the object must be of that type, or peel to one
         as `<id>^{<type>}` does (e.g. a commit to its tree): else it raises WrongTypeError.
-        Raises UnknownRevisionError if there's no such object, CorruptObjectError if it's
-        damaged, and GitError if git stops partway through it, or can't read it at all (see
-        CatFile)."""
+        Raises UnknownRevisionError if there's no such object (or a ReadOnlyGit's partial
+        clone lacks it), MissingObjectError if a Git's couldn't fetch it, CorruptObjectError
+        if it's damaged, and GitError if git stops partway through it, or can't read it at
+        all (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
         if type is not None and type not in _TYPES:
