@@ -30,6 +30,26 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
 
+- `object_id_length()` learns the length from the first full id `refs`, `Git.resolve` or a
+  `CatFile` reads at the client's location, and then starts no `git rev-parse
+  --show-object-format`: a `FakeGit` test that expects that command after one of those no
+  longer sees it. Threads that ask at once wait for one git's answer, where each could
+  start its own (#54).
+- `Git.resolve` takes one process for every name, where a name `git cat-file` exits on (e.g.
+  `main@{upstream}` with no upstream) took a second, a `rev-parse`: it sends cat-file a name
+  of all zeros first, as `CatFile` does, so a `FakeGit` answering `cat-file --batch-check`
+  prints `0000000000000000000000000000000000000000 missing` as its first line (else resolve
+  raises `GitError`, rather than give None). It raises `CorruptObjectError` for a damaged
+  object cat-file reads for the name, as `CatFile.resolve` does, where it gave None for a
+  loose one (#54).
+- `GitTimeoutError` and `NotStartedError` are no longer `GitError`s, but `NoAnswerError`s,
+  so `except GitError` no longer takes "git didn't answer" for "git said no" (e.g. a
+  timed-out `git rev-parse @{upstream}` read as "no upstream", or a hang as defaults). Their
+  attributes and messages are as before. A tool that catches `GitError` to handle git's no
+  needs no change, and now lets these through; one that catches it to report any failure
+  (e.g. at its top level) catches `(GitError, NoAnswerError)`; and one that caught
+  `GitTimeoutError` or `NotStartedError` by name still does (#54).
+
 ### Added
 
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that

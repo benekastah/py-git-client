@@ -15,10 +15,13 @@ from typing import IO, Literal, Self, get_args
 from git_client.client import (
     FATAL,
     OBJECT_ID,
+    Location,
     ReadOnlyGit,
     batch_line,
     check_names_nothing,
     decode,
+    learn_object_id_length,
+    location,
     object_header,
 )
 from git_client.errors import (
@@ -88,6 +91,9 @@ class CatFile:
         # Stops the process when this is freed, or as it's asked to (see _stop).
         self._stopper: weakref.finalize[[subprocess.Popen[bytes], IO[bytes]], CatFile] | None = None
         self._lock = threading.Lock()
+        # The client's `location` when the process started, where its ids are from, until its
+        # first id has told the client its object id length there.
+        self._where: Location | None = None
 
     @property
     def git(self) -> ReadOnlyGit:
@@ -201,6 +207,7 @@ class CatFile:
                 # process; or here, if the process can't start.
                 file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
                 try:
+                    self._where = location(self.git)
                     self._process = self.git.popen(*_COMMAND, stderr=file)
                 except BaseException:
                     file.close()
@@ -227,7 +234,10 @@ class CatFile:
                     answered = bool(process.stdout.readline())
                 if answered:
                     reply = process.stdout.readline()
-            if object_header(reply) is not None:
+            if (header := object_header(reply)) is not None:
+                if self._where is not None and (git := self._git()) is not None:
+                    learn_object_id_length(git, self._where, header[0])
+                    self._where = None
                 return reply, ""
             if reply:
                 reason = _said(stderr)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, GitError, RefSnapshot, refs
+from git_client import Git, GitError, NoAnswerError, RefSnapshot, refs
 from git_client.testing import FakeGit, GitCall
 
 SLEEP = f'"{Path(sys.executable).as_posix()}" -c "import time; time.sleep(10)"'
@@ -200,7 +200,7 @@ def test_a_command_that_fails_or_times_out_is_counted(
     read, reads = counting()
     snapshot = RefSnapshot(read)
     snapshot.get()
-    with pytest.raises(GitError):
+    with pytest.raises((GitError, NoAnswerError)):
         repo.run(*args, timeout=timeout)
 
     snapshot.get()

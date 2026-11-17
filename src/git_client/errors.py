@@ -1,5 +1,6 @@
 """The errors git's commands raise: GitError, and a subclass for each failure a tool may
-want to tell from the rest, chosen from what git said (in English: see Git.process)."""
+want to tell from the rest, chosen from what git said (in English: see Git.process); and
+NoAnswerError, when git said nothing."""
 
 import os
 import re
@@ -11,18 +12,9 @@ from typing import ClassVar, Self
 MAX_COMMAND_IN_MESSAGE = 200
 
 
-class GitError(RuntimeError):
-    """A git command failed. `command` is git's arguments, `returncode` its exit status (None
-    if it has none, e.g. a GitTimeoutError), and `stderr` and `stdout` what it printed there
-    (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
-    one and failed). The message's first line is `git <command> failed (<status>):`, the
-    status being the exit status or, without one, "timed out" for a GitTimeoutError, "not
-    started" for a NotStartedError and "no exit status" otherwise (e.g. a tool's own GitError
-    for a command it refused, saying why in `stderr`); `stderr` follows. It shows at most
-    MAX_COMMAND_IN_MESSAGE characters of the command line, ending with "…" when cut;
-    `command` keeps all of it. It shows bytes that aren't UTF-8 (in a path, say) escaped, as
-    `\xe9`, so it can be written anywhere; `command`, `stderr` and `stdout` keep them, as
-    `decode` gives them."""
+class _CommandError(RuntimeError):
+    """What GitError and NoAnswerError share (see GitError): a private base, so that a tool
+    catches one or the other, or both by name."""
 
     # What the message says in place of the exit status, when there's none.
     _without_exit_status: ClassVar[str] = "no exit status"
@@ -52,6 +44,28 @@ class GitError(RuntimeError):
         )
 
 
+class GitError(_CommandError):
+    """A git command failed. `command` is git's arguments, `returncode` its exit status (None
+    if it has none, e.g. a tool's own GitError for a command it refused, saying why in
+    `stderr`), and `stderr` and `stdout` what it printed there (stdout only from `Git.run` and
+    `Git.run_bytes`, e.g. the report of a command that printed one and failed). The message's
+    first line is `git <command> failed (<status>):`, the status being the exit status or,
+    without one, "no exit status"; `stderr` follows. It shows at most MAX_COMMAND_IN_MESSAGE
+    characters of the command line, ending with "…" when cut; `command` keeps all of it. It
+    shows bytes that aren't UTF-8 (in a path, say) escaped, as `\xe9`, so it can be written
+    anywhere; `command`, `stderr` and `stdout` keep them, as `decode` gives them.
+
+    Not raised when git gives no answer (NoAnswerError), so `except GitError` handles git's
+    no without taking a timeout or a tool that's stopping for one."""
+
+
+class NoAnswerError(_CommandError):
+    """git gave no answer: it ran past its timeout (GitTimeoutError), or wasn't started
+    (NotStartedError). Not a GitError: catch `(GitError, NoAnswerError)` to handle both. It
+    has a GitError's attributes and message, its `returncode` None and its status saying
+    which ("timed out", "not started")."""
+
+
 def _escaped(text: str) -> str:
     r"""text, with the surrogates that stand for bytes that aren't UTF-8 (see `decode`) as
     escapes (`\xe9`), and any other surrogate too (`\ud800`)."""
@@ -61,15 +75,15 @@ def _escaped(text: str) -> str:
         return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
-class GitTimeoutError(GitError):
-    """git ran past its timeout (see Git), and was stopped. Its returncode is None."""
+class GitTimeoutError(NoAnswerError):
+    """git ran past its timeout (see Git), and was stopped. Its `stderr` and `stdout` are what
+    it printed by then."""
 
     _without_exit_status: ClassVar[str] = "timed out"
 
 
-class NotStartedError(GitError):
-    """git wasn't started: the client's `stopping` said the tool is stopping (see Git). Its
-    returncode is None."""
+class NotStartedError(NoAnswerError):
+    """git wasn't started: the client's `stopping` said the tool is stopping (see Git)."""
 
     _without_exit_status: ClassVar[str] = "not started"
 

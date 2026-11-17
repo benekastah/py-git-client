@@ -4,16 +4,22 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from git_client import (
+    Arg,
     CatFile,
     ConfigLockedError,
+    CorruptObjectError,
     Git,
     GitError,
     GitTimeoutError,
+    NoAnswerError,
     NotARepositoryError,
     NotStartedError,
     ReadOnlyError,
@@ -22,6 +28,7 @@ from git_client import (
     decode,
     find_git,
     printable,
+    refs,
 )
 from git_client.testing import FakeGit, GitCall
 
@@ -189,6 +196,21 @@ def test_succeeds_raises_rather_than_say_no_past_a_timeout(waiting: Git) -> None
         waiting.succeeds("wait", timeout=0.2)
 
 
+@pytest.mark.parametrize("cause", ["timeout", "stopping"])
+def test_no_answer_from_git_isnt_a_git_error(waiting: Git, cause: str) -> None:
+    # So `except GitError`, for git's no, doesn't take "git didn't answer" for it.
+    if cause == "timeout":
+        git = Git(waiting.directory, timeout=0.2)
+    else:
+        git = Git(waiting.directory, stopping=lambda: True)
+
+    with pytest.raises(NoAnswerError):
+        try:
+            git.ok("wait")
+        except GitError:
+            pytest.fail("raised a GitError")
+
+
 def test_once_stopping_says_so_no_git_starts(repo: Git) -> None:
     stop = threading.Event()
     git = Git(repo.directory, stopping=stop.is_set)
@@ -243,9 +265,58 @@ def test_resolve_gives_none_for_an_object_the_repository_lacks(repo: Git) -> Non
     assert repo.resolve("HEAD:a") == repo.run("rev-parse", "HEAD:a")
 
 
-def test_resolve_gives_none_for_a_name_git_exits_on(repo: Git) -> None:
+def test_resolve_gives_none_for_a_name_git_exits_on_in_one_process(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
     # main has no upstream: git cat-file exits rather than saying @{u} names nothing.
     assert repo.resolve("main@{u}") is None
+    assert len(git_calls) == 1
+
+
+def test_resolve_reads_a_fakes_answer_after_its_answer_for_the_name_sent_first() -> None:
+    git = FakeGit()
+    git.respond(["cat-file", "--batch-check"], f"{'0' * 40} missing\n{'a' * 40} commit 100\n")
+
+    assert git.resolve("HEAD") == "a" * 40
+    assert git.calls[0].input == b"0" * 40 + b"\nHEAD\n"
+
+
+def test_resolve_gives_the_id_git_found_even_if_it_found_a_damaged_copy_first() -> None:
+    # As after a repack: git reads the object from another pack than the one it found damaged.
+    # Real git's words for a damaged object (see the test of a corrupt one), on a fake's answer:
+    # which pack git finds an object in can't be chosen.
+    git = FakeGit()
+    git.respond(
+        ["cat-file", "--batch-check"],
+        f"{'0' * 40} missing\n{'a' * 40} commit 100\n",
+        f"error: unable to unpack {'a' * 40} header\n",
+    )
+
+    assert git.resolve("HEAD") == "a" * 40
+
+
+@pytest.mark.parametrize("stdout", [f"{'a' * 40} commit 100\n", ""])
+def test_resolve_raises_for_a_fake_answer_without_one_for_the_name_sent_first(
+    stdout: str,
+) -> None:
+    # As a FakeGit answered cat-file before resolve sent a name of all zeros first: rather
+    # than take the id for that name's answer, and say HEAD names nothing.
+    git = FakeGit()
+    git.respond(["cat-file", "--batch-check"], stdout)
+
+    with pytest.raises(GitError, match="all zeros"):
+        git.resolve("HEAD")
+
+
+def test_resolve_raises_for_a_corrupt_object_rather_than_say_it_names_nothing(
+    damaged_repo: Git,
+) -> None:
+    # Loose, cat-file says the name is missing; packed, it exits.
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.resolve("HEAD~1")
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.resolve("main^{tree}")
+    assert damaged_repo.resolve("main@{u}") is None
 
 
 def test_resolve_gives_none_for_a_name_that_isnt_one_line(repo: Git) -> None:
@@ -261,12 +332,15 @@ def test_resolve_takes_a_name_that_looks_like_an_option_as_a_name(repo: Git) -> 
     assert repo.resolve("-x") == repo.run("rev-parse", "HEAD")
 
 
-def test_resolve_raises_for_what_isnt_a_name_naming_nothing(tmp_path: Path) -> None:
+def test_resolve_raises_for_what_isnt_a_name_naming_nothing(
+    tmp_path: Path, git_calls: list[GitCall]
+) -> None:
     (tmp_path / "plain").mkdir()
     git = Git(tmp_path / "plain", env={"GIT_CEILING_DIRECTORIES": str(tmp_path)})
 
     with pytest.raises(NotARepositoryError):
         git.resolve("HEAD")
+    assert len(git_calls) == 1
 
 
 def test_var_gives_gits_value_for_a_variable(repo: Git) -> None:
@@ -621,6 +695,92 @@ def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
 def test_object_id_length_is_read_from_git_once(repo: Git, git_calls: list[GitCall]) -> None:
     assert [repo.object_id_length(), repo.object_id_length()] == [40, 40]
     assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+def test_object_id_length_asks_git_once_for_threads_asking_at_once(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    failures: list[None] = [None]
+
+    class SlowGit(Git):
+        """Takes long enough to answer that the threads all ask before it does, and fails the
+        first time."""
+
+        def run(self, *args: Arg, **kwargs: Any) -> str:
+            time.sleep(0.05)
+            if failures:
+                failures.pop()
+                raise GitError(args, 1, "failed")
+            return super().run(*args, **kwargs)
+
+    git = SlowGit(repo.directory)
+
+    def length(_: int) -> int | None:
+        try:
+            return git.object_id_length()
+        except GitError:
+            return None
+
+    with ThreadPoolExecutor(4) as pool:
+        lengths = list(pool.map(length, range(4)))
+
+    # The thread that asked first failed; the others waited for it, then one asked again.
+    assert sorted(lengths, key=str) == [40, 40, 40, None]
+    assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+def make_sha256_repo(directory: Path) -> Git:
+    """A SHA-256 repository, with one commit, in directory, and a client for it."""
+    Git(directory).run("init", "--quiet", "--object-format=sha256", str(directory / "sha256"))
+    git = Git(directory / "sha256")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+    return git
+
+
+def resolve(git: Git) -> None:
+    git.resolve("HEAD")
+
+
+def resolve_with_cat_file(git: Git) -> None:
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+
+
+@pytest.mark.parametrize(
+    "read_an_id",
+    [refs, resolve, resolve_with_cat_file],
+    ids=["refs", "resolve", "CatFile"],
+)
+def test_object_id_length_is_learned_from_an_id_the_library_reads(
+    read_an_id: Callable[[Git], object], tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    git = Git(make_sha256_repo(tmp_path).directory)
+    read_an_id(git)
+
+    assert git.object_id_length() == 64
+    assert ["rev-parse", "--show-object-format"] not in git_calls
+
+
+def test_an_object_id_length_learned_counts_only_where_it_was_read(
+    repo: Git, tmp_path: Path
+) -> None:
+    git = Git(make_sha256_repo(tmp_path).directory)
+    with CatFile(git) as cat_file:
+        assert cat_file.resolve("nothing") is None  # starts its process, reading no id
+        git.directory = repo.directory
+        # Its process is still the SHA-256 repository's.
+        assert cat_file.resolve("HEAD") is not None
+        assert git.object_id_length() == 40
+
+
+def test_a_failed_object_id_length_is_not_remembered(tmp_path: Path) -> None:
+    git = Git(tmp_path / "later")
+    (tmp_path / "later").mkdir()
+    with pytest.raises(GitError):
+        git.object_id_length()
+
+    Git(tmp_path).run("init", "--quiet", "later")
+    assert git.object_id_length() == 40
 
 
 @pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
