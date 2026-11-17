@@ -4,6 +4,8 @@ without a process each."""
 import contextlib
 import subprocess
 import threading
+import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
@@ -51,12 +53,29 @@ class CatFile:
     between requests (killed, say) is started again for the request that finds it gone. Any
     request raises GitError if git is too old for `--batch-command` (before 2.36), or if
     git can't read the repository at all (e.g. NotARepositoryError, or a broken config).
+
+    Its process stops when it's no longer used, as Python frees it. With `weak`, it holds
+    `git` by a weak reference, for a CatFile the client keeps itself (e.g. `self.cat_file =
+    CatFile(self, weak=True)` in a Git subclass): a strong one would make a reference cycle,
+    which keeps a client no longer used, and its process, until the garbage collector finds
+    it. A request after `git` is freed raises ReferenceError.
     """
 
-    def __init__(self, git: ReadOnlyGit) -> None:
-        self.git = git
+    def __init__(self, git: ReadOnlyGit, *, weak: bool = False) -> None:
+        self._git: Callable[[], ReadOnlyGit | None] = weakref.ref(git) if weak else lambda: git
         self._process: subprocess.Popen[bytes] | None = None
+        # Stops the process when this is freed, or as it's asked to (see _stop).
+        self._stopper: weakref.finalize[[subprocess.Popen[bytes]], CatFile] | None = None
         self._lock = threading.Lock()
+
+    @property
+    def git(self) -> ReadOnlyGit:
+        """The client it runs git with. Raises ReferenceError if it held it weakly, and it was
+        freed."""
+        git = self._git()
+        if git is None:
+            raise ReferenceError("the Git this CatFile runs git with was freed")
+        return git
 
     def __enter__(self) -> Self:
         return self
@@ -130,6 +149,7 @@ class CatFile:
                 # Its stderr goes nowhere: it warns even for names it resolves (e.g. a name
                 # that's both a branch and a tag), as rev-parse --quiet doesn't.
                 self._process = self.git.popen(*_COMMAND)
+                self._stopper = weakref.finalize(self, _end, self._process)
             process = self._process
             assert process.stdin is not None and process.stdout is not None
             # Whether it has answered a request: _PROBE, for a new process.
@@ -158,13 +178,18 @@ class CatFile:
 
     def _stop(self) -> None:
         """Stop the process, if one is running. Hold the lock."""
-        if self._process is None:
-            return
-        if self._process.stdin is not None:
-            # It may have stopped already (on Windows, not always with a BrokenPipeError).
-            with contextlib.suppress(OSError):
-                self._process.stdin.close()
-        self._process.wait()
-        if self._process.stdout is not None:
-            self._process.stdout.close()
-        self._process = None
+        if self._stopper is not None:
+            self._stopper()
+        self._process = self._stopper = None
+
+
+def _end(process: subprocess.Popen[bytes]) -> None:
+    """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
+    used, rather than left for Python to warn of and reap."""
+    if process.stdin is not None:
+        # It may have stopped already (on Windows, not always with a BrokenPipeError).
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+    process.wait()
+    if process.stdout is not None:
+        process.stdout.close()

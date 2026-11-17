@@ -103,6 +103,44 @@ def test_a_process_that_stopped_between_requests_is_started_again(repo: Git) -> 
     assert len(git.started) == 2
 
 
+def test_a_cat_file_no_longer_used_stops_its_process(repo: Git) -> None:
+    git = StartsKeepingGit(repo.directory)
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    del cat_file
+
+    assert git.started[0].poll() is not None
+
+
+class KeepsItsCatFile(StartsKeepingGit):
+    """A client with a CatFile of its own, which holds it weakly."""
+
+    def __init__(self, directory: str) -> None:
+        super().__init__(directory)
+        self.cat_file = CatFile(self, weak=True)
+
+
+def test_a_client_that_keeps_a_cat_file_stops_it_when_no_longer_used(repo: Git) -> None:
+    # By its reference count, rather than whenever the garbage collector gets to it.
+    git = KeepsItsCatFile(repo.directory)
+    git.cat_file.resolve("HEAD")
+    started = git.started
+    gc.disable()
+    try:
+        del git
+        assert started[0].poll() is not None
+    finally:
+        gc.enable()
+
+
+def test_a_cat_file_whose_git_is_gone_raises(repo: Git) -> None:
+    cat_file = CatFile(Git(repo.directory), weak=True)
+
+    with pytest.raises(ReferenceError):
+        cat_file.resolve("HEAD")
+
+
 def test_a_directory_that_isnt_a_repository_is_an_error_not_an_empty_answer(
     tmp_path: Path,
 ) -> None:
