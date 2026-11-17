@@ -263,7 +263,7 @@ said and raises a subclass:
 | Error | When |
 | --- | --- |
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
-| `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing (its `reason`: git's, or "" if it gave none). |
+| `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing (from `CatFile`, its `reason` is git's, or "" if it gave none). |
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |

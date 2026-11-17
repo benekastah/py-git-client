@@ -95,9 +95,12 @@ class NotARepositoryError(GitError):
 class UnknownRevisionError(GitError):
     """A revision (a commit, a ref, an object id) that names nothing: not one that names an
     object of the wrong type (e.g. a tree where git wants a commit), a WrongTypeError.
-    `reason` is why, as git said it (e.g. "fatal: no upstream configured for branch 'main'"):
-    `stderr`, or "" when git gave no reason beyond the name naming nothing (as for most names
-    from CatFile, whose `stderr` then says so in rev-parse's words)."""
+    `reason` is `stderr`, but from CatFile, which reads git's reason apart: there, it's what
+    git said but its warnings and hints (e.g. "fatal: no upstream configured for branch
+    'main'"), or "" when git gave no reason beyond the name naming nothing (as for most names,
+    whose `stderr` then says so in rev-parse's words). From other commands, a reason of "" is
+    never given: their `stderr` may say no more than that (e.g. "fatal: Needed a single
+    revision")."""
 
     def __init__(
         self,

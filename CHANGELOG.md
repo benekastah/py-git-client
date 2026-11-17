@@ -80,8 +80,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   that change them, can go (#50).
 - `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
   refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
-- `UnknownRevisionError.reason`: why the name names nothing, as git said it, or "" when it
-  gave no reason (as for most names from `CatFile`) (#53).
+- `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it
+  (without its warnings), or "" when it gave no reason (as for most names); from other
+  commands, their `stderr` (#53).
 
 ### Fixed
 

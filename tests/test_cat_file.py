@@ -1,6 +1,7 @@
 import gc
 import io
 import os
+import pickle
 import subprocess
 import sys
 import threading
@@ -107,6 +108,15 @@ def test_verify_gives_the_id_or_git_s_reason_without_another_process(
     assert (empty.value.stderr, empty.value.reason) == ("fatal: bad revision ''", "")
     assert no_upstream.value.stderr == "fatal: no upstream configured for branch 'main'"
     assert no_upstream.value.reason == no_upstream.value.stderr
+
+
+def test_a_reason_crosses_from_a_worker_process(repo: Git) -> None:
+    with CatFile(repo) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("nope")
+
+    copy = pickle.loads(pickle.dumps(raised.value))
+
+    assert (copy.stderr, copy.reason) == ("fatal: bad revision 'nope'", "")
 
 
 def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git) -> None:
