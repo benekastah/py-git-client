@@ -32,8 +32,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `f"{name} missing"` (as git-recommit does) tests `reason == ""` instead (#53).
 - A `CatFile` whose client has a `timeout` holds each request to it: one its process doesn't
   answer in time (e.g. waiting on a lazy fetch in a partial clone) kills the process and
-  raises `GitTimeoutError`, where it waited as long as it took. A tool whose requests may
-  take longer gives its CatFile a client with a longer timeout, or none (#53).
+  raises `GitTimeoutError` (a `NoAnswerError`, which `except GitError` doesn't catch), where
+  it waited as long as it took. Its `stderr` is what git said of the request, and a note
+  names the request. A tool whose requests may take longer gives its CatFile a client with a
+  longer timeout, or none (#53).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).

@@ -319,14 +319,16 @@ class CatFile:
     def _exchange(self, name: str) -> Generator[None]:
         """Around writing a request about `name` to the process and reading its answer: if
         the answer doesn't come by the request's deadline, kill the process (see _kill) and
-        raise GitTimeoutError. Hold the lock."""
+        raise GitTimeoutError, with what git said of the request and a note naming it. Hold
+        the lock."""
         try:
             yield
         except _PastDeadline:
+            said = "" if self._stderr is None else _said(self._stderr)
             self._kill()
-            raise GitTimeoutError(
-                _COMMAND, None, f"{name}: no answer within {self.git.timeout} seconds"
-            ) from None
+            error = GitTimeoutError(_COMMAND, None, said)
+            error.add_note(f"no answer for {name} within {self.git.timeout} seconds")
+            raise error from None
 
     def _kill(self) -> None:
         """Kill the process, after a request was sent but not all of its answer read: what's

@@ -642,8 +642,8 @@ class GitThatAnswersOnce(Git):
     """A git whose cat-file answers the first request (and the one CatFile sends first, before
     it) with an object, then runs `then` (Python), whatever it's asked."""
 
-    def __init__(self, directory: str, then: str, *, timeout: float | None = None) -> None:
-        super().__init__(directory, timeout=timeout)
+    def __init__(self, directory: str, then: str) -> None:
+        super().__init__(directory)
         self.then = then
         self.started: list[subprocess.Popen[bytes]] = []
 
@@ -664,6 +664,7 @@ class GitThatAnswersOnce(Git):
                 [sys.executable, "-c", script, "1" * 40],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                stderr=stderr,
             )
         )
         return self.started[-1]
@@ -709,14 +710,21 @@ def test_closing_kills_a_process_that_doesnt_exit(
     "answer", ["", f"{'1' * 40} blob 100\n" + "x" * 10], ids=["nothing", "part of an object"]
 )
 def test_a_request_past_the_client_s_timeout_stops_the_process(repo: Git, answer: str) -> None:
-    then = f"sys.stdin.readline(); sys.stdout.write({answer!r}); sys.stdout.flush(); time.sleep(60)"
-    git = GitThatAnswersOnce(repo.directory, then, timeout=0.2)
+    then = (
+        "sys.stdin.readline(); sys.stderr.write('still looking\\n'); sys.stderr.flush()\n"
+        f"sys.stdout.write({answer!r}); sys.stdout.flush(); time.sleep(60)"
+    )
+    git = GitThatAnswersOnce(repo.directory, then)
 
     with CatFile(git) as cat_file:
-        cat_file.resolve("HEAD")
-        with pytest.raises(GitTimeoutError, match=f"{'1' * 40}: no answer within 0.2 seconds"):
+        cat_file.resolve("HEAD")  # with no timeout: Python's start isn't timed
+        git.timeout = 0.2
+        with pytest.raises(GitTimeoutError) as raised:
             cat_file.read("1" * 40)
         assert git.started[0].poll() is not None
+        git.timeout = None
         # Another process answers the next.
         assert cat_file.resolve("HEAD") == "1" * 40
     assert len(git.started) == 2
+    assert raised.value.stderr == "still looking"
+    assert raised.value.__notes__ == [f"no answer for {'1' * 40} within 0.2 seconds"]
