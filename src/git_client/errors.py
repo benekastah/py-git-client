@@ -80,7 +80,26 @@ class NotARepositoryError(GitError):
 
 class UnknownRevisionError(GitError):
     """A revision (a commit, a ref, an object id) that names nothing: not one that names an
-    object of the wrong type (e.g. a tree where git wants a commit), a plain GitError."""
+    object of the wrong type (e.g. a tree where git wants a commit), a WrongTypeError."""
+
+
+class WrongTypeError(GitError):
+    """A name that names an object of the wrong type (e.g. a tree where git wants a commit).
+    `expected` is the type git wanted, and `found` the one it found (e.g. "commit" and
+    "tree"), as git's message says them; None if it doesn't (e.g. a tool's own error)."""
+
+    def __init__(
+        self, args: Sequence[str | bytes], returncode: int | None, stderr: str, stdout: str = ""
+    ) -> None:
+        super().__init__(args, returncode, stderr, stdout)
+        said = WRONG_TYPE.search(stderr)
+        self.expected: str | None = None if said is None else said["expected"] or said["expected2"]
+        self.found: str | None = None if said is None else said["found"] or said["found2"]
+
+
+class CorruptObjectError(GitError):
+    """An object git found damaged as it read it (e.g. a loose object, or a pack's copy of
+    one, that won't inflate): not one that isn't there, an UnknownRevisionError."""
 
 
 class ConfigLockedError(GitError):
@@ -110,6 +129,13 @@ class ConflictError(GitError):
 _STDOUT_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (ConflictError, re.compile(r"^CONFLICT \(", re.MULTILINE)),
 )
+# What git says of an object it found damaged as it read it: as it exits, or (from cat-file)
+# before saying the name is missing.
+CORRUPT_OBJECT = re.compile(
+    r"^fatal: (loose|packed) object \S+ \(stored in .*\) is corrupt$"
+    r"|^error: unable to unpack \S+ header$",
+    re.MULTILINE,
+)
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
     (
@@ -124,6 +150,8 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     ),
     # Not for another reason the lock file can't be made (e.g. "No such file or directory").
     (ConfigLockedError, re.compile("could not lock config file .*: File exists$", re.MULTILINE)),
+    # Not UnknownRevisionError: what git says of the object, then of the name it can't read.
+    (CorruptObjectError, CORRUPT_OBJECT),
     # The second is -C's, for a directory that isn't there.
     (NotARepositoryError, re.compile("not a git repository|cannot change to '")),
     (
@@ -145,10 +173,11 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 
 # What git says first of a name that names an object of the wrong type (e.g. a tree where it
 # wants a commit), before what it says of a name that names nothing: most commands' words,
-# then merge's.
+# then cat-file's and merge's.
 WRONG_TYPE = re.compile(
-    r"^error: object \S+ is a \w+, not an? \w+$"
-    r"|^error: .*: expected \w+ type, but the object dereferences to \w+ type$",
+    r"^error: object \S+ is a (?P<found>\w+), not an? (?P<expected>\w+)$"
+    r"|^error: .*: expected (?P<expected2>\w+) type, but the object dereferences to"
+    r" (?P<found2>\w+) type$",
     re.MULTILINE,
 )
 
@@ -161,6 +190,6 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
-                return GitError  # it names something
+                return WrongTypeError  # it names something
             return error
     return GitError

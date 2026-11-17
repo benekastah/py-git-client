@@ -23,6 +23,7 @@ from git_client import (
     find_git,
     printable,
 )
+from git_client.testing import FakeGit, GitCall
 
 
 @pytest.mark.usefixtures("fresh_find_git")
@@ -65,6 +66,44 @@ def test_prefix_is_the_path_from_the_top_of_the_worktree_down_to_the_directory(
     assert Git(below).prefix() == " a/b/"
     assert repo.prefix() == ""
     assert Git(Path(repo.directory) / ".git").prefix() == ""
+
+
+def test_prefix_is_asked_of_git_once_per_directory_and_environment(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    below = Path(repo.directory) / "sub"
+    below.mkdir()
+    git = Git(repo.directory)
+
+    assert git.prefix() == ""
+    assert git.prefix(timeout=5) == ""
+    assert len(git_calls) == 1
+
+    # Another directory, or another environment, is another answer.
+    git.directory = str(below)
+    assert git.prefix() == "sub/"
+    git.env["GIT_WORK_TREE"] = str(below)
+    git.prefix()
+    assert len(git_calls) == 3
+
+
+def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
+    git = Git(tmp_path / "later")
+    (tmp_path / "later").mkdir()
+    with pytest.raises(GitError):
+        git.prefix()
+
+    Git(tmp_path).run("init", "--quiet", "later")
+    assert git.prefix() == ""
+
+
+def test_object_id_length_follows_a_change_of_directory(repo: Git, tmp_path: Path) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(repo.directory)
+    assert git.object_id_length() == 40
+
+    git.directory = str(tmp_path / "sha256")
+    assert git.object_id_length() == 64
 
 
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
@@ -577,3 +616,24 @@ def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
 
     assert type(copy) is ToolError
     assert copy.__notes__ == ["while checking the stack"]
+
+
+def test_object_id_length_is_read_from_git_once(repo: Git, git_calls: list[GitCall]) -> None:
+    assert [repo.object_id_length(), repo.object_id_length()] == [40, 40]
+    assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+@pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
+def test_object_id_length_given_starts_no_git(
+    client: type[ReadOnlyGit], tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    # Not a repository: git, if asked, would fail.
+    git = client(tmp_path, object_id_length=64)
+    assert git.object_id_length() == 64
+    assert git_calls == []
+
+
+@pytest.mark.parametrize("length", [0, 39, 41, 63])
+def test_object_id_length_given_is_40_or_64(length: int) -> None:
+    with pytest.raises(ValueError, match="40 or 64"):
+        Git(object_id_length=length)

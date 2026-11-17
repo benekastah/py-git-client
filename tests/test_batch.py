@@ -18,6 +18,7 @@ from git_client import (
     refs,
     update_refs,
 )
+from git_client.testing import FakeGit
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -388,6 +389,46 @@ def test_git_paths_finds_each_name_where_git_keeps_it_with_one_git(
     assert len(git_calls) == started + 1
 
 
+def test_git_paths_asks_git_once_per_name(repo: Git, git_calls: list[list[str]]) -> None:
+    first = git_paths(repo, "HEAD", "index")
+    assert git_paths(repo, "index", "HEAD", "refs") == [
+        first[1],
+        first[0],
+        first[1].parent / "refs",
+    ]
+    git_paths(repo, "HEAD", "refs")
+
+    assert [call[-2:] for call in git_calls] == [
+        ["--git-path", "index"],
+        ["--git-path", "refs"],
+    ]
+    assert len(git_calls) == 2
+
+
+def test_git_paths_follows_a_change_of_directory_or_environment(repo: Git, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    repo.run("worktree", "add", "--quiet", str(linked))
+    git = Git(repo.directory)
+    [main] = git_paths(git, "HEAD")
+
+    git.directory = str(linked)
+    [own] = git_paths(git, "HEAD")
+    git.env["GIT_DIR"] = str(Path(repo.directory) / ".git")
+    [forced] = git_paths(git, "HEAD")
+
+    assert own != main
+    assert forced == main
+
+
+def test_git_paths_asks_again_for_hooks_which_a_config_change_moves(repo: Git) -> None:
+    [before] = git_paths(repo, "hooks")
+    [hook_before] = git_paths(repo, "hooks/pre-commit")
+    repo.run("config", "core.hooksPath", str(Path(repo.directory) / "my-hooks"))
+
+    assert git_paths(repo, "hooks") != [before]
+    assert git_paths(repo, "hooks/pre-commit") != [hook_before]
+
+
 def test_git_paths_refuses_a_name_with_a_line_ending(repo: Git) -> None:
     with pytest.raises(ValueError, match="line ending"):
         git_paths(repo, "HEAD", "a\nb")
@@ -433,6 +474,24 @@ def test_hash_blob_at_takes_a_path_from_the_clients_directory(repo: Git) -> None
     # The same file, from the top, as git prints paths, to a client there.
     assert hash_blob_at(repo, "sub/notes.txt", b"one\r\n") == as_it_is
     assert hash_blob_at(repo, "notes.txt", b"one\r\n") != as_it_is
+
+
+def test_hash_blob_at_takes_a_path_from_the_top_if_asked(repo: Git) -> None:
+    top = Path(repo.directory)
+    (top / ".gitattributes").write_bytes(b"*.txt text\n")
+    (top / "sub" / "deep").mkdir(parents=True)
+    (top / "sub" / ".gitattributes").write_bytes(b"*.txt -text\n")
+    as_it_is = blob_id(repo, b"one\r\n")
+    converted = blob_id(repo, b"one\n")
+
+    for directory in (top / "sub", top / "sub" / "deep"):
+        client = Git(directory)
+        assert hash_blob_at(client, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
+        assert hash_blob_at(client, "notes.txt", b"one\r\n", paths_from_top=True) == converted
+        # A path as the filesystem has it, in bytes, as well.
+        assert hash_blob_at(client, b"sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
+    # At the top, from the top is from the directory.
+    assert hash_blob_at(repo, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
 
 
 def test_hash_blob_at_writes_the_blob_only_if_asked(repo: Git) -> None:
@@ -534,3 +593,38 @@ def test_update_refs_makes_none_if_any_cant_be_made(repo: Git) -> None:
         )
 
     assert set(refs(repo, "refs/heads/")) == {"refs/heads/main"}
+
+
+@pytest.mark.parametrize(
+    ("where", "prefix"), [(".", ""), ("sub/deep", "sub/deep/"), (" a/b", " a/b/"), (".git", "")]
+)
+def test_git_paths_learns_the_prefix_in_the_same_process(
+    repo: Git, git_calls: list[list[str]], where: str, prefix: str
+) -> None:
+    (Path(repo.directory) / where).mkdir(parents=True, exist_ok=True)
+    git = Git(Path(repo.directory) / where)
+    git_paths(git, "HEAD")
+    assert git.prefix() == prefix
+    assert len(git_calls) == 1
+
+
+def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
+    repo.prefix()
+    git_paths(repo, "HEAD")
+    assert "--show-prefix" not in git_calls[-1]
+
+
+def test_git_paths_refuses_an_answer_a_line_short() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
+    with pytest.raises(ValueError):
+        git_paths(git, "HEAD")
+
+
+def test_git_paths_refuses_an_empty_answer() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse", "--show-prefix"], stdout="\n")
+    git.prefix()
+    git.respond(["rev-parse", "--path-format=absolute"])  # nothing
+    with pytest.raises(ValueError):
+        git_paths(git, "HEAD")

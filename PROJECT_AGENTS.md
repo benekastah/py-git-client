@@ -12,6 +12,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
+- `src/git_client/snapshot.py`: `RefSnapshot`, and which commands may change refs, which
+  `ReadOnlyGit` (and `FakeGit`) count as each ends.
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
   git config and isolation, the real git, repository templates, fixtures (`git_calls`,
   `fresh_find_git`, `outside_any_repository`), and `FakeGit`. It may import pytest; nothing
@@ -24,6 +26,9 @@ the shape of the code or a rule here changes.
 
 ## Rules for this project
 
+- **In rapid development**: bundle related changes into PRs worth a CI run (see AGENTS.md).
+  Remove this rule, under this name, once others depend on a release and most changes are
+  fixes.
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
@@ -44,8 +49,9 @@ the shape of the code or a rule here changes.
   version adds that version's section.
 - **Every git process starts through `ReadOnlyGit`** (`process`, or `popen` for one that
   answers requests; `Git` inherits both), so the way git is started stays the quickest each
-  system allows, a ReadOnlyGit refuses what could write, and a client whose `stopping` says
-  so starts nothing (`FakeGit` and `git_calls` replace both, so they ask it too). Never pass
+  system allows, a ReadOnlyGit refuses what could write, a client whose `stopping` says
+  so starts nothing, and a command that may change refs is counted for `RefSnapshot`
+  (`FakeGit` and `git_calls` replace both, so they ask and count too). Never pass
   a working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library

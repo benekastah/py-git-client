@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, git_common_dir
+from git_client import Git, git_common_dir, git_dir
 
 # The repo_from fixture's type (see conftest.py).
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
@@ -129,3 +129,54 @@ def test_git_common_dir_is_none_for_a_linked_worktree_whose_head_is_gone(
 
     # As git, which says the .git file doesn't point to a valid repository.
     assert git_common_dir(linked) is None
+
+
+def git_dir_git_says(git: Git) -> Path:
+    """The client's own git directory, as git itself finds it."""
+    output = git.run_bytes("rev-parse", "--absolute-git-dir")
+    return Path(os.fsdecode(output.removesuffix(b"\n"))).resolve()
+
+
+def test_git_dir_of_a_checkout_and_a_git_directory(repo: Git, tmp_path: Path) -> None:
+    top = Path(repo.directory)
+    bare = tmp_path / "bare.git"
+    repo.run("clone", "--quiet", "--bare", repo.directory, str(bare))
+
+    assert git_dir(top) == (top / ".git").resolve() == git_dir_git_says(repo)
+    assert git_dir(top / ".git") == (top / ".git").resolve()
+    assert git_dir(bare) == bare.resolve() == git_dir_git_says(Git(bare))
+
+
+def test_git_dir_of_a_linked_worktree_is_its_own(repo: Git, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    repo.run("worktree", "add", "--quiet", str(linked))
+
+    own = git_dir_git_says(Git(linked))
+    assert own != git_common_dir(linked)
+    assert git_dir(linked) == own
+    assert git_dir(own) == own
+
+
+def test_git_dir_of_a_submodule(repo_from: RepoFrom) -> None:
+    repo = repo_from("submodule", add_submodule)
+    mod = Path(repo.directory) / "mod"
+
+    assert git_dir(mod) == git_dir_git_says(Git(mod))
+
+
+def test_git_dir_is_none_where_git_common_dir_is(repo: Git, tmp_path: Path) -> None:
+    sub = Path(repo.directory) / "sub"
+    sub.mkdir()
+    (tmp_path / ".git").write_bytes(b"gitdir: no-such-directory\n")
+
+    assert git_dir(sub) is None
+    assert git_dir(tmp_path) is None
+    assert git_dir(tmp_path / "no-such-directory") is None
+
+
+def test_git_dir_of_a_checkout_with_a_separate_git_directory(repo: Git, tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    separate = tmp_path / "separate"
+    repo.run("init", "--quiet", "--separate-git-dir", str(separate), str(checkout))
+
+    assert git_dir(checkout) == separate.resolve() == git_dir_git_says(Git(checkout))

@@ -14,7 +14,7 @@ from git_client.batch import (
     refs,
     update_refs,
 )
-from git_client.cat_file import CatFile, ObjectInfo
+from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
     CLOSE_FDS,
@@ -32,6 +32,7 @@ from git_client.client import (
 from git_client.errors import (
     ConfigLockedError,
     ConflictError,
+    CorruptObjectError,
     GitError,
     GitTimeoutError,
     NotARepositoryError,
@@ -39,8 +40,10 @@ from git_client.errors import (
     PushRejectedError,
     RemoteError,
     UnknownRevisionError,
+    WrongTypeError,
 )
-from git_client.paths import git_common_dir
+from git_client.paths import git_common_dir, git_dir
+from git_client.snapshot import RefSnapshot
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -49,6 +52,7 @@ __all__ = [
     "CatFile",
     "ConfigLockedError",
     "ConflictError",
+    "CorruptObjectError",
     "EnvValue",
     "Git",
     "GitError",
@@ -56,20 +60,24 @@ __all__ = [
     "NotARepositoryError",
     "NotStartedError",
     "ObjectInfo",
+    "ObjectType",
     "PushRejectedError",
     "ReadOnlyError",
     "ReadOnlyGit",
     "Ref",
+    "RefSnapshot",
     "RefUpdate",
     "RemoteError",
     "Timeout",
     "UnknownRevisionError",
+    "WrongTypeError",
     "config",
     "config_key",
     "decode",
     "encode",
     "find_git",
     "git_common_dir",
+    "git_dir",
     "git_paths",
     "hash_blob_at",
     "hash_blobs",

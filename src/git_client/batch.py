@@ -2,11 +2,22 @@
 
 import os
 import tempfile
+import weakref
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from git_client.client import Arg, EnvValue, Git, ReadOnlyGit, decode, encode, error_from
+from git_client.client import (
+    Arg,
+    EnvValue,
+    Git,
+    ReadOnlyGit,
+    decode,
+    encode,
+    error_from,
+    location,
+    prefixes,
+)
 from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -103,6 +114,12 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
+# Where git keeps each name, per client and `location`.
+_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[object, str], Path]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
     "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
@@ -111,14 +128,41 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     rest (refs, objects, config); and where config or the environment move it (e.g.
     core.hooksPath, GIT_OBJECT_DIRECTORY). Raises ValueError for a name with a line ending,
     whose path couldn't be told from the next one's, and GitError if git fails (e.g.
-    NotARepositoryError)."""
+    NotARepositoryError).
+
+    Each name is asked of git once per client and location (its directory and
+    `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
+    may set, moves them. Nothing else `--git-path` answers depends on config. The same
+    process tells the client's `prefix()`, if it isn't known yet."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths can't take a name with a line ending: {names}")
-    args = [arg for name in names for arg in ("--git-path", name)]
-    output = git.run_bytes("rev-parse", "--path-format=absolute", *args)
-    return [Path(os.fsdecode(line)) for line in output.splitlines()]
+    known = _git_paths.setdefault(git, {})
+    where = location(git)
+    new = [
+        name
+        for name in dict.fromkeys(names)
+        if (where, name) not in known or _moved_by_config(name)
+    ]
+    if new:
+        # The prefix too, if it's not known: it costs no process of its own here.
+        known_prefixes = prefixes.setdefault(git, {})
+        prefix = [] if where in known_prefixes else ["--show-prefix"]
+        args = [arg for name in new for arg in ("--git-path", name)]
+        output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
+        # Not splitlines(): the prefix's line can be empty, and a path can't hold a line ending.
+        lines = output.removesuffix(b"\n").split(b"\n") if output else []
+        if prefix:
+            known_prefixes[where] = decode(lines.pop(0))
+        for name, line in zip(new, lines, strict=True):
+            known[where, name] = Path(os.fsdecode(line))
+    return [known[where, name] for name in names]
+
+
+def _moved_by_config(name: str) -> bool:
+    """Whether config (core.hooksPath) can move where git keeps name."""
+    return name == "hooks" or name.startswith("hooks/")
 
 
 def patch_ids(
@@ -203,7 +247,9 @@ def hash_blobs(git: Git, contents: Sequence[bytes]) -> list[str]:
         ).split()
 
 
-def hash_blob_at(git: Git, path: Arg, content: bytes, *, write: bool = False) -> str:
+def hash_blob_at(
+    git: Git, path: Arg, content: bytes, *, write: bool = False, paths_from_top: bool = False
+) -> str:
     """The id of content as `git add` would store it at `path`, whether or not a file is
     there: through the filters that path's attributes and the config give it, e.g. a clean
     filter (such as git-lfs's), or line-ending conversion (`text`, `eol`, core.autocrlf),
@@ -211,8 +257,13 @@ def hash_blob_at(git: Git, path: Arg, content: bytes, *, write: bool = False) ->
     object database too. One `git hash-object --path`, which runs the filter's program, if
     any. Raises GitError if git fails (e.g. a required filter does).
 
-    `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"): give a
-    path git printed (from the top of the worktree) to a client at the top."""
+    `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
+    `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
+    (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
+    top (`git.prefix()`'s, asked of git once per client) and down to the path, taking it as it
+    is, with no magic."""
+    if paths_from_top:
+        path = b"../" * git.prefix().count("/") + os.fsencode(path)
     output = git.run_bytes(
         "hash-object", *(["-w"] if write else []), "--path", path, "--stdin", input=content
     )

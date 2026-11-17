@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal
 
@@ -20,6 +21,7 @@ from git_client.errors import (
     NotStartedError,
     error_for,
 )
+from git_client.snapshot import ref_changes
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -419,6 +421,23 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
 
 
+type Location = tuple[str, tuple[tuple[str, EnvValue], ...]]
+
+
+def location(git: ReadOnlyGit) -> Location:
+    """What decides where git finds `git`'s repository: its directory, as an absolute path
+    (so a change of the process's directory counts for a relative one), and its `env` (e.g.
+    GIT_DIR); not the process's own environment, which a tool sets before it makes clients.
+    The key under which a client's answers about where things are are kept, so reassigning
+    `directory` or changing `env` asks git again."""
+    return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
+
+
+prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
+"""Each client's `prefix()`, per location: kept here rather than on the client, so that
+`git_paths` can learn it from the `rev-parse` it runs anyway."""
+
+
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
     each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
@@ -471,7 +490,11 @@ class ReadOnlyGit:
     winds down fast, whichever thread runs them. It doesn't stop a git that's already running: a
     command runs on until it finishes or times out (or the thread running it is
     interrupted), and a CatFile's process keeps answering until it's closed, though one
-    that has to start (again) raises.
+    that has to start (again) raises. `object_id_length` (40 for SHA-1, 64 for SHA-256), if
+    given, is the repository's, which `object_id_length()` then returns without starting git:
+    for a tool that already knows it, e.g. from the length of an id it has read. It's trusted,
+    not checked (that would start the process it saves): a wrong one makes what reads ids by
+    it (e.g. `patch_ids`) fail.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
     is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
@@ -510,31 +533,47 @@ class ReadOnlyGit:
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
+        object_id_length: int | None = None,
     ) -> None:
+        if object_id_length not in (None, 40, 64):
+            raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
         self.stopping = stopping
-        self._object_id_length: int | None = None
+        self._object_id_length = object_id_length
+        self._object_id_lengths: dict[Location, int] = {}
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
-        SHA-256. Read from git the first time it's asked; a repository's can't change."""
-        if self._object_id_length is None:
+        SHA-256: the client's `object_id_length` if given, else asked of git once per
+        `location` (the directory and `env`, which a tool may change) and remembered."""
+        if self._object_id_length is not None:
+            return self._object_id_length
+        key = location(self)
+        if key not in self._object_id_lengths:
             sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
-            self._object_id_length = 64 if sha256 else 40
-        return self._object_id_length
+            self._object_id_lengths[key] = 64 if sha256 else 40
+        return self._object_id_lengths[key]
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
         after each directory (e.g. "src/app/"), as `git rev-parse --show-prefix` gives it: ""
         at the top, and outside a worktree (e.g. in a bare repository or a git directory).
         Put it before a path from the directory to name that path from the top. Raises
-        GitError if git fails (e.g. NotARepositoryError)."""
-        # Not run's, which would strip a directory's leading space.
-        output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
-        return decode(output.removesuffix(b"\n"))
+        GitError if git fails (e.g. NotARepositoryError).
+
+        Asked of git once per `location` (the directory and `env`, which a tool may change)
+        and remembered, so a repository moved or turned into another while the client keeps
+        its directory isn't noticed."""
+        known = prefixes.setdefault(self, {})
+        key = location(self)
+        if key not in known:
+            # Not run's, which would strip a directory's leading space.
+            output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
+            known[key] = decode(output.removesuffix(b"\n"))
+        return known[key]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
@@ -598,33 +637,39 @@ class ReadOnlyGit:
         before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the
         user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
         says so. Every git process but `popen`'s starts here, so a subclass can override this
-        to change how each runs."""
+        to change how each runs, calling `super().process`: once git ends, it counts one that
+        may have changed refs for RefSnapshot, whether it succeeded or not, and an override
+        that starts git itself leaves RefSnapshot keeping what such a command changed."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
         own_group = _own_process_group(seconds)
-        with subprocess.Popen(
-            command,
-            stdin=None if input is None else subprocess.PIPE,
-            stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
-            stderr=subprocess.PIPE if capture_output else None,
-            env=self.environment(env, english=capture_output),
-            close_fds=CLOSE_FDS,
-            process_group=0 if own_group else None,
-        ) as process:
-            try:
-                output, errors = process.communicate(input, timeout=seconds)
-            except subprocess.TimeoutExpired:
-                _stop(process, own_group)
-                output, errors = _remaining_output(process)
-                raise GitTimeoutError(
-                    args, None, decode(errors or b""), decode(output or b"")
-                ) from None
-            except BaseException:  # e.g. KeyboardInterrupt
-                _stop(process, own_group)
-                _let_go_of_output(process)
-                raise
-        return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
+        try:
+            with subprocess.Popen(
+                command,
+                stdin=None if input is None else subprocess.PIPE,
+                stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
+                stderr=subprocess.PIPE if capture_output else None,
+                env=self.environment(env, english=capture_output),
+                close_fds=CLOSE_FDS,
+                process_group=0 if own_group else None,
+            ) as process:
+                try:
+                    output, errors = process.communicate(input, timeout=seconds)
+                except subprocess.TimeoutExpired:
+                    _stop(process, own_group)
+                    output, errors = _remaining_output(process)
+                    raise GitTimeoutError(
+                        args, None, decode(errors or b""), decode(output or b"")
+                    ) from None
+                except BaseException:  # e.g. KeyboardInterrupt
+                    _stop(process, own_group)
+                    _let_go_of_output(process)
+                    raise
+            return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
+        finally:
+            # Whether git succeeded or not: e.g. a rebase that stops on a conflict has moved HEAD.
+            ref_changes.ran(args)
 
     def popen(
         self,
@@ -641,6 +686,8 @@ class ReadOnlyGit:
         there."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
+        # When it starts: when it ends isn't known here (see RefSnapshot).
+        ref_changes.ran(args)
         return subprocess.Popen(
             command,
             stdin=subprocess.PIPE,

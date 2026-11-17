@@ -39,6 +39,7 @@ from git_client.client import (
     find_git,
     refuse_if_stopping,
 )
+from git_client.snapshot import ref_changes
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -499,6 +500,7 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
         stopping: Callable[[], bool] | None = None,
+        object_id_length: int | None = None,
     ) -> None:
         super().__init__(
             directory,
@@ -507,6 +509,7 @@ class FakeGit(Git):
             env=env,
             timeout=timeout,
             stopping=stopping,
+            object_id_length=object_id_length,
         )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
@@ -545,6 +548,8 @@ class FakeGit(Git):
         refuse_if_stopping(self, args)
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
+        # As Git counts it, so a RefSnapshot is read again after a fake command too.
+        ref_changes.ran(args)
         for prefix, completed in self._responses:
             if command[: len(prefix)] == prefix:
                 return completed

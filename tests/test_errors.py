@@ -13,12 +13,14 @@ import pytest
 from git_client import (
     ConfigLockedError,
     ConflictError,
+    CorruptObjectError,
     Git,
     GitError,
     NotARepositoryError,
     PushRejectedError,
     RemoteError,
     UnknownRevisionError,
+    WrongTypeError,
 )
 
 
@@ -94,12 +96,25 @@ def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> N
         ("merge", "HEAD^{tree}"),
     ],
 )
-def test_a_name_of_the_wrong_type_is_another_failure(repo: Git, args: tuple[str, ...]) -> None:
+def test_a_name_of_the_wrong_type(repo: Git, args: tuple[str, ...]) -> None:
     # "object <id> is a tree, not a commit", then what git says of a name that names nothing.
-    with pytest.raises(GitError) as raised:
+    with pytest.raises(WrongTypeError) as raised:
         repo.run(*args)
 
-    assert type(raised.value) is GitError
+    assert (raised.value.expected, raised.value.found) == ("commit", "tree")
+
+
+def test_a_wrong_type_git_doesnt_name_has_no_types() -> None:
+    # A tool's own, say: it has nothing of git's to read them from.
+    error = WrongTypeError(["log"], 1, "not a commit")
+
+    assert (error.expected, error.found) == (None, None)
+
+
+def test_a_corrupt_object(damaged_repo: Git) -> None:
+    # "fatal: loose object <id> (stored in <path>) is corrupt", or "packed object".
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.run("rev-parse", "--verify", "main^{tree}")
 
 
 def test_a_locked_config_file(repo: Git) -> None:

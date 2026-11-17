@@ -19,8 +19,8 @@ what git-stack, git-recommit and move-forward share for that:
   (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
-- **No process at all** to find a checkout's common git directory (`git_common_dir`), read
-  from its `.git` file or directory.
+- **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
+  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory.
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`).
@@ -39,10 +39,12 @@ or `pip install git+https://github.com/benekastah/py-git-client`.
 from git_client import (
     CatFile,
     Git,
+    ObjectType,
     RefUpdate,
     config,
     config_key,
     git_common_dir,
+    git_dir,
     git_paths,
     hash_blob_at,
     hash_blobs,
@@ -64,7 +66,8 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 # names nothing: True for exit 0, False for any other
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
-git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top
+git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
+# asked of git once per client (and directory), as are git_paths and object_id_length()
 git.write_config("branch.a.description", "x")  # git config, tried again while locked
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised
@@ -75,7 +78,8 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:
         kind, content = cat_file.read(readme)
-    _, tree = cat_file.read(upstream, "tree")  # its tree; GitError if it has none
+    wanted: ObjectType = "tree"  # or "blob", "commit", "tag"
+    _, tree = cat_file.read(upstream, wanted)  # its tree; WrongTypeError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
 push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
@@ -94,12 +98,14 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).
 common = git_common_dir("path/to/repo")
+own = git_dir("path/to/repo")  # its own: a linked worktree's HEAD, index and rebase state
 
 # Blobs: as they are (no filters or line-ending conversion), written, with one process...
 [raw] = hash_blobs(git, [b"one\r\n"])
 # ...or as `git add` would store one at a path (its clean filter, `text`, core.autocrlf), and
 # written only if asked.
 cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
+# From a subdirectory, for a path as git reports it (from the top): paths_from_top=True.
 
 # A three-way merge of contents, writing nothing to the repository: the result, with conflict
 # markers, and how many conflicts it has (at most 127). GitError if git can't merge them.
@@ -169,6 +175,43 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
+### Keeping what refs say
+
+A tool that asks about the same few refs over and over can read them once with a
+`RefSnapshot`, which keeps what its function read until a command that may change a ref
+(HEAD included) or a branch's upstream runs through any `Git` in the process, and reads it
+again when next asked:
+
+```python
+from git_client import Git, RefSnapshot, refs
+
+git = Git("path/to/repo")
+branches = RefSnapshot(lambda: refs(git, "refs/heads/"))
+branches.get()["refs/heads/main"].upstream  # one git for-each-ref...
+branches.get()["refs/heads/a"].object  # ...for both
+git.write_config("branch.a.myToolParent", "main")  # a branch's own setting: kept
+git.run("branch", "c")  # may change refs: read again when next asked
+reflogs = RefSnapshot(dict[str, list[str]])  # answers found one at a time, forgotten together
+known = reflogs.get()
+if "a" not in known:
+    known["a"] = git.run("log", "-g", "--format=%H", "refs/heads/a").split()
+```
+
+Only commands known not to change refs keep it: those a `ReadOnlyGit` runs; those that write
+only objects, the index or the worktree (`diff`, `merge-tree`, `hash-object`, `read-tree`,
+`update-index`, `apply`, `commit-tree`, ...); `ls-remote`; the reading forms of `branch`
+(`--show-current`), `symbolic-ref`, `remote` and `worktree`; and a `git config` that reads,
+or writes one key, `branch.<name>.<setting>`, that isn't the branch's `remote`, `merge` or
+`pushRemote`. Anything else may, an alias or a command that failed included (with what it
+ran, e.g. its hooks), and is counted once it ends; a long-lived process (`popen`), when it
+starts. `FakeGit`'s commands are counted too.
+
+It doesn't see changes made any other way: by another process (the user, another tool, a
+git the tool starts itself), or by a long-lived process after it starts. So keep one for no
+longer than one of the tool's operations (under its lock, if it has one), and make a new one
+to read afresh. `get` can be called from several threads; what a read that a change
+overlapped gave isn't kept.
+
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
@@ -217,6 +260,8 @@ said and raises a subclass:
 | --- | --- |
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
+| `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
+| `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
