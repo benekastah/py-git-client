@@ -178,6 +178,9 @@ def test_what_writes_from_a_reading_command_a_read_only_client_refuses(
         ("remote", "add", "upstream", "url"),
         ("remote", "set-url", "origin", "url"),
         ("ls-remote", "."),  # may run credential helpers, which store what they're told
+        ("merge-tree", "--write-tree", "a", "b"),  # writes the merge's objects
+        # Writes a virtual merge base's objects for a merge with several merge bases.
+        ("merge-tree", "--write-tree", "--quiet", "a", "b"),
         # Each writes a textconv's cache (see test_a_read_only_client_caches_no_textconv).
         ("cat-file", "--textconv", "HEAD:a"),
         ("cat-file", "--batch", "--textc"),

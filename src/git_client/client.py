@@ -486,7 +486,9 @@ class ReadOnlyGit:
     `--ext-diff` (which runs a program), and `--submodule=diff` (which runs a `git diff` in
     each submodule, which does all of that). Not `diff`, which writes the index when it compares
     the worktree: `diff-index`, `diff-files` and `diff-tree` don't. Not `range-diff`, whose
-    log runs a textconv whatever it's told. Not `ls-remote`, which runs ssh or credential
+    log runs a textconv whatever it's told. Not `merge-tree`, which writes the merge's
+    objects; with `--quiet` (git 2.50 and newer), still those of the merge it makes of
+    several merge bases. Not `ls-remote`, which runs ssh or credential
     helpers, which may store what they're given. Each argument is checked, wherever it is
     (after `--` too), and config's action must come first. `env` (the client's or a
     command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ, and which index and paths

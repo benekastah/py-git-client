@@ -260,7 +260,8 @@ gives values (`--global`, `-f <file>`, `--type=bool`, `--default <value>`, `-z`,
 (`-v`), `remote get-url` and `worktree list`. It doesn't run `diff`, which writes the index
 when it compares the worktree (`diff-index`, `diff-files` and `diff-tree` don't; `patch_ids`
 runs a diff of two revisions as `diff-tree -p`), `range-diff`, whose log runs a textconv
-whatever it's told, nor `ls-remote`, which runs ssh or credential helpers that may store what
+whatever it's told, `merge-tree`, which writes the merge's objects (with `--quiet`, from git
+2.50, still those of the merge it makes of several merge bases), nor `ls-remote`, which runs ssh or credential helpers that may store what
 they're given. It doesn't take options that write: `--output`, describe's `--dirty` and
 `--broken`, `--textconv` and status's `-v` (a textconv's cache), `--ext-diff`, and
 `--submodule=diff` (which runs a `git diff` in each submodule, which does all of that). It
