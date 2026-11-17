@@ -355,9 +355,10 @@ The messages from git that the library reads (to choose a `GitError`, or to see 
 has no identity) are in `src/git_client/messages/`, one file per language: `en.toml` is
 English, and says what each kind of message is. To have the library read git in another
 language, add a file for it (e.g. `de.toml`) giving, for any of those kinds, the messages git
-prints in that language, as regular expressions. Every language's file is tried. Each
-message needs a test that makes real git print it in that language, skipped where git's
-translation isn't installed.
+prints in that language, as regular expressions; `language`, which shows git speaks it (e.g.
+its `fatal: `), comes first, since no failure is read without it. Every language's file is
+tried. Each message needs a test that makes real git print it in that language, skipped
+where git's translation isn't installed.
 
 ### Releasing
 

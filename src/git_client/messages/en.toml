@@ -3,6 +3,13 @@
 # Write each in '...', as it is; one with a ' in it in "...", with each \ doubled.
 # Each is a message a test makes real git print (see tests/test_errors.py and test_client.py).
 
+# Lines that show git speaks this language: how it starts a line of a failure's message,
+# which it always translates, and a message of its own with no such start. A failure on
+# stderr is read only if a line shows a language with a file: in another, some messages git
+# leaves untranslated would match without the translated line that qualifies them (e.g.
+# wrong_type's, beside "Not a valid commit name").
+language = ['^fatal: ', '^error: ', ' - not something we can merge$']
+
 # A rebase, merge or cherry-pick stopped on a conflict (on stdout).
 conflict = ['^CONFLICT \(']
 
