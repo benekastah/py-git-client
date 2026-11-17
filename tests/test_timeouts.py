@@ -16,7 +16,11 @@ from pathlib import Path
 import pytest
 
 from git_client import Git, GitTimeoutError
-from git_client.client import _stop  # pyright: ignore[reportPrivateUsage]
+from git_client.client import (
+    _has_terminal,  # pyright: ignore[reportPrivateUsage]
+    _own_process_group,  # pyright: ignore[reportPrivateUsage]
+    _stop,  # pyright: ignore[reportPrivateUsage]
+)
 
 NO_TERMINAL_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32",
@@ -382,3 +386,22 @@ def test_a_second_interrupt_while_git_cleans_up_still_kills_it(
         _stop(process, False, interrupted=True)
 
     assert killed
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no fork, sessions or groups")
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_whether_there_is_a_terminal_is_asked_again_after_a_fork_or_a_new_session() -> None:
+    def probes() -> int:
+        _own_process_group(1, True)
+        return _has_terminal.cache_info().misses
+
+    first = probes()
+    assert probes() == first  # asked once
+    pid = os.fork()
+    if pid == 0:  # the child: exits at once, with no cleanup of pytest's
+        forked = probes()
+        os.setsid()
+        os._exit(0 if (forked, probes()) == (first + 1, first + 2) else 1)
+    _, status = os.waitpid(pid, 0)
+
+    assert os.waitstatus_to_exitcode(status) == 0
