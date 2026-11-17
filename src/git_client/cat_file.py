@@ -75,6 +75,10 @@ class ObjectInfo:
     warnings: tuple[str, ...] = ()
 
 
+type _Stopper = weakref.finalize[[subprocess.Popen[bytes], _Output, IO[bytes]], CatFile]
+"""What stops a CatFile's process (see _end)."""
+
+
 class CatFile:
     """Resolves names and reads objects through one `git cat-file --batch-command`, started
     when first needed and kept until `close` (or the end of a `with` block).
@@ -109,9 +113,7 @@ class CatFile:
         # Where its stderr goes (see _request).
         self._stderr: IO[bytes] | None = None
         # Stops the process when this is freed, or as it's asked to (see _stop).
-        self._stopper: (
-            weakref.finalize[[subprocess.Popen[bytes], _Output, IO[bytes]], CatFile] | None
-        ) = None
+        self._stopper: _Stopper | None = None
         self._lock = threading.Lock()
         # The client's `location` when the process started, where its ids are from, until its
         # first id has told the client its object id length there.
@@ -245,19 +247,23 @@ class CatFile:
                 # branch and a tag). _end closes it, with the process; or here, if the process
                 # can't start.
                 file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
+                process = None
                 try:
                     self._where = location(self.git)
-                    self._process = self.git.popen(*_COMMAND, stderr=file)
+                    process = self.git.popen(*_COMMAND, stderr=file)
+                    assert process.stdout is not None
+                    output = _Output(process.stdout)
+                    stopper: _Stopper = weakref.finalize(self, _end, process, output, file)
                 except BaseException:
+                    if process is not None:
+                        _abandon(process)
                     file.close()
                     raise
-                assert self._process.stdout is not None
-                self._output = _Output(self._process.stdout)
-                self._stderr = file
-                self._stopper = weakref.finalize(self, _end, self._process, self._output, file)
                 # Not as Python exits, when a daemon thread may be in a request: the process
                 # gets EOF on its stdin then, and exits by itself.
-                self._stopper.atexit = False
+                stopper.atexit = False
+                self._process, self._output, self._stderr = process, output, file
+                self._stopper = stopper
             elif self._stderr is not None:
                 _empty(self._stderr)  # What it said of earlier requests.
             process, output, stderr = self._process, self._output, self._stderr
@@ -379,6 +385,15 @@ def _failure(name: str, said: str, *, exited: bool) -> GitError:
 
 # How git starts a line that isn't why it failed.
 _NO_REASON = ("warning: ", "hint: ")
+
+
+def _abandon(process: subprocess.Popen[bytes]) -> None:
+    """Kill a process CatFile couldn't set up to use, and close its pipes."""
+    process.kill()
+    for pipe in (process.stdin, process.stdout):
+        if pipe is not None:
+            pipe.close()
+    process.wait()
 
 
 def _end(process: subprocess.Popen[bytes], output: _Output, stderr: IO[bytes]) -> None:

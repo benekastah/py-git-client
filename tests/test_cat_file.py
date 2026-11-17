@@ -326,6 +326,22 @@ def test_a_read_interrupted_before_its_content_leaves_none_for_the_next(
         assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
 
 
+def test_a_process_whose_setting_up_fails_is_stopped(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = StartsKeepingGit(repo.directory)
+
+    def cant_read(pipe: IO[bytes]) -> None:
+        raise RuntimeError("can't start new thread")  # as Windows' reading thread can
+
+    with CatFile(git) as cat_file:
+        with monkeypatch.context() as patched, pytest.raises(RuntimeError):
+            patched.setattr("git_client.cat_file._Output", cant_read)
+            cat_file.resolve("HEAD")
+        assert git.started[0].wait(10) is not None
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
+
+
 class KeepsItsCatFile(StartsKeepingGit):
     """A client with a CatFile of its own, which holds it weakly."""
 
