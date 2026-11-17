@@ -135,6 +135,27 @@ def test_info_gives_what_git_warned_of_the_name(
     assert branch.warnings == ()
 
 
+def warn_as_git_starts(git: Git) -> None:
+    """Set a config key git warns of as it starts, as deprecated."""
+    git.run("config", "core.fsyncObjectFiles", "true")
+
+
+@pytest.mark.parametrize("env", [{}, {"GIT_TRACE": "2"}], ids=["config", "trace"])
+def test_what_git_says_as_it_starts_is_of_no_name(
+    repo_from: Callable[[str, Callable[[Git], None]], Git], env: dict[str, str]
+) -> None:
+    repo = repo_from("warns-as-git-starts", warn_as_git_starts)
+    git = Git(repo.directory, env=env)
+
+    with CatFile(git) as cat_file:
+        head = cat_file.info("HEAD")
+    with CatFile(git) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("nope")
+
+    assert head is not None and head.warnings == ()
+    assert (raised.value.stderr, raised.value.reason) == ("fatal: bad revision 'nope'", "")
+
+
 def test_verify_gives_only_what_git_said_of_that_name(
     repo_from: Callable[[str, Callable[[Git], None]], Git],
 ) -> None:
@@ -565,9 +586,9 @@ class GitThatDiesMidObject(Git):
         stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
         script = (
-            "import sys; sys.stdin.readline(); sys.stdin.readline();"
-            " sys.stdout.write('0' * 40 + ' missing\\n');"
-            " sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
+            "import sys; sys.stdin.readline();"
+            " sys.stdout.write('0' * 40 + ' missing\\n'); sys.stdout.flush();"
+            " sys.stdin.readline(); sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
         )
         return subprocess.Popen(
             [sys.executable, "-c", script, "1" * 40],
@@ -601,8 +622,9 @@ class GitThatAnswersOnce(Git):
     ) -> subprocess.Popen[bytes]:
         script = (
             "import os, sys, time\n"
-            "sys.stdin.readline(); sys.stdin.readline()\n"
-            "sys.stdout.write(2 * (sys.argv[1] + ' commit 1\\n')); sys.stdout.flush()\n" + self.then
+            "for _ in range(2):\n"
+            "    sys.stdin.readline()\n"
+            "    sys.stdout.write(sys.argv[1] + ' commit 1\\n'); sys.stdout.flush()\n" + self.then
         )
         self.started.append(
             subprocess.Popen(

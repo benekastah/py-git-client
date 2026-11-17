@@ -55,10 +55,12 @@ ObjectType = Literal["blob", "commit", "tag", "tree"]
 _TYPES: tuple[ObjectType, ...] = get_args(ObjectType)
 
 _PROBE = b"info " + b"0" * 40 + b"\n"
-"""The first request to each new process, sent with the caller's: a name git answers rather
-than exits on (no object, or the start of a SHA-256 one's id). A process that answers it got
-through reading the repository, so exiting at the next request means it exited on that
-request's name, which needs no `rev-parse` to tell it from what's wrong with the repository."""
+"""The first request to each new process, answered before the caller's is sent: a name git
+answers rather than exits on (no object, or the start of a SHA-256 one's id). A process that
+answers it got through reading the repository, so exiting at the next request means it exited
+on that request's name, which needs no `rev-parse` to tell it from what's wrong with the
+repository. What it said by then (e.g. a warning of deprecated config, or GIT_TRACE's lines)
+is of no name, so it's dropped."""
 
 
 @dataclass(frozen=True)
@@ -227,12 +229,12 @@ class CatFile:
         """Send command (a line, about `name`), and return the first line of the reply (empty
         if git exits rather than answer, as it does on some names that name nothing: the next
         request starts another process), and what git said of the request on stderr: its
-        reason, if that's no object's header, else its warnings. A process that stopped between requests (killed, say) is
-        started again, for one more try. Raises CorruptObjectError if git found an object it
-        read for the request damaged, and GitError if a new process exits before it has
-        answered anything for another reason: a usage error, as a git older than 2.36 gives at
-        --batch-command, or what's wrong with the repository (e.g. NotARepositoryError). Hold
-        the lock."""
+        reason, if that's no object's header, else its warnings. A process that stopped
+        between requests (killed, say) is started again, for one more try. Raises
+        CorruptObjectError if git found an object it read for the request damaged, and
+        GitError if a new process exits before it has answered anything for another reason: a
+        usage error, as a git older than 2.36 gives at --batch-command, or what's wrong with
+        the repository (e.g. NotARepositoryError). Hold the lock."""
         if self._unanswered:
             self._kill()
         while True:
@@ -256,10 +258,8 @@ class CatFile:
                 # Not as Python exits, when a daemon thread may be in a request: the process
                 # gets EOF on its stdin then, and exits by itself.
                 self._stopper.atexit = False
-            elif self._stderr is not None and os.fstat(self._stderr.fileno()).st_size:
-                # What it said of earlier requests.
-                self._stderr.truncate(0)
-                self._stderr.seek(0)
+            elif self._stderr is not None:
+                _empty(self._stderr)  # What it said of earlier requests.
             process, output, stderr = self._process, self._output, self._stderr
             assert output is not None and stderr is not None
             assert process.stdin is not None
@@ -268,11 +268,15 @@ class CatFile:
             reply = b""
             self._unanswered = True
             with self._exchange(name), contextlib.suppress(OSError):
-                process.stdin.write(_PROBE + command if new else command)
-                process.stdin.flush()
                 if new:
+                    process.stdin.write(_PROBE)
+                    process.stdin.flush()
                     answered = bool(output.readline(deadline))
+                    if answered:
+                        _empty(stderr)
                 if answered:
+                    process.stdin.write(command)
+                    process.stdin.flush()
                     reply = output.readline(deadline)
             if (header := object_header(reply)) is not None:
                 if self._where is not None and (git := self._git()) is not None:
@@ -332,6 +336,13 @@ class CatFile:
             self._stopper()
         self._process = self._output = self._stderr = self._stopper = None
         self._unanswered = False
+
+
+def _empty(stderr: IO[bytes]) -> None:
+    """Empty cat-file's stderr file, if it has anything."""
+    if os.fstat(stderr.fileno()).st_size:
+        stderr.truncate(0)
+        stderr.seek(0)
 
 
 def _said(stderr: IO[bytes]) -> str:
