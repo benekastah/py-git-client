@@ -113,8 +113,8 @@ def encode(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
-# A surrogate: decode's, for a byte that isn't UTF-8, or any other.
-_SURROGATE = re.compile("[\ud800-\udfff]")
+# The surrogates that don't stand for a byte decode couldn't read (e.g. from json.loads).
+_NOT_A_BYTE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
 
 
 def printable(text: str) -> str:
@@ -123,10 +123,7 @@ def printable(text: str) -> str:
     or shows text needs: decode keeps such bytes as surrogates, which can't be written as
     UTF-8 (to a file, a web page, JSON). Only for what's shown or stored: what printable
     gives can't be given back to git for what git gave."""
-    try:
-        return encode(text).decode("utf-8", "replace")
-    except UnicodeEncodeError:
-        return _SURROGATE.sub("\ufffd", text)
+    return encode(_NOT_A_BYTE.sub("\ufffd", text)).decode("utf-8", "replace")
 
 
 OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")

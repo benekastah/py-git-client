@@ -267,6 +267,8 @@ def test_printable_replaces_the_bytes_that_arent_utf8() -> None:
 def test_printable_replaces_any_other_surrogate_too() -> None:
     # Not from decode: e.g. from json.loads('"\\ud800"').
     assert printable("caf\udce9 \ud800") == "caf\ufffd \ufffd"
+    # A truncated sequence is one U+FFFD, as without the other surrogate.
+    assert printable(decode(b"\xf0\x9f") + "\ud800") == "\ufffd\ufffd"
 
 
 def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
