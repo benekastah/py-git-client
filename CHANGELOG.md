@@ -27,6 +27,9 @@ released, says "(unreleased)".
   `stopping=` instead, and catch `NotStartedError` (#37).
 - A tool that keeps a `CatFile` of its own client can make it with `weak=True`, so the two
   make no reference cycle; `CatFile.git` is now read-only (#31).
+- Damage git finds only as it reads a name (e.g. a corrupt object) makes that name resolve
+  to None in `CatFile`, as a name git exits on does, where a new process's first request
+  raised `GitError` (#31).
 
 ### Added
 
