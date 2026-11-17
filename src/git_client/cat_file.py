@@ -340,11 +340,14 @@ class CatFile:
         self._stop()
 
     def _stop(self) -> None:
-        """Stop the process, if one is running. Hold the lock."""
-        if self._stopper is not None:
-            self._stopper()
+        """Stop the process, if one is running. Hold the lock. It lets go of the process
+        first, so that if stopping it is interrupted (e.g. by a second Ctrl-C as it waits for
+        it), the next request starts another."""
+        stopper = self._stopper
         self._process = self._output = self._stderr = self._stopper = None
         self._unanswered = False
+        if stopper is not None:
+            stopper()
 
 
 def _empty(stderr: IO[bytes]) -> None:

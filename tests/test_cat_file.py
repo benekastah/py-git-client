@@ -9,7 +9,7 @@ import tracemalloc
 import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import pytest
 
@@ -25,6 +25,7 @@ from git_client import (
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client import cat_file as cat_file_module
 from git_client.client import object_header
 from git_client.testing import real_git
 
@@ -340,6 +341,25 @@ def test_a_process_whose_setting_up_fails_is_stopped(
             patched.setattr("git_client.cat_file._Output", cant_read)
             cat_file.resolve("HEAD")
         assert git.started[0].wait(10) is not None
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
+
+
+def test_a_stop_interrupted_leaves_the_next_request_another_process(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    end = cat_file_module._end  # pyright: ignore[reportPrivateUsage]
+
+    def interrupted(*args: Any) -> None:
+        """_end, then Ctrl-C (a second one, say, as it waits for the process to exit)."""
+        end(*args)
+        raise KeyboardInterrupt
+
+    with CatFile(repo) as cat_file:
+        with monkeypatch.context() as patched:
+            patched.setattr(cat_file_module, "_end", interrupted)
+            cat_file.resolve("HEAD")
+            with pytest.raises(KeyboardInterrupt):
+                cat_file.close()
         assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
 
 
