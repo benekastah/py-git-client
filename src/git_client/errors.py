@@ -1,10 +1,12 @@
 """The errors git's commands raise: GitError, and a subclass for each failure a tool may
-want to tell from the rest, chosen from what git said (in English: see Git.process)."""
+want to tell from the rest, chosen from what git said (see error_for)."""
 
 import os
 import re
 from collections.abc import Sequence
 from typing import ClassVar, Self
+
+from git_client.messages import SAID
 
 # How much of a command line a GitError's message shows: a long one (thousands of paths, say)
 # would bury what git said.
@@ -95,63 +97,30 @@ class ConflictError(GitError):
     """A rebase, merge or cherry-pick stopped on a conflict."""
 
 
-# What git says (on stderr, but for a conflict: on stdout) for each failure, in the order
-# they're tried: a push to a remote that can't be reached is a RemoteError, say, and one that
-# stops a rebase on a conflict a ConflictError.
+# Which GitError each kind of message git says (see messages/en.toml) raises: on stdout, a
+# conflict; on stderr, the rest, in the order they're tried (a push to a remote that can't be
+# reached is a RemoteError, say).
 _STDOUT_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
-    (ConflictError, re.compile(r"^CONFLICT \(", re.MULTILINE)),
+    (ConflictError, SAID["conflict"]),
 )
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
-    (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
-    (
-        RemoteError,
-        re.compile(
-            "Could not read from remote repository"
-            "|does not appear to be a git repository"
-            # Of a URL (`<scheme>://`): git says the same of a local file it can't read.
-            "|unable to access '[a-zA-Z][a-zA-Z0-9+.-]*://"
-            "|repository '.*' not found"
-        ),
-    ),
-    # Not for another reason the lock file can't be made (e.g. "No such file or directory").
-    (ConfigLockedError, re.compile("could not lock config file .*: File exists$", re.MULTILINE)),
-    # The second is -C's, for a directory that isn't there.
-    (NotARepositoryError, re.compile("not a git repository|cannot change to '")),
-    (
-        UnknownRevisionError,
-        # "ambiguous argument 'x': unknown revision or path not in the working tree", but not
-        # "ambiguous argument 'x': both revision and filename", which names something.
-        re.compile(
-            "unknown revision|bad revision '|Needed a single revision|^fatal: bad object "
-            "|(?i:not a valid object name)|invalid reference: |invalid upstream '"
-            "| - not something we can merge|Failed to resolve '.*' as a valid ref"
-            # Of a full id the repository lacks, as some commands say it.
-            "|Not a valid commit name |Invalid revision range |Does not point to a valid commit '"
-            "| is not a valid object$|Could not parse object '|^fatal: unknown commit ",
-            re.MULTILINE,
-        ),
-    ),
-)
-
-
-# What git says first of a name that names an object of the wrong type (e.g. a tree where it
-# wants a commit), before what it says of a name that names nothing: most commands' words,
-# then merge's.
-_WRONG_TYPE = re.compile(
-    r"^error: object \S+ is a \w+, not an? \w+$"
-    r"|^error: .*: expected \w+ type, but the object dereferences to \w+ type$",
-    re.MULTILINE,
+    (PushRejectedError, SAID["push_rejected"]),
+    (RemoteError, SAID["remote"]),
+    (ConfigLockedError, SAID["config_locked"]),
+    (NotARepositoryError, SAID["not_a_repository"]),
+    (UnknownRevisionError, SAID["unknown_revision"]),
 )
 
 
 def error_for(stderr: str, stdout: str) -> type[GitError]:
-    """The GitError for a command that failed, saying stderr and stdout (in English)."""
+    """The GitError for a command that failed, saying stderr and stdout: a subclass for what
+    git says in a language the library has a file for (see messages), else GitError."""
     for error, says in _STDOUT_SAYS:
         if says.search(stdout):
             return error
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
-            if error is UnknownRevisionError and _WRONG_TYPE.search(stderr):
+            if error is UnknownRevisionError and SAID["wrong_type"].search(stderr):
                 return GitError  # it names something
             return error
     return GitError

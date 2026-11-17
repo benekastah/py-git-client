@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal, TypeAlias
 
 from git_client.errors import GitError, GitTimeoutError, error_for
+from git_client.messages import SAID
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -34,13 +35,6 @@ filesystem (bytes, in its encoding)."""
 
 # git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
 _FATAL = 128
-
-# What `git var` says when no identity is set for the name or email it's asked for.
-_NO_IDENTITY = re.compile(
-    "unable to auto-detect email address"
-    "|no (email|name) was given and auto-detection is disabled"
-    r"|empty ident name \(for <.*>\) not allowed"
-)
 
 
 class ClientTimeout(enum.Enum):
@@ -710,7 +704,7 @@ class ReadOnlyGit:
         if no identity is set for it. Raises GitError for an unknown variable, or another
         failure (e.g. a broken config)."""
         result = self.process("var", name, capture_output=True, timeout=timeout)
-        if result.returncode == _FATAL and _NO_IDENTITY.search(decode(result.stderr)):
+        if result.returncode == _FATAL and SAID["no_identity"].search(decode(result.stderr)):
             return None
         return decode(self._stdout(("var", name), result)).strip()
 

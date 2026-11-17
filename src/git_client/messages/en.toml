@@ -1,0 +1,63 @@
+# What git says in English, for each kind of message the library reads: regular expressions
+# (Python's `re`, matched line by line: ^ and $ are a line's ends), any of which matches.
+# Write each in '...', as it is; one with a ' in it in "...", with each \ doubled.
+# Each is a message a test makes real git print (see tests/test_errors.py and test_client.py).
+
+# A rebase, merge or cherry-pick stopped on a conflict (on stdout).
+conflict = ['^CONFLICT \(']
+
+# The rest are on stderr (errors.py says in which order each GitError is tried).
+push_rejected = ['^ ! \[(remote )?rejected\]']
+
+remote = [
+    'Could not read from remote repository',
+    'does not appear to be a git repository',
+    # Of a URL (`<scheme>://`): git says the same of a local file it can't read.
+    "unable to access '[a-zA-Z][a-zA-Z0-9+.-]*://",
+    "repository '.*' not found",
+]
+
+# Not for another reason the lock file can't be made (e.g. "No such file or directory").
+config_locked = ['could not lock config file .*: File exists$']
+
+not_a_repository = [
+    'not a git repository',
+    # -C's, for a directory that isn't there.
+    "cannot change to '",
+]
+
+# "ambiguous argument 'x': unknown revision or path not in the working tree", but not
+# "ambiguous argument 'x': both revision and filename", which names something.
+unknown_revision = [
+    'unknown revision',
+    "bad revision '",
+    'Needed a single revision',
+    '^fatal: bad object ',
+    '(?i:not a valid object name)',
+    'invalid reference: ',
+    "invalid upstream '",
+    ' - not something we can merge',
+    "Failed to resolve '.*' as a valid ref",
+    # Of a full id the repository lacks, as some commands say it.
+    'Not a valid commit name ',
+    'Invalid revision range ',
+    "Does not point to a valid commit '",
+    ' is not a valid object$',
+    "Could not parse object '",
+    '^fatal: unknown commit ',
+]
+
+# What git says first of a name that names an object of the wrong type (e.g. a tree where it
+# wants a commit), before what it says of a name that names nothing: most commands' words,
+# then merge's.
+wrong_type = [
+    '^error: object \S+ is a \w+, not an? \w+$',
+    '^error: .*: expected \w+ type, but the object dereferences to \w+ type$',
+]
+
+# What `git var` says when no identity is set for the name or email it's asked for.
+no_identity = [
+    'unable to auto-detect email address',
+    'no (email|name) was given and auto-detection is disabled',
+    'empty ident name \(for <.*>\) not allowed',
+]

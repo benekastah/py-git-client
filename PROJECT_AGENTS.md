@@ -9,6 +9,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/client.py`: `ReadOnlyGit`, which runs every git process (only commands that
   read), `Git`, which extends it to run any, and `find_git`.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises.
+- `src/git_client/messages/`: what git says that the library reads, one TOML file per language
+  (`en.toml`), and their loader.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
@@ -45,7 +47,10 @@ the shape of the code or a rule here changes.
   has shown how git answers them.
 - **Errors are the library's own**, never subprocess's: which `GitError` a failure raises is
   read from git's message (in English: commands whose output is read run with `LC_ALL=C`),
-  and each message matched is one a test makes real git print.
+  and each message matched is one a test makes real git print. The messages are in
+  `messages/`, a file per language; a new language's file needs those tests under its locale,
+  skipped where git's translation isn't installed. Every language's file is tried, which is
+  fine for a few; with more than a few, pick the file for git's language instead.
 
 ## CI
 
