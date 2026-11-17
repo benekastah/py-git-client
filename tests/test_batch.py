@@ -290,6 +290,16 @@ def test_patch_ids_takes_paths_from_the_top_as_they_are(repo_from: RepoFrom) -> 
     assert [commit for _, commit in no_paths] == topic
 
 
+def test_patch_ids_takes_paths_from_the_top_case_sensitively(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "Ab")
+    # Which would have "ab" name "Ab" too, were it not overridden.
+    git = Git(repo.directory, env={"GIT_ICASE_PATHSPECS": "1"})
+
+    [lower] = patch_ids(git, [*TOPIC[0], "--", "ab"], paths_from_top=True)
+
+    assert lower == []
+
+
 def test_patch_ids_runs_no_textconv(repo_from: RepoFrom) -> None:
     repo = topic_changing(repo_from, "b.txt")
     expected = patch_ids(repo, *TOPIC)
