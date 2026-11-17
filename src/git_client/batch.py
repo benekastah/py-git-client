@@ -134,7 +134,8 @@ def patch_ids(
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff
     --name-only`), taken as it is, even if it holds `*` or `:`: patch_ids marks each
     `:(top,literal)`, and runs that command with GIT_LITERAL_PATHSPECS=0, which would
-    otherwise take the mark as part of the name.
+    otherwise take the mark as part of the name, and GIT_ICASE_PATHSPECS=0, which would
+    otherwise have a path also match one that differs from it only in case.
 
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
@@ -159,6 +160,8 @@ def patch_ids(
             rest = [*rest[:paths], *(f":(top,literal){path}" for path in rest[paths:])]
             # Which would take the marks as part of each name; `literal` does its work.
             env["GIT_LITERAL_PATHSPECS"] = "0"
+            # Which would make `literal` match case-insensitively, taking in other files.
+            env["GIT_ICASE_PATHSPECS"] = "0"
         patches.append(git.run(command, *settings, *rest, env=env))
         patches.append(f"commit {i:0{length}x}\n\n{_END_MARKER_DIFF}")
     results: list[list[tuple[str, str]]] = [[]]
