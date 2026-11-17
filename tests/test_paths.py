@@ -172,3 +172,11 @@ def test_git_dir_is_none_where_git_common_dir_is(repo: Git, tmp_path: Path) -> N
     assert git_dir(sub) is None
     assert git_dir(tmp_path) is None
     assert git_dir(tmp_path / "no-such-directory") is None
+
+
+def test_git_dir_of_a_checkout_with_a_separate_git_directory(repo: Git, tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    separate = tmp_path / "separate"
+    repo.run("init", "--quiet", "--separate-git-dir", str(separate), str(checkout))
+
+    assert git_dir(checkout) == separate.resolve() == git_dir_git_says(Git(checkout))

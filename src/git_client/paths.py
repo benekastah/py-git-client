@@ -23,11 +23,11 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
 
 def git_dir(directory: str | os.PathLike[str]) -> Path | None:
     """A checkout's own git directory (as `git rev-parse --absolute-git-dir` finds it), read
-    from the files, without starting git: the counterpart of `git_common_dir`, and the same
-    but for a linked worktree, whose own is the one its `.git` file names (its HEAD, index
-    and rebase state), not the main one. For a git directory, it; for a checkout whose `.git`
-    is a directory, that one. The path is absolute, with symbolic links resolved. None, and
-    OSError, where git_common_dir gives them."""
+    from the files, without starting git: the counterpart of `git_common_dir`. They differ
+    only for a linked worktree, whose own git directory (its HEAD, index and rebase state) is
+    the one its `.git` file names, not the main repository's. For a checkout whose `.git` is a
+    directory, that one; for a git directory, it. The path is absolute, with symbolic links
+    resolved. It returns None, and raises OSError, in the same cases as `git_common_dir`."""
     found = _git_directories(directory)
     return found[0].resolve() if found else None
 
