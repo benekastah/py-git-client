@@ -243,6 +243,23 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
     assert all(expected)
 
 
+def moving_a_submodule(repo: Git) -> None:
+    """Changes for repo_from: on main, a commit adding a submodule, mod, then one moving it to
+    another commit (neither of which the repository has)."""
+    (Path(repo.directory) / ".gitmodules").write_text(
+        '[submodule "mod"]\n\tpath = mod\n\turl = ./mod\n', encoding="utf-8"
+    )
+    repo.run("add", ".gitmodules")
+    repo.run("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "add mod")
+    repo.run("update-index", "--cacheinfo", f"160000,{'2' * 40},mod")
+    repo.run("commit", "--quiet", "-m", "move mod")
+
+
+# patch_ids' commands for moving_a_submodule's main: every commit, the root's too, and a diff.
+MAIN = [["log", "-p", "main"], ["diff", "main~2", "main"]]
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -251,16 +268,21 @@ def test_patch_ids_sees_a_submodule_the_config_ignores(repo: Git) -> None:
         ("diff.external", "no-such-external-diff"),
         ("log.abbrevCommit", "true"),
         ("format.pretty", "format:%s"),
+        ("diff.submodule", "log"),
+        ("diff.submodule", "diff"),
+        ("log.showRoot", "false"),
     ],
 )
 def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
     repo_from: RepoFrom, key: str, value: str
 ) -> None:
-    repo = topic_changing(repo_from, "b")
-    expected = patch_ids(repo, *TOPIC)
+    repo = repo_from("moving-a-submodule", moving_a_submodule)
+    expected = patch_ids(repo, *MAIN)
     repo.run("config", key, value)
 
-    assert patch_ids(repo, *TOPIC) == expected
+    assert patch_ids(repo, *MAIN) == expected
+    # Each commit's patch: the root's, adding mod, and moving it; and the diff's.
+    assert [len(patches) for patches in expected] == [3, 1]
 
 
 def test_patch_ids_reads_a_diff_of_two_revisions_with_diff_tree(
