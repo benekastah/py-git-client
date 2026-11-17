@@ -124,7 +124,8 @@ every argument, after `--` too (which can be another option's value), and `confi
 must come first. Of git's options before the command, it takes only those that name no
 config, repository or program (e.g. `--no-pager`, not `-c`), and `env` may set only the
 locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`). In a partial clone,
-it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.44 ignores).
+it doesn't fetch a missing object (`GIT_NO_LAZY_FETCH=1`, which git before 2.45 ignores, but
+for the security releases 2.39.4 to 2.44.1).
 
 That covers what the tool asks git to do. What the repository's config tells git to run can
 still write (e.g. a diff driver's textconv with `cachetextconv`, a filter such as git-lfs's,

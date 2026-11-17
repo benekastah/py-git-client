@@ -346,8 +346,8 @@ _READING_ENVIRONMENT = frozenset(
 
 
 # What a ReadOnlyGit's git gets, last: no optional locks (status would write the index), and no
-# fetching a missing object in a partial clone (which writes a pack; git before 2.44 ignores
-# this, and fetches).
+# fetching a missing object in a partial clone (which writes a pack; git before 2.45 ignores
+# this, and fetches, but for the security releases 2.39.4 to 2.44.1).
 _READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
 
 
@@ -376,9 +376,10 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
     if command == "config":
         # Its action first: anywhere else, it can be another option's value (`config --file
         # --list a.b c` writes a.b to a file named --list).
-        reads = rest[:1] in (["get"], ["list"]) or (rest[:1] and rest[0] in _CONFIG_READS)
+        reads = rest[:1] in (["get"], ["list"]) or (bool(rest) and rest[0] in _CONFIG_READS)
         writes = any(_names(arg, action) for arg in rest for action in _CONFIG_WRITES)
-        # -e (edit) bundled with other short options, e.g. -ze.
+        # -e (edit), even bundled with other short options (-ze): any short-option argument
+        # holding an "e" is refused, which takes in some that don't edit (e.g. -f<path>).
         edits = any(arg[:1] == "-" and arg[1:2] != "-" and "e" in arg for arg in rest)
         if not reads or writes or edits:
             raise ReadOnlyError(f"ReadOnlyGit runs only a config that reads: {texts}")
@@ -417,9 +418,9 @@ class ReadOnlyGit:
     `diff-files` and `diff-tree` don't. Each argument is checked, wherever it is (after `--`
     too), and config's action must come first. Git gets GIT_OPTIONAL_LOCKS=0, so `status`
     doesn't write the index either, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing
-    object isn't fetched (git 2.44 and newer; older git fetches it). `env` (the client's or a
-    command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ, and which index and paths
-    git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
+    object isn't fetched (git 2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it).
+    `env` (the client's or a command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ,
+    and which index and paths git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
 
     That's what the tool asks for. What the repository's config tells git to run can still
     write (e.g. a diff driver's textconv with cachetextconv, a filter like git-lfs's, or
