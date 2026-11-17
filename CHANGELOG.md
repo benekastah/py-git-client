@@ -40,6 +40,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `git diff-tree -p`, which a `ReadOnlyGit` runs and which writes no index: a `FakeGit`
   answering it responds to `diff-tree`, and a path given as the second argument, without
   `--`, is taken as a revision (#55).
+- `patch_ids` runs every command with `-M -U3 --diff-algorithm=myers`, so a diff and a log
+  give a change the same id whatever `diff.renames`, `diff.context` or `diff.algorithm`
+  say: under such config its ids change to the ones git gives by default (#55).
 - `RefSnapshot` keeps what it read past `remote -v`, and past the `git config` reads a
   `ReadOnlyGit` now runs (#55).
 - A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to

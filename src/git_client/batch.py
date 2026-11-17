@@ -23,8 +23,12 @@ from git_client.errors import GitError
 
 # What patch_ids gives every command, against the user's config, which would drop patches
 # (diff.relative, submodule.<name>.ignore) or change them (color, an external diff, textconv,
-# diff.noprefix).
+# diff.noprefix, diff.renames, diff.context, diff.algorithm), and so that `diff-tree -p`, which
+# reads none of that config, gives what `log -p` and `diff` give by default.
 _PATCH_SETTINGS = (
+    "-M",
+    "-U3",
+    "--diff-algorithm=myers",
     "--no-color",
     "--no-ext-diff",
     "--src-prefix=a/",
@@ -175,7 +179,8 @@ def patch_ids(
     run (see there). Whatever
     the user's config says, each command shows changes in the whole repository (not only
     under `git.directory`, as diff.relative would) and in every submodule, none through a
-    textconv, with git's usual a/ and b/ prefixes, and checks no signatures; and `log` and
+    textconv, with git's usual a/ and b/ prefixes, renames, 3 lines of context and the myers
+    algorithm, and checks no signatures; and `log` and
     `show` print each commit's full id, as patch-id needs (a command's own `--format` still
     wins).
 
