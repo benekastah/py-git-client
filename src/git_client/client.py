@@ -221,13 +221,19 @@ def _own_process_group(timeout: float | None) -> bool:
     return False
 
 
-def _stop(process: subprocess.Popen[bytes], own_group: bool) -> None:
+def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: bool) -> None:
     """Stop git, past its timeout or on an interrupt. On Linux and macOS, ask it to first, with
     SIGINT (to its group, if it has one of its own), as Ctrl-C would, so it removes its lock
     files, and kill it (and its group) if it's still there after _GRACE. On Windows, kill its
     process tree (taskkill /T) and git: Windows has no signal to ask a process with no console
-    of its own to stop."""
+    of its own to stop. On an interrupt, though, Ctrl-C reached git too, from the console it
+    shares with the tool, so it's given _GRACE to clean up and exit first."""
     if sys.platform == "win32":
+        if interrupted:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(_GRACE)
+            if process.returncode is not None:
+                return
         # By its full path, as find_git finds git's: not from the current directory.
         taskkill = os.path.join(
             os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe"
@@ -554,7 +560,9 @@ class ReadOnlyGit:
     group of its own, so what git started (hooks, ssh, credential helpers) is stopped with
     it. With a terminal, git stays in its foreground, as from a shell, so it can ask for a
     password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
-    Windows, git and what it started are killed (taskkill /T), with no chance to clean up.
+    Windows, git and what it started are killed (taskkill /T): past a timeout at once, with no
+    chance to clean up, and on an interrupt once they've had a quarter of a second to handle
+    the Ctrl-C that reached them too, from the tool's console.
 
     A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
     from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
@@ -756,13 +764,13 @@ class ReadOnlyGit:
                 try:
                     output, errors = process.communicate(input, timeout=seconds)
                 except subprocess.TimeoutExpired:
-                    _stop(process, own_group)
+                    _stop(process, own_group, interrupted=False)
                     output, errors = _remaining_output(process)
                     raise GitTimeoutError(
                         args, None, decode(errors or b""), decode(output or b"")
                     ) from None
                 except BaseException:  # e.g. KeyboardInterrupt
-                    _stop(process, own_group)
+                    _stop(process, own_group, interrupted=True)
                     _let_go_of_output(process)
                     raise
             return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
