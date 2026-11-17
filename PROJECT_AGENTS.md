@@ -27,9 +27,6 @@ the shape of the code or a rule here changes.
 
 ## Rules for this project
 
-- **In rapid development**: bundle related changes into PRs worth a CI run (see AGENTS.md).
-  Remove this rule, under this name, once others depend on a release and most changes are
-  fixes.
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
