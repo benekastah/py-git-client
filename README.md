@@ -232,14 +232,21 @@ otherwise (e.g. for a command a tool didn't run).
   ```python
   os.environ["MY_TOOL_GIT"] = real_git()
   ```
-- **`git_calls`**: the arguments of each git process a `Git` or `ReadOnlyGit` starts during the
-  test, while real git runs, to count a tool's processes or check the ones it starts. It leaves
-  out the plugin's own, building and copying templates, whatever order the fixtures come in:
+- **`git_calls`**: each git process a `Git` or `ReadOnlyGit` starts during the test, while
+  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
+  plugin's own, building and copying templates, whatever order the fixtures come in. Each is
+  a `GitCall`: git's arguments, as a list (equal to a plain list of them), and in `program`
+  the git it ran, e.g. to check that your tool's variable is honored:
 
   ```python
-  def test_status_takes_one_process(clone: Git, git_calls: list[list[str]]) -> None:
+  def test_status_takes_one_process(clone: Git, git_calls: list[GitCall]) -> None:
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
+
+
+  def test_status_runs_my_tools_git(clone: Git, git_calls: list[GitCall]) -> None:
+      status(Git(clone.directory, env_var="MY_TOOL_GIT"))  # as your tool makes its client
+      assert git_calls[0].program == os.environ["MY_TOOL_GIT"]
   ```
 - **`outside_any_repository`**: runs a test from an empty temporary directory, where git
   finds no repository, so a git run without a directory (a `Git()` your code forgot to give
@@ -265,6 +272,27 @@ otherwise (e.g. for a command a tool didn't run).
   git.respond(["push"])
   publish(git)  # your code
   assert git.commands[-1] == ["push", "origin", "main"]
+  ```
+
+  If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
+  so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
+  calls `super().process`), run over its fake processes. Your constructor's arguments reach
+  `FakeGit`'s, which are `Git`'s, but it runs `program`, or `"git"` if that's `None`,
+  without looking for one (it ignores `env_var`):
+
+  ```python
+  class MyGit(Git):  # your tool's
+      def output(self, *args: str) -> str:
+          return self.run(*args)
+
+
+  class FakeMyGit(MyGit, FakeGit):
+      pass
+
+
+  git = FakeMyGit()
+  git.respond(["rev-parse"], stdout="main\n")
+  assert git.output("rev-parse", "--abbrev-ref", "HEAD") == "main"
   ```
 
 ## Development

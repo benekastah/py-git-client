@@ -23,7 +23,7 @@ import urllib.request
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
@@ -408,20 +408,30 @@ def fresh_find_git() -> Iterator[None]:
     find_git.cache_clear()
 
 
+class GitCall(list[str]):
+    """A git process git_calls recorded: git's arguments, as a list (equal to a plain list of
+    the same arguments), and `program`, the git it ran (the client's `program`: e.g. what a
+    project's variable named, through `find_git(env_var)`)."""
+
+    def __init__(self, args: Sequence[str], program: str) -> None:
+        super().__init__(args)
+        self.program = program
+
+
 @pytest.fixture
-def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """The arguments of each git process a `Git` or `ReadOnlyGit` starts during the test
-    (through `process` or `popen`; without `git -C <directory>`), in order, while git runs as
-    it would: to count a tool's processes, or check the ones it starts. It leaves out the
-    plugin's own, building and copying templates (see RepoTemplates), whichever fixture is
-    set up first."""
-    calls: list[list[str]] = []
+def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
+    """Each git process a `Git` or `ReadOnlyGit` starts during the test (through `process` or
+    `popen`), in order, while git runs as it would: to count a tool's processes, or check the
+    ones it starts. Each is a GitCall: git's arguments (without `git -C <directory>`), and the
+    git it ran in `program`. It leaves out the plugin's own, building and copying templates
+    (see RepoTemplates), whichever fixture is set up first."""
+    calls: list[GitCall] = []
     process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
 
     def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
         git.command(*args)  # raises ReadOnlyError, starting nothing, for one it refuses
         if not _setting_up.get():
-            calls.append([os.fsdecode(arg) for arg in args])
+            calls.append(GitCall([os.fsdecode(arg) for arg in args], git.program))
 
     def recording_process(
         self: ReadOnlyGit, *args: Arg, **kwargs: Any
@@ -468,10 +478,29 @@ class FakeGit(Git):
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git.
+
+    To fake a project's own subclass of Git, put that class first, so FakeGit stands where
+    Git was beneath it: its methods, and its own `process` (which calls `super().process`),
+    run over FakeGit's. Its constructor's arguments reach FakeGit's, Git's own, but FakeGit
+    runs `program`, or "git" if that's None, without looking for one (`env_var` is
+    ignored).
+
+        class FakeMyGit(MyGit, FakeGit):
+            pass
     """
 
-    def __init__(self, directory: str | os.PathLike[str] = ".") -> None:
-        super().__init__(directory, program="git")
+    def __init__(
+        self,
+        directory: str | os.PathLike[str] = ".",
+        *,
+        program: str | None = None,
+        env_var: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        super().__init__(
+            directory, program=program or "git", env_var=env_var, env=env, timeout=timeout
+        )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
 
@@ -502,7 +531,7 @@ class FakeGit(Git):
         *args: Arg,
         capture_output: bool = False,
         input: bytes | None = None,
-        stdout: object = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
