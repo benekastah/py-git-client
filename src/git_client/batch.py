@@ -15,6 +15,7 @@ from git_client.client import (
     decode,
     encode,
     error_from,
+    learn_object_id_length,
     location,
     prefixes,
 )
@@ -95,6 +96,7 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
     full ref names or object ids rather than short names."""
     extra = "".join(f"%00%({name})" for name in fields)
+    where = location(git)
     listing = git.run_bytes(
         "for-each-ref",
         f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
@@ -111,6 +113,8 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
         found[name] = Ref(
             name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
         )
+    if found:
+        learn_object_id_length(git, where, next(iter(found.values())).object)
     return found
 
 

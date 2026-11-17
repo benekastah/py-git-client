@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import weakref
 from collections.abc import Callable, Mapping, Sequence
@@ -438,6 +439,27 @@ prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.
 `git_paths` can learn it from the `rev-parse` it runs anyway."""
 
 
+# Guards each client's object id lengths: held only to read or change them, never while git
+# runs.
+_lengths_lock = threading.Lock()
+
+
+def learn_object_id_length(git: ReadOnlyGit, where: Location, object_id: str) -> None:
+    """Remember the length of `object_id`, a full id git printed at `where` (the client's
+    `location` when it started that git), as the repository's there, so `object_id_length()`
+    needn't ask git; and wake any thread waiting for git's answer. Not if it's no full id
+    (e.g. a ref's empty object)."""
+    if not OBJECT_ID.fullmatch(object_id):
+        return
+    with _lengths_lock:
+        known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
+        if isinstance(known, int):
+            return
+        git._object_id_lengths[where] = len(object_id)  # pyright: ignore[reportPrivateUsage]
+    if known is not None:
+        known.set()
+
+
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
     each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
@@ -543,19 +565,42 @@ class ReadOnlyGit:
         self.timeout = timeout
         self.stopping = stopping
         self._object_id_length = object_id_length
-        self._object_id_lengths: dict[Location, int] = {}
+        # Per location: the length, or an Event a thread asking git sets once it has answered.
+        self._object_id_lengths: dict[Location, int | threading.Event] = {}
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
         SHA-256: the client's `object_id_length` if given, else asked of git once per
-        `location` (the directory and `env`, which a tool may change) and remembered."""
+        `location` (the directory and `env`, which a tool may change) and remembered, or
+        learned from a full id the library has read there (`refs`, `resolve`, CatFile).
+        Threads that ask at once wait for one git's answer; if it fails, the next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
         key = location(self)
-        if key not in self._object_id_lengths:
-            sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
-            self._object_id_lengths[key] = 64 if sha256 else 40
-        return self._object_id_lengths[key]
+        while True:
+            with _lengths_lock:
+                known = self._object_id_lengths.get(key)
+                if isinstance(known, int):
+                    return known
+                asking = known is None
+                if known is None:
+                    known = self._object_id_lengths[key] = threading.Event()
+            if not asking:
+                known.wait()
+                continue  # its answer, or (if it failed) ask again
+            try:
+                sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
+            except BaseException:
+                with _lengths_lock:
+                    if self._object_id_lengths.get(key) is known:
+                        del self._object_id_lengths[key]
+                known.set()
+                raise
+            length = 64 if sha256 else 40
+            with _lengths_lock:
+                self._object_id_lengths[key] = length
+            known.set()
+            return length
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
@@ -786,6 +831,7 @@ class ReadOnlyGit:
         line = batch_line(name)
         if line is None:
             return None
+        where = location(self)
         result = self.process(
             "cat-file", "--batch-check", capture_output=True, input=line, timeout=timeout
         )
@@ -793,7 +839,10 @@ class ReadOnlyGit:
             check_names_nothing(self, name, timeout=timeout)
             return None
         header = object_header(result.stdout)
-        return None if header is None else header[0]
+        if header is None:
+            return None
+        learn_object_id_length(self, where, header[0])
+        return header[0]
 
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None

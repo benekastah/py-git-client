@@ -30,6 +30,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
 
+- `object_id_length()` learns the length from the first full id `refs`, `Git.resolve` or a
+  `CatFile` reads at the client's location, and then starts no `git rev-parse
+  --show-object-format`: a `FakeGit` test that expects that command after one of those no
+  longer sees it. Threads that ask at once wait for one git's answer, where each could
+  start its own (#54).
+
 ### Added
 
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that

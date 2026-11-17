@@ -4,11 +4,15 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from git_client import (
+    Arg,
     CatFile,
     ConfigLockedError,
     Git,
@@ -22,6 +26,7 @@ from git_client import (
     decode,
     find_git,
     printable,
+    refs,
 )
 from git_client.testing import FakeGit, GitCall
 
@@ -621,6 +626,92 @@ def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
 def test_object_id_length_is_read_from_git_once(repo: Git, git_calls: list[GitCall]) -> None:
     assert [repo.object_id_length(), repo.object_id_length()] == [40, 40]
     assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+def test_object_id_length_asks_git_once_for_threads_asking_at_once(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    failures: list[None] = [None]
+
+    class SlowGit(Git):
+        """Takes long enough to answer that the threads all ask before it does, and fails the
+        first time."""
+
+        def run(self, *args: Arg, **kwargs: Any) -> str:
+            time.sleep(0.05)
+            if failures:
+                failures.pop()
+                raise GitError(args, 1, "failed")
+            return super().run(*args, **kwargs)
+
+    git = SlowGit(repo.directory)
+
+    def length(_: int) -> int | None:
+        try:
+            return git.object_id_length()
+        except GitError:
+            return None
+
+    with ThreadPoolExecutor(4) as pool:
+        lengths = list(pool.map(length, range(4)))
+
+    # The thread that asked first failed; the others waited for it, then one asked again.
+    assert sorted(lengths, key=str) == [40, 40, 40, None]
+    assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+def make_sha256_repo(directory: Path) -> Git:
+    """A SHA-256 repository, with one commit, in directory, and a client for it."""
+    Git(directory).run("init", "--quiet", "--object-format=sha256", str(directory / "sha256"))
+    git = Git(directory / "sha256")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+    return git
+
+
+def resolve(git: Git) -> None:
+    git.resolve("HEAD")
+
+
+def resolve_with_cat_file(git: Git) -> None:
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+
+
+@pytest.mark.parametrize(
+    "read_an_id",
+    [refs, resolve, resolve_with_cat_file],
+    ids=["refs", "resolve", "CatFile"],
+)
+def test_object_id_length_is_learned_from_an_id_the_library_reads(
+    read_an_id: Callable[[Git], object], tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    git = Git(make_sha256_repo(tmp_path).directory)
+    read_an_id(git)
+
+    assert git.object_id_length() == 64
+    assert ["rev-parse", "--show-object-format"] not in git_calls
+
+
+def test_an_object_id_length_learned_counts_only_where_it_was_read(
+    repo: Git, tmp_path: Path
+) -> None:
+    git = Git(make_sha256_repo(tmp_path).directory)
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+        git.directory = repo.directory
+        # Its process is still the SHA-256 repository's.
+        assert cat_file.resolve("HEAD") is not None
+        assert git.object_id_length() == 40
+
+
+def test_a_failed_object_id_length_is_not_remembered(tmp_path: Path) -> None:
+    git = Git(tmp_path / "later")
+    (tmp_path / "later").mkdir()
+    with pytest.raises(GitError):
+        git.object_id_length()
+
+    Git(tmp_path).run("init", "--quiet", "later")
+    assert git.object_id_length() == 40
 
 
 @pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
