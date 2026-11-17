@@ -26,6 +26,16 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `read` raised `UnknownRevisionError`): a missing name is still None. `run` and the like
   raise it too, for git's own words of a corrupt object, where they raised a plain
   `GitError` (#50).
+- `CatFile.verify` (and `read`) word a name cat-file says only "<name> missing" of as
+  rev-parse does, `fatal: bad revision '<name>'`, adding ": git exited without saying why"
+  where cat-file exited saying nothing: a tool that compared `stderr` with
+  `f"{name} missing"` (as git-recommit does) tests `reason == ""` instead (#53).
+- A `CatFile` whose client has a `timeout` holds each request to it: one its process doesn't
+  answer in time (e.g. waiting on a lazy fetch in a partial clone) kills the process and
+  raises `GitTimeoutError` (a `NoAnswerError`, which `except GitError` doesn't catch), where
+  it waited as long as it took. Its `stderr` is what git said of the request, and a note
+  names the request. A tool whose requests may take longer gives its CatFile a client with a
+  longer timeout, or none (#53).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
@@ -68,6 +78,21 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   until a command that may change a ref or a branch's upstream runs through any `Git` (or
   `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
   that change them, can go (#50).
+- `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
+  refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
+- `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it
+  (without its warnings), or "" when it gave no reason (as for most names); from other
+  commands, their `stderr` (#53).
+
+### Fixed
+
+- A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
+  answer unread, to answer the next request: `resolve("HEAD")` could give another name's
+  id. The next request now kills that process, and starts another (#53).
+- `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever
+  for a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch in
+  a partial clone, or writing what nothing reads). It now closes the process's stdout too,
+  and kills it if it hasn't exited within a second (#53).
 
 ## 0.0.2 (2026-11-17)
 

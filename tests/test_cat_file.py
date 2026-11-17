@@ -1,14 +1,16 @@
 import gc
+import io
 import os
-import re
+import pickle
 import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import pytest
 
@@ -19,10 +21,13 @@ from git_client import (
     EnvValue,
     Git,
     GitError,
+    GitTimeoutError,
     NotARepositoryError,
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client import cat_file as cat_file_module
+from git_client.client import object_header
 from git_client.testing import real_git
 
 
@@ -83,19 +88,35 @@ def test_verify_gives_the_id_or_git_s_reason_without_another_process(
 ) -> None:
     with CatFile(repo) as cat_file:
         main = cat_file.verify("main")
-        # Names cat-file says nothing of but "missing" (or "ambiguous").
-        with pytest.raises(UnknownRevisionError, match="no-such-branch missing"):
-            cat_file.verify("no-such-branch")
-        with pytest.raises(UnknownRevisionError, match="'' names nothing"):
+        # Names cat-file says nothing of but "missing" (or "ambiguous"): in rev-parse's words.
+        with pytest.raises(UnknownRevisionError) as missing:
+            cat_file.verify("refs/heads/nope")
+        with pytest.raises(UnknownRevisionError) as empty:
             cat_file.verify("")
         # Names git exits on, at a later request, then at a new process's first.
-        with pytest.raises(UnknownRevisionError, match="no upstream configured for branch 'main'"):
+        with pytest.raises(UnknownRevisionError) as no_upstream:
             cat_file.verify("main@{u}")
         with pytest.raises(UnknownRevisionError, match="log for 'HEAD' only has 1 entries"):
             cat_file.verify("HEAD@{999}")
 
     assert git_calls == [["cat-file", "--batch-command"]] * 2
     assert main == repo.run("rev-parse", "main")
+    assert (missing.value.stderr, missing.value.reason) == (
+        "fatal: bad revision 'refs/heads/nope'",
+        "",
+    )
+    assert (empty.value.stderr, empty.value.reason) == ("fatal: bad revision ''", "")
+    assert no_upstream.value.stderr == "fatal: no upstream configured for branch 'main'"
+    assert no_upstream.value.reason == no_upstream.value.stderr
+
+
+def test_a_reason_crosses_from_a_worker_process(repo: Git) -> None:
+    with CatFile(repo) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("nope")
+
+    copy = pickle.loads(pickle.dumps(raised.value))
+
+    assert (copy.stderr, copy.reason) == ("fatal: bad revision 'nope'", "")
 
 
 def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git) -> None:
@@ -106,13 +127,69 @@ def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git)
     assert "expected commit type, but the object dereferences to tree type" in str(raised.value)
 
 
+def tag_main(git: Git) -> None:
+    """Make a tag named main, like the branch: git warns that main is ambiguous, but
+    resolves it."""
+    git.run("tag", "main")
+
+
+def test_info_gives_what_git_warned_of_the_name(
+    repo_from: Callable[[str, Callable[[Git], None]], Git],
+) -> None:
+    repo = repo_from("main-tag", tag_main)
+
+    with CatFile(repo) as cat_file:
+        ambiguous = cat_file.info("main")
+        branch = cat_file.info("refs/heads/main")
+
+    assert ambiguous is not None and branch is not None
+    assert ambiguous.warnings == ("warning: refname 'main' is ambiguous.",)
+    assert branch.warnings == ()
+
+
+def warn_as_git_starts(git: Git) -> None:
+    """Set a config key git warns of as it starts, as deprecated."""
+    git.run("config", "core.fsyncObjectFiles", "true")
+
+
+@pytest.mark.parametrize("env", [{}, {"GIT_TRACE": "2"}], ids=["config", "trace"])
+def test_what_git_says_as_it_starts_is_of_no_name(
+    repo_from: Callable[[str, Callable[[Git], None]], Git], env: dict[str, str]
+) -> None:
+    repo = repo_from("warns-as-git-starts", warn_as_git_starts)
+    git = Git(repo.directory, env=env)
+
+    with CatFile(git) as cat_file:
+        head = cat_file.info("HEAD")
+    with CatFile(git) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("nope")
+
+    assert head is not None and head.warnings == ()
+    assert (raised.value.stderr, raised.value.reason) == ("fatal: bad revision 'nope'", "")
+
+
+def break_a_ref(git: Git) -> None:
+    """Make refs/heads/broken a ref file that holds no id, which git warns of and ignores."""
+    (Path(git.directory) / ".git" / "refs" / "heads" / "broken").write_text(
+        "garbage\n", encoding="utf-8"
+    )
+
+
+def test_a_warning_is_no_reason(repo_from: Callable[[str, Callable[[Git], None]], Git]) -> None:
+    repo = repo_from("broken-ref", break_a_ref)
+
+    with CatFile(repo) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify("broken")
+
+    assert raised.value.stderr == (
+        "warning: ignoring broken ref refs/heads/broken\nfatal: bad revision 'broken'"
+    )
+    assert raised.value.reason == ""
+
+
 def test_verify_gives_only_what_git_said_of_that_name(
     repo_from: Callable[[str, Callable[[Git], None]], Git],
 ) -> None:
-    def tag_main(git: Git) -> None:
-        git.run("tag", "main")
-
-    # git warns that main is ambiguous, but resolves it.
     repo = repo_from("main-tag", tag_main)
 
     with CatFile(repo) as cat_file:
@@ -120,7 +197,7 @@ def test_verify_gives_only_what_git_said_of_that_name(
         with pytest.raises(UnknownRevisionError) as raised:
             cat_file.verify("no-such-branch")
 
-    assert raised.value.stderr == "no-such-branch missing"
+    assert raised.value.stderr == "fatal: bad revision 'no-such-branch'"
 
 
 class StartsKeepingGit(Git):
@@ -184,6 +261,118 @@ time.sleep(0.2)
     )
 
     assert b"Exception in thread" not in result.stderr
+
+
+class InterruptedPipe(io.BufferedWriter):
+    """CatFile's end of its process's stdin, which raises KeyboardInterrupt from a flush (once
+    it has sent what was written) while `interrupt` says so, as Ctrl-C could as CatFile waits
+    for the answer."""
+
+    def __init__(self, pipe: io.FileIO) -> None:
+        super().__init__(pipe)
+        self.interrupt = False
+
+    def flush(self) -> None:
+        super().flush()
+        if self.interrupt:
+            self.interrupt = False
+            raise KeyboardInterrupt
+
+
+class InterruptibleGit(StartsKeepingGit):
+    """A Git whose long-lived processes' stdin is an InterruptedPipe."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        process = super().popen(*args, env=env, stderr=stderr)
+        assert process.stdin is not None
+        pipe = io.FileIO(os.dup(process.stdin.fileno()), "w")
+        process.stdin.close()
+        process.stdin = InterruptedPipe(pipe)
+        return process
+
+    def interrupt(self) -> None:
+        """Interrupt the next request, once it's sent."""
+        stdin = self.started[-1].stdin
+        assert isinstance(stdin, InterruptedPipe)
+        stdin.interrupt = True
+
+
+def test_a_request_interrupted_once_sent_leaves_no_answer_for_the_next(repo: Git) -> None:
+    git = InterruptibleGit(repo.directory)
+    commit, blob = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD:a")
+
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+        git.interrupt()
+        with pytest.raises(KeyboardInterrupt):
+            cat_file.resolve("HEAD^{tree}")
+        assert cat_file.resolve("HEAD") == commit
+        git.interrupt()
+        with pytest.raises(KeyboardInterrupt):
+            cat_file.read(commit)
+        assert cat_file.read(blob) == ("blob", b"a\n")
+
+
+def test_a_read_interrupted_before_its_content_leaves_none_for_the_next(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Content whose first line reads as an object's header: the answer to the next request,
+    # if it were left in the pipe.
+    blob = repo.run("hash-object", "-w", "--stdin", input=f"{'1' * 40} commit 1\n")
+
+    def interrupted(line: bytes) -> tuple[str, str, int] | None:
+        """object_header, interrupted at the header of blob's content (by Ctrl-C, say)."""
+        header = object_header(line)
+        if header is not None and header[0] == blob:
+            raise KeyboardInterrupt
+        return header
+
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+        with monkeypatch.context() as patched, pytest.raises(KeyboardInterrupt):
+            patched.setattr("git_client.cat_file.object_header", interrupted)
+            cat_file.read(blob)
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
+
+
+def test_a_process_whose_setting_up_fails_is_stopped(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = StartsKeepingGit(repo.directory)
+
+    def cant_read(pipe: IO[bytes]) -> None:
+        raise RuntimeError("can't start new thread")  # as Windows' reading thread can
+
+    with CatFile(git) as cat_file:
+        with monkeypatch.context() as patched, pytest.raises(RuntimeError):
+            patched.setattr("git_client.cat_file._Output", cant_read)
+            cat_file.resolve("HEAD")
+        assert git.started[0].wait(10) is not None
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
+
+
+def test_a_stop_interrupted_leaves_the_next_request_another_process(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    end = cat_file_module._end  # pyright: ignore[reportPrivateUsage]
+
+    def interrupted(*args: Any) -> None:
+        """_end, then Ctrl-C (a second one, say, as it waits for the process to exit)."""
+        end(*args)
+        raise KeyboardInterrupt
+
+    with CatFile(repo) as cat_file:
+        with monkeypatch.context() as patched:
+            patched.setattr(cat_file_module, "_end", interrupted)
+            cat_file.resolve("HEAD")
+            with pytest.raises(KeyboardInterrupt):
+                cat_file.close()
+        assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
 
 
 class KeepsItsCatFile(StartsKeepingGit):
@@ -282,6 +471,24 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
     assert commit.endswith(b"\n\nfirst\n")
 
 
+def test_reading_a_large_object_holds_it_once(repo: Git, tmp_path: Path) -> None:
+    size = 8 * 1024 * 1024
+    (tmp_path / "large").write_bytes(b"x" * size)
+    blob = repo.run("hash-object", "-w", str(tmp_path / "large"))
+
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+        tracemalloc.start()
+        try:
+            _, content = cat_file.read(blob)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+    assert len(content) == size
+    assert peak < 1.25 * size
+
+
 def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:
     commit, tree = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD^{tree}")
     blob = repo.run("rev-parse", "HEAD:a")
@@ -335,6 +542,21 @@ def test_a_corrupt_object_isnt_taken_for_a_missing_one(damaged_repo: Git) -> Non
             cat_file.verify("no-such-branch")
         with pytest.raises(UnknownRevisionError):
             cat_file.read("0" * 40)
+
+
+def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(repo: Git) -> None:
+    commit, blob = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD:a")
+    loose = Path(repo.directory) / ".git" / "objects" / commit[:2] / commit[2:]
+    loose.chmod(0o644)  # git makes it read-only
+    loose.write_bytes(b"garbage")
+    git = StartsKeepingGit(repo.directory)
+
+    with CatFile(git) as cat_file:
+        # cat-file says HEAD~1 is missing, and what's damaged on stderr: an answer in full.
+        with pytest.raises(CorruptObjectError):
+            cat_file.verify("HEAD~1")
+        assert cat_file.resolve(blob) == blob
+    assert len(git.started) == 1
 
 
 def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:
@@ -417,12 +639,15 @@ class GitThatDropsStderr(Git):
         return super().popen(*args, env=env)
 
 
-def test_verify_names_the_name_when_git_said_nothing_of_it(repo: Git) -> None:
+def test_verify_says_so_when_git_said_nothing_of_the_name(repo: Git) -> None:
     with (
         CatFile(GitThatDropsStderr(repo.directory)) as cat_file,
-        pytest.raises(UnknownRevisionError, match=re.escape("main@{u} missing")),
+        pytest.raises(UnknownRevisionError) as raised,
     ):
         cat_file.verify("main@{u}")
+
+    assert raised.value.stderr == "fatal: bad revision 'main@{u}': git exited without saying why"
+    assert raised.value.reason == ""
 
 
 class GitWithoutBatchCommand(Git):
@@ -460,9 +685,9 @@ class GitThatDiesMidObject(Git):
         stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
         script = (
-            "import sys; sys.stdin.readline(); sys.stdin.readline();"
-            " sys.stdout.write('0' * 40 + ' missing\\n');"
-            " sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
+            "import sys; sys.stdin.readline();"
+            " sys.stdout.write('0' * 40 + ' missing\\n'); sys.stdout.flush();"
+            " sys.stdin.readline(); sys.stdout.write(sys.argv[1] + ' blob 100\\n' + 'x' * 10)"
         )
         return subprocess.Popen(
             [sys.executable, "-c", script, "1" * 40],
@@ -477,3 +702,95 @@ def test_an_object_cut_short_is_an_error_not_its_content(repo: Git) -> None:
         pytest.raises(GitError, match="10 of its 100 bytes"),
     ):
         cat_file.read("1" * 40)
+
+
+class GitThatAnswersOnce(Git):
+    """A git whose cat-file answers the first request (and the one CatFile sends first, before
+    it) with an object, then runs `then` (Python), whatever it's asked."""
+
+    def __init__(self, directory: str, then: str) -> None:
+        super().__init__(directory)
+        self.then = then
+        self.started: list[subprocess.Popen[bytes]] = []
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        script = (
+            "import os, sys, time\n"
+            "for _ in range(2):\n"
+            "    sys.stdin.readline()\n"
+            "    sys.stdout.write(sys.argv[1] + ' commit 1\\n'); sys.stdout.flush()\n" + self.then
+        )
+        self.started.append(
+            subprocess.Popen(
+                [sys.executable, "-c", script, "1" * 40],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=stderr,
+            )
+        )
+        return self.started[-1]
+
+
+# As a lazy fetch in a partial clone can: git exits once it's done with what it writes.
+WRITES_ON = """
+try:
+    while True:
+        sys.stdout.write("x" * 65536)
+except OSError:
+    os._exit(3)
+"""
+
+
+def test_closing_stops_a_process_writing_what_nothing_reads(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 60)  # past which it would be killed
+    git = GitThatAnswersOnce(repo.directory, WRITES_ON)
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    cat_file.close()
+
+    assert git.started[0].returncode == 3
+
+
+def test_closing_kills_a_process_that_doesnt_exit(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 0.01)
+    git = GitThatAnswersOnce(repo.directory, "time.sleep(60)")
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    cat_file.close()
+
+    assert git.started[0].returncode not in (None, 0)
+
+
+@pytest.mark.parametrize(
+    "answer", ["", f"{'1' * 40} blob 100\n" + "x" * 10], ids=["nothing", "part of an object"]
+)
+def test_a_request_past_the_client_s_timeout_stops_the_process(repo: Git, answer: str) -> None:
+    then = (
+        "sys.stdin.readline(); sys.stderr.write('still looking\\n'); sys.stderr.flush()\n"
+        f"sys.stdout.write({answer!r}); sys.stdout.flush(); time.sleep(60)"
+    )
+    git = GitThatAnswersOnce(repo.directory, then)
+
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")  # with no timeout: Python's start isn't timed
+        git.timeout = 0.2
+        with pytest.raises(GitTimeoutError) as raised:
+            cat_file.read("1" * 40)
+        assert git.started[0].poll() is not None
+        git.timeout = None
+        # Another process answers the next.
+        assert cat_file.resolve("HEAD") == "1" * 40
+    assert len(git.started) == 2
+    assert raised.value.stderr == "still looking"
+    assert raised.value.__notes__ == [f"no answer for {'1' * 40} within 0.2 seconds"]

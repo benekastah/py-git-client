@@ -75,6 +75,7 @@ git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
+    main = cat_file.info("main")  # its id, type, size and git's warnings (e.g. ambiguous), or None
     upstream = cat_file.verify("main@{u}")  # an object id, or UnknownRevisionError: git's reason
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:
@@ -115,7 +116,9 @@ merged, conflicts = merge_file(
 )
 ```
 
-A CatFile's process stops once nothing uses it. A `Git` subclass that keeps a CatFile of
+A CatFile's process stops once nothing uses it. With a client's `timeout`, a request it
+doesn't answer in time raises `GitTimeoutError`, and the next request starts another process.
+A `Git` subclass that keeps a CatFile of
 itself makes it with `CatFile(self, weak=True)`, so the two make no reference cycle (which
 would keep the client and its process until the garbage collector ran). Don't pass
 `weak=True` for a client nothing else holds: it would be freed at once.
@@ -260,7 +263,7 @@ said and raises a subclass:
 | Error | When |
 | --- | --- |
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
-| `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
+| `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing (from `CatFile`, its `reason` is git's, or "" if it gave none). |
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
