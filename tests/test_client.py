@@ -15,6 +15,7 @@ from git_client import (
     Arg,
     CatFile,
     ConfigLockedError,
+    CorruptObjectError,
     Git,
     GitError,
     GitTimeoutError,
@@ -248,9 +249,23 @@ def test_resolve_gives_none_for_an_object_the_repository_lacks(repo: Git) -> Non
     assert repo.resolve("HEAD:a") == repo.run("rev-parse", "HEAD:a")
 
 
-def test_resolve_gives_none_for_a_name_git_exits_on(repo: Git) -> None:
+def test_resolve_gives_none_for_a_name_git_exits_on_in_one_process(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
     # main has no upstream: git cat-file exits rather than saying @{u} names nothing.
     assert repo.resolve("main@{u}") is None
+    assert len(git_calls) == 1
+
+
+def test_resolve_raises_for_a_corrupt_object_rather_than_say_it_names_nothing(
+    damaged_repo: Git,
+) -> None:
+    # Loose, cat-file says the name is missing; packed, it exits.
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.resolve("HEAD~1")
+    with pytest.raises(CorruptObjectError):
+        damaged_repo.resolve("main^{tree}")
+    assert damaged_repo.resolve("main@{u}") is None
 
 
 def test_resolve_gives_none_for_a_name_that_isnt_one_line(repo: Git) -> None:
@@ -266,12 +281,15 @@ def test_resolve_takes_a_name_that_looks_like_an_option_as_a_name(repo: Git) -> 
     assert repo.resolve("-x") == repo.run("rev-parse", "HEAD")
 
 
-def test_resolve_raises_for_what_isnt_a_name_naming_nothing(tmp_path: Path) -> None:
+def test_resolve_raises_for_what_isnt_a_name_naming_nothing(
+    tmp_path: Path, git_calls: list[GitCall]
+) -> None:
     (tmp_path / "plain").mkdir()
     git = Git(tmp_path / "plain", env={"GIT_CEILING_DIRECTORIES": str(tmp_path)})
 
     with pytest.raises(NotARepositoryError):
         git.resolve("HEAD")
+    assert len(git_calls) == 1
 
 
 def test_var_gives_gits_value_for_a_variable(repo: Git) -> None:

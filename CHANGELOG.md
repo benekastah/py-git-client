@@ -35,6 +35,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   --show-object-format`: a `FakeGit` test that expects that command after one of those no
   longer sees it. Threads that ask at once wait for one git's answer, where each could
   start its own (#54).
+- `Git.resolve` takes one process for every name, where a name `git cat-file` exits on (e.g.
+  `main@{upstream}` with no upstream) took a second, a `rev-parse`: it sends cat-file a name
+  of all zeros first, as `CatFile` does, so a `FakeGit` answering `cat-file --batch-check`
+  prints `0000000000000000000000000000000000000000 missing` as its first line. It raises
+  `CorruptObjectError` for a damaged object cat-file reads for the name, as `CatFile.resolve`
+  does, where it gave None for a loose one (#54).
 
 ### Added
 

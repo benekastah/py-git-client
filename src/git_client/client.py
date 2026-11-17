@@ -16,7 +16,9 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal
 
 from git_client.errors import (
+    CORRUPT_OBJECT,
     ConfigLockedError,
+    CorruptObjectError,
     GitError,
     GitTimeoutError,
     NotStartedError,
@@ -168,6 +170,11 @@ def object_header(line: bytes) -> tuple[str, str, int] | None:
     if len(parts) != 3 or not _OBJECT_ID_BYTES.fullmatch(parts[0]) or not parts[2].isdigit():
         return None
     return parts[0].decode(), decode(parts[1]), int(parts[2])
+
+
+# The name `resolve` sends cat-file before the caller's, as CatFile does its first request: one
+# git answers rather than exits on, so having answered it, git can only exit on the name.
+_PROBE_LINE = b"0" * 40 + b"\n"
 
 
 def check_names_nothing(git: ReadOnlyGit, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> None:
@@ -826,19 +833,23 @@ class ReadOnlyGit:
         """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it
         names nothing: as `git rev-parse --verify` finds it, but only if the repository has
         that object (not for a full id it lacks, nor for a submodule's commit). Raises
-        GitError for another failure (e.g. NotARepositoryError). For many names, a CatFile
-        takes one process for all of them."""
+        CorruptObjectError if an object git reads for it is damaged, and GitError for another
+        failure (e.g. NotARepositoryError). It takes one process; for many names, a CatFile
+        takes one for all of them."""
         line = batch_line(name)
         if line is None:
             return None
         where = location(self)
-        result = self.process(
-            "cat-file", "--batch-check", capture_output=True, input=line, timeout=timeout
-        )
-        if result.returncode != 0:
-            check_names_nothing(self, name, timeout=timeout)
-            return None
-        header = object_header(result.stdout)
+        args = ("cat-file", "--batch-check")
+        result = self.process(*args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout)
+        answered, _, reply = result.stdout.partition(b"\n")
+        if not answered:
+            # It exited as it started, as it does when it can't read the repository.
+            raise error_from(args, result)
+        if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
+            raise CorruptObjectError(args, result.returncode, stderr)
+        # If it exited, it was on the name, which names nothing.
+        header = object_header(reply)
         if header is None:
             return None
         learn_object_id_length(self, where, header[0])
