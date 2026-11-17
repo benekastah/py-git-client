@@ -42,6 +42,9 @@ def test_a_directory_that_isnt_there(tmp_path: Path) -> None:
 # A full object id, of an object the repository doesn't have.
 MISSING = "0123" * 10
 
+# The tests' git's version, e.g. (2, 56).
+GIT_VERSION = tuple(int(part) for part in Git(".").run("version").split()[2].split(".")[:2])
+
 
 @pytest.mark.parametrize(
     "args",
@@ -60,7 +63,10 @@ MISSING = "0123" * 10
         ("worktree", "add", "../worktree", "no-such-branch"),
         ("rebase", "no-such-branch"),  # invalid upstream
         ("merge", "no-such-branch"),  # not something we can merge
-        ("merge-tree", "--write-tree", "main", "no-such-branch"),
+        pytest.param(
+            ("merge-tree", "--write-tree", "main", "no-such-branch"),
+            marks=pytest.mark.skipif(GIT_VERSION < (2, 38), reason="--write-tree is from 2.38"),
+        ),
         ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
         ("merge-base", "HEAD", MISSING),  # Not a valid commit name
         ("merge-base", "--is-ancestor", MISSING, "HEAD"),
