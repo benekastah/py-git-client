@@ -80,7 +80,21 @@ class NotARepositoryError(GitError):
 
 class UnknownRevisionError(GitError):
     """A revision (a commit, a ref, an object id) that names nothing: not one that names an
-    object of the wrong type (e.g. a tree where git wants a commit), a plain GitError."""
+    object of the wrong type (e.g. a tree where git wants a commit), a WrongTypeError."""
+
+
+class WrongTypeError(GitError):
+    """A name that names an object of the wrong type (e.g. a tree where git wants a commit).
+    `expected` is the type git wanted, and `found` the one it found (e.g. "commit" and
+    "tree"), as git's message says them; None if it doesn't (e.g. a tool's own error)."""
+
+    def __init__(
+        self, args: Sequence[str | bytes], returncode: int | None, stderr: str, stdout: str = ""
+    ) -> None:
+        super().__init__(args, returncode, stderr, stdout)
+        said = WRONG_TYPE.search(stderr)
+        self.expected: str | None = None if said is None else said["expected"] or said["expected2"]
+        self.found: str | None = None if said is None else said["found"] or said["found2"]
 
 
 class ConfigLockedError(GitError):
@@ -145,10 +159,11 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 
 # What git says first of a name that names an object of the wrong type (e.g. a tree where it
 # wants a commit), before what it says of a name that names nothing: most commands' words,
-# then merge's.
+# then cat-file's and merge's.
 WRONG_TYPE = re.compile(
-    r"^error: object \S+ is a \w+, not an? \w+$"
-    r"|^error: .*: expected \w+ type, but the object dereferences to \w+ type$",
+    r"^error: object \S+ is a (?P<found>\w+), not an? (?P<expected>\w+)$"
+    r"|^error: .*: expected (?P<expected2>\w+) type, but the object dereferences to"
+    r" (?P<found2>\w+) type$",
     re.MULTILINE,
 )
 
@@ -161,6 +176,6 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
-                return GitError  # it names something
+                return WrongTypeError  # it names something
             return error
     return GitError

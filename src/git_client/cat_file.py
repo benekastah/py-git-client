@@ -21,7 +21,7 @@ from git_client.client import (
     decode,
     object_header,
 )
-from git_client.errors import WRONG_TYPE, GitError, UnknownRevisionError
+from git_client.errors import WRONG_TYPE, GitError, UnknownRevisionError, WrongTypeError
 
 _COMMAND = ("cat-file", "--batch-command")
 
@@ -126,7 +126,7 @@ class CatFile:
         """The id of the object `name` names, as `resolve` finds it. If it names nothing,
         raises UnknownRevisionError, whose `stderr` is git's reason (e.g. "fatal: no upstream
         configured for branch 'main'", or only "<name> missing"); if it names an object of
-        the wrong type (e.g. `<tree>^{commit}`), a plain GitError, saying so. It takes no
+        the wrong type (e.g. `<tree>^{commit}`), WrongTypeError, saying so. It takes no
         process of its own to find the reason: cat-file's own messages give it."""
         line = batch_line(name)
         if line is None:
@@ -142,8 +142,8 @@ class CatFile:
         """The type and content of the object with this full id, as `git cat-file <type>
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
         ("blob", "commit", "tag" or "tree"), the object must be of that type, or peel to one
-        as `<id>^{<type>}` does (e.g. a commit to its tree): else it raises GitError, saying
-        so. Raises UnknownRevisionError if there's no such object, and GitError if git stops
+        as `<id>^{<type>}` does (e.g. a commit to its tree): else it raises WrongTypeError.
+        Raises UnknownRevisionError if there's no such object, and GitError if git stops
         partway through it, or can't read it at all (see CatFile)."""
         if not OBJECT_ID.fullmatch(object_id):
             raise ValueError(f"{object_id!r} isn't a full object id")
@@ -249,7 +249,7 @@ def _failure(name: str, reply: bytes, reason: str) -> GitError:
     it exited), saying `reason` on stderr (empty if its stderr didn't reach the file, as from
     a popen that doesn't pass it on)."""
     reason = reason or decode(reply).strip() or f"{name} missing"
-    error = GitError if WRONG_TYPE.search(reason) else UnknownRevisionError
+    error = WrongTypeError if WRONG_TYPE.search(reason) else UnknownRevisionError
     return error(_COMMAND, FATAL if not reply else 1, reason)
 
 

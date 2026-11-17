@@ -12,6 +12,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   per client, directory and `env`, and remember the answer: a tool that cached them itself
   can drop its cache (and its `cdup` is `"../" * prefix().count("/")`). A repository moved
   or replaced under a client that keeps its directory isn't noticed; make a new client.
+- A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
+  where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
+  `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
+  GitError` no longer holds, and a tool that told it apart by git's message can catch
+  `WrongTypeError` instead.
 
 ### Added
 
@@ -20,6 +25,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   starts no `git rev-parse --show-object-format` (#50).
 - `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
   but holds paths from the top of the worktree, as git reports them, as `patch_ids` has.
+- `WrongTypeError`, a `GitError` whose `expected` and `found` say which type git wanted and
+  which it found.
 
 ## 0.0.2 (2026-11-17)
 

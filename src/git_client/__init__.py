@@ -39,6 +39,7 @@ from git_client.errors import (
     PushRejectedError,
     RemoteError,
     UnknownRevisionError,
+    WrongTypeError,
 )
 from git_client.paths import git_common_dir
 
@@ -64,6 +65,7 @@ __all__ = [
     "RemoteError",
     "Timeout",
     "UnknownRevisionError",
+    "WrongTypeError",
     "config",
     "config_key",
     "decode",

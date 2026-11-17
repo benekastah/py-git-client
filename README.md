@@ -75,7 +75,7 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:
         kind, content = cat_file.read(readme)
-    _, tree = cat_file.read(upstream, "tree")  # its tree; GitError if it has none
+    _, tree = cat_file.read(upstream, "tree")  # its tree; WrongTypeError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
 push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
@@ -218,6 +218,7 @@ said and raises a subclass:
 | --- | --- |
 | `NotARepositoryError` | There's no repository at the client's directory, or no such directory. |
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing. |
+| `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |

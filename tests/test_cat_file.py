@@ -20,6 +20,7 @@ from git_client import (
     GitError,
     NotARepositoryError,
     UnknownRevisionError,
+    WrongTypeError,
 )
 from git_client.testing import real_git
 
@@ -97,10 +98,10 @@ def test_verify_gives_the_id_or_git_s_reason_without_another_process(
 
 
 def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git) -> None:
-    with CatFile(repo) as cat_file, pytest.raises(GitError) as raised:
+    with CatFile(repo) as cat_file, pytest.raises(WrongTypeError) as raised:
         cat_file.verify("HEAD^{tree}^{commit}")
 
-    assert type(raised.value) is GitError
+    assert (raised.value.expected, raised.value.found) == ("commit", "tree")
     assert "expected commit type, but the object dereferences to tree type" in str(raised.value)
 
 
@@ -288,14 +289,14 @@ def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:
         assert cat_file.read(blob, "blob") == ("blob", b"a\n")
         # A commit's tree, as `git cat-file tree <commit>` reads it.
         assert cat_file.read(commit, "tree") == cat_file.read(tree)
-        with pytest.raises(GitError) as raised:
+        with pytest.raises(WrongTypeError) as raised:
             cat_file.read(blob, "commit")
         with pytest.raises(UnknownRevisionError):
             cat_file.read("0" * 40, "commit")
         with pytest.raises(ValueError):  # from a caller whose types aren't checked
             cat_file.read(commit, "HEAD")  # pyright: ignore[reportArgumentType]
 
-    assert type(raised.value) is GitError
+    assert (raised.value.expected, raised.value.found) == ("commit", "blob")
     assert "expected commit type, but the object dereferences to blob type" in str(raised.value)
 
 
