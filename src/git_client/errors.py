@@ -16,12 +16,13 @@ class GitError(RuntimeError):
     if it has none, e.g. a GitTimeoutError), and `stderr` and `stdout` what it printed there
     (stdout only from `Git.run` and `Git.run_bytes`, e.g. the report of a command that printed
     one and failed). The message's first line is `git <command> failed (<status>):`, the
-    status being the exit status or, without one, "timed out" for a GitTimeoutError and "no
-    exit status" otherwise (e.g. for a command a tool didn't run, saying why in `stderr`);
-    `stderr` follows. It shows at most MAX_COMMAND_IN_MESSAGE characters of the
-    command line, ending with "…" when cut; `command` keeps all of it. It shows bytes that
-    aren't UTF-8 (in a path, say) escaped, as `\xe9`, so it can be written anywhere;
-    `command`, `stderr` and `stdout` keep them, as `decode` gives them."""
+    status being the exit status or, without one, "timed out" for a GitTimeoutError, "not
+    started" for a NotStartedError and "no exit status" otherwise (e.g. for a command a tool
+    didn't run, saying why in `stderr`); `stderr` follows. It shows at most
+    MAX_COMMAND_IN_MESSAGE characters of the command line, ending with "…" when cut;
+    `command` keeps all of it. It shows bytes that aren't UTF-8 (in a path, say) escaped, as
+    `\xe9`, so it can be written anywhere; `command`, `stderr` and `stdout` keep them, as
+    `decode` gives them."""
 
     # What the message says in place of the exit status, when there's none.
     _without_exit_status: ClassVar[str] = "no exit status"
@@ -64,6 +65,13 @@ class GitTimeoutError(GitError):
     """git ran past its timeout (see Git), and was stopped. Its returncode is None."""
 
     _without_exit_status: ClassVar[str] = "timed out"
+
+
+class NotStartedError(GitError):
+    """git wasn't started: the client's `stopping` said the tool is stopping (see Git). Its
+    returncode is None."""
+
+    _without_exit_status: ClassVar[str] = "not started"
 
 
 class NotARepositoryError(GitError):

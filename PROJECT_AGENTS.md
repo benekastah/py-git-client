@@ -43,8 +43,9 @@ the shape of the code or a rule here changes.
   version adds that version's section.
 - **Every git process starts through `ReadOnlyGit`** (`process`, or `popen` for one that
   answers requests; `Git` inherits both), so the way git is started stays the quickest each
-  system allows, and a ReadOnlyGit refuses what could write. Never pass a working directory
-  (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
+  system allows, a ReadOnlyGit refuses what could write, and a client whose `stopping` says
+  so starts nothing (`FakeGit` and `git_calls` replace both, so they ask it too). Never pass
+  a working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.

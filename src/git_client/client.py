@@ -10,10 +10,16 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal, TypeAlias
 
-from git_client.errors import ConfigLockedError, GitError, GitTimeoutError, error_for
+from git_client.errors import (
+    ConfigLockedError,
+    GitError,
+    GitTimeoutError,
+    NotStartedError,
+    error_for,
+)
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -415,6 +421,13 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
 
 
+def refuse_if_stopping(git: "ReadOnlyGit", args: Sequence[Arg]) -> None:
+    """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
+    each git process starts (FakeGit's too)."""
+    if git.stopping is not None and git.stopping():
+        raise NotStartedError(args, None, "the tool is stopping")
+
+
 def _refuse_environment(env: Mapping[str, EnvValue]) -> None:
     """Raise ReadOnlyError unless each of `env`'s variables is one a ReadOnlyGit takes."""
     for key in env:
@@ -453,7 +466,13 @@ class ReadOnlyGit:
     FileNotFoundError if there's no git to find (see find_git). `env` is added to the
     environment of every command. `timeout` is how many seconds a command may run (None: as
     long as it takes), unless given its own; one that runs longer is stopped, and raises
-    GitTimeoutError.
+    GitTimeoutError. `stopping`, if given, is asked before each git process starts (e.g.
+    `threading.Event().is_set`, or a function of the tool's): once it says True, every
+    command raises NotStartedError rather than start git, so a tool that's shutting down
+    winds down fast, whichever thread runs them. It doesn't stop a git that's already running: a
+    command runs on until it finishes or times out (or the thread running it is
+    interrupted), and a CatFile's process keeps answering until it's closed, though one
+    that has to start (again) raises.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
     is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
@@ -491,11 +510,13 @@ class ReadOnlyGit:
         env_var: str | None = None,
         env: Mapping[str, EnvValue] | None = None,
         timeout: float | None = None,
+        stopping: Callable[[], bool] | None = None,
     ) -> None:
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
+        self.stopping = stopping
         self._object_id_length: int | None = None
 
     def object_id_length(self) -> int:
@@ -575,9 +596,11 @@ class ReadOnlyGit:
         while what git runs (hooks, filters, credential helpers, gpg, ssh) keeps the user's
         locale (see `environment`). git's own pattern matching then follows the user's
         LC_CTYPE from git 2.39 (`log --grep`, `--author`, `-G`, `-i`, `git grep`), and C's
-        before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the user's to read, in theirs. Every git
-        process but `popen`'s starts here, so a subclass can override this to change how each
-        runs (e.g. to make every command fail once the tool is shutting down)."""
+        before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the
+        user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
+        says so. Every git process but `popen`'s starts here, so a subclass can override this
+        to change how each runs."""
+        refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
         own_group = _own_process_group(seconds)
         with subprocess.Popen(
@@ -608,7 +631,9 @@ class ReadOnlyGit:
     ) -> subprocess.Popen[bytes]:
         """Start git with pipes for its stdin and stdout (its stderr goes nowhere), for a
         process that answers requests until its stdin closes (e.g. `cat-file --batch`). It
-        has no timeout, and its messages are in English (see `process`)."""
+        has no timeout, and its messages are in English (see `process`). Raises
+        NotStartedError, starting nothing, once `stopping` says so."""
+        refuse_if_stopping(self, args)
         return subprocess.Popen(
             self.command(*args),
             stdin=subprocess.PIPE,

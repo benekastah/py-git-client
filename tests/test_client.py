@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from git_client import (
+    CatFile,
     ConfigLockedError,
     Git,
     GitError,
     GitTimeoutError,
     NotARepositoryError,
+    NotStartedError,
     ReadOnlyGit,
     UnknownRevisionError,
     decode,
@@ -145,6 +147,41 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
 def test_succeeds_raises_rather_than_say_no_past_a_timeout(waiting: Git) -> None:
     with pytest.raises(GitTimeoutError):
         waiting.succeeds("wait", timeout=0.2)
+
+
+def test_once_stopping_says_so_no_git_starts(repo: Git) -> None:
+    stop = threading.Event()
+    git = Git(repo.directory, stopping=stop.is_set)
+    git.run("branch", "before")
+    # Set from another thread, as a tool's shutdown might.
+    setter = threading.Thread(target=stop.set)
+    setter.start()
+    setter.join()
+
+    with pytest.raises(NotStartedError) as raised:
+        git.run("branch", "after")
+    for command in (git.ok, git.succeeds, git.passthrough):
+        with pytest.raises(NotStartedError):
+            command("branch", "after")
+    with pytest.raises(NotStartedError):
+        git.resolve("HEAD")
+
+    assert str(raised.value) == "git branch after failed (not started):\nthe tool is stopping"
+    assert raised.value.returncode is None
+    assert repo.resolve("before") is not None
+    assert repo.resolve("after") is None
+
+
+def test_stopping_starts_no_cat_file_but_leaves_a_running_one(repo: Git) -> None:
+    stop = threading.Event()
+    git = Git(repo.directory, stopping=stop.is_set)
+    with CatFile(git) as running:
+        head = running.resolve("HEAD")
+        stop.set()
+
+        assert running.resolve("HEAD") == head
+        with CatFile(git) as new, pytest.raises(NotStartedError, match="cat-file"):
+            new.resolve("HEAD")
 
 
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:

@@ -150,6 +150,23 @@ stops only a git the main thread runs. A git another thread runs goes on until i
 times out, and is orphaned if the tool is killed first; to have it stopped with the tool, give
 those commands no timeout, so git stays in the tool's group and gets the signal itself.
 
+A tool that's shutting down can have its clients start no more git, whichever thread asks,
+with `stopping`, which each client asks before it starts git:
+
+```python
+stop = threading.Event()
+git = Git("path/to/repo", stopping=stop.is_set)
+stop.set()  # e.g. on Ctrl-C, from any thread
+try:
+    git.run("fetch")
+except NotStartedError:  # each command from now on, which starts no git
+    pass
+```
+
+It doesn't stop a git that's already running: a command runs on until it finishes or times
+out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
+it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
+
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
@@ -203,6 +220,7 @@ said and raises a subclass:
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
 | `GitTimeoutError` | git ran past its timeout, and was stopped (its `returncode` is None). |
+| `NotStartedError` | git wasn't started: the client's `stopping` said so (its `returncode` is None). |
 
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
@@ -213,8 +231,8 @@ refuses. Use `succeeds` where any failure of git's means no, and `ok` where a fa
 than git's no should be reported.
 
 An error's message starts `git <command> failed (<status>):`, then its `stderr`. The status
-is git's exit status or, without one, `timed out` for a `GitTimeoutError` and `no exit status`
-otherwise (e.g. for a command a tool didn't run).
+is git's exit status or, without one, `timed out` for a `GitTimeoutError`, `not started` for a
+`NotStartedError` and `no exit status` otherwise (e.g. for a command a tool didn't run).
 
 ## Testing a tool that uses it
 
