@@ -37,7 +37,7 @@ jobs:
   oldest-git:
     if: fromJSON(inputs.context).code
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 2
     env:
       GIT_VERSION: 2.36.6
       # kernel.org's sha256sums.asc for the tarball.
