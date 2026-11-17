@@ -259,9 +259,7 @@ def test_in_a_partial_clone_a_read_only_client_fetches_no_missing_object(repo: G
     assert Git(clone).run("cat-file", "-p", blob) == "a"  # which a Git fetches
 
 
-def test_a_clients_read_only_one_runs_as_it_does_but_refuses_what_writes(
-    repo: Git, tmp_path: Path
-) -> None:
+def test_a_clients_read_only_one_runs_as_it_does_but_refuses_what_writes(repo: Git) -> None:
     def stopping() -> bool:
         return False
 
@@ -269,7 +267,6 @@ def test_a_clients_read_only_one_runs_as_it_does_but_refuses_what_writes(
 
     reader = git.read_only()
 
-    assert isinstance(reader, ReadOnlyGit)
     assert (reader.directory, reader.program, reader.timeout, reader.stopping, reader.env) == (
         git.directory,
         git.program,
@@ -284,21 +281,18 @@ def test_a_clients_read_only_one_runs_as_it_does_but_refuses_what_writes(
     assert reader.read_only() is reader
 
 
-def test_a_clients_read_only_one_is_made_once_and_again_when_the_client_changes(
-    repo: Git, tmp_path: Path
-) -> None:
-    reader = repo.read_only()
-    assert repo.read_only() is reader
+def test_a_clients_read_only_one_has_what_the_client_has_when_its_asked_for(repo: Git) -> None:
+    git = LoggingGit(repo.directory)
+    reader = git.read_only()
 
-    repo.directory = str(tmp_path)
-    moved = repo.read_only()
-    repo.env["TZ"] = "UTC"
-    changed = repo.read_only()
+    git.log = ["rebound"]  # as a tool or a test may
+    now = git.read_only()
+    assert isinstance(now, LoggingGit)
+    assert now.log == ["rebound"]
+    git.env["TZ"] = "UTC"
+    assert git.read_only().env == {"TZ": "UTC"}
 
-    assert moved is not reader
-    assert moved.directory == str(tmp_path)
-    assert reader.directory != str(tmp_path)  # a reader already given out stays as it was
-    assert changed.env == {"TZ": "UTC"}
+    assert reader.env == {}  # a reader already given out stays as it was
 
 
 def test_a_client_whose_environment_a_read_only_one_refuses_makes_none(repo: Git) -> None:

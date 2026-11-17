@@ -541,8 +541,6 @@ class ReadOnlyGit:
     # Whether it runs only commands that read (see ReadOnlyGit); Git's runs any, but for the
     # one read_only() makes.
     _read_only: bool = True
-    # What read_only() made last.
-    _reader: ReadOnlyGit | None = None
 
     def __init__(
         self,
@@ -569,25 +567,21 @@ class ReadOnlyGit:
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
         (see there), and otherwise runs as the client does, with the same `program`,
-        `timeout`, `stopping` and `env`. It's of the client's own class, so a subclass's
-        methods (e.g. its own `process`) and attributes are kept; and it shares what git told
+        `timeout`, `stopping` and `env`, as they are now. It's of the client's own class, so a
+        subclass's methods (e.g. its own `process`) and attributes are kept (an attribute
+        that holds the client itself still writes through it); and it shares what git told
         the client about where things are (`prefix()`, `object_id_length()`, `git_paths`), so
-        it asks no question the client asked, nor the client one it asked. Made once, and again
-        when the client's `directory`, `program`, `env`, `timeout` or `stopping` change; one
-        already given out keeps what it had. A read-only client gives itself. Raises
-        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        it asks no question the client asked, nor the client one it asked. A new copy each
+        call; a read-only client gives itself. Raises ReadOnlyError if `env` holds a variable
+        a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
-        reader = self._reader
-        if reader is None or _settings(reader) != _settings(self):
-            reader = copy.copy(self)
-            reader.env = dict(self.env)
-            reader._read_only = True
-            reader._reader = None
-            prefixes[reader] = prefixes.setdefault(self, {})
-            known_git_paths[reader] = known_git_paths.setdefault(self, {})
-            self._reader = reader
+        reader = copy.copy(self)
+        reader.env = dict(self.env)
+        reader._read_only = True
+        prefixes[reader] = prefixes.setdefault(self, {})
+        known_git_paths[reader] = known_git_paths.setdefault(self, {})
         return reader
 
     def object_id_length(self) -> int:
@@ -898,11 +892,6 @@ class ReadOnlyGit:
         when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
         than say no, if it runs past its timeout."""
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0
-
-
-def _settings(git: ReadOnlyGit) -> tuple[object, ...]:
-    """What `read_only()` copies from a client, and makes its reader again when they change."""
-    return git.directory, git.program, git.env, git.timeout, git.stopping
 
 
 class Git(ReadOnlyGit):

@@ -239,9 +239,8 @@ except ReadOnlyError:
 ```
 
 A tool with a `Git` for the commands that write gives the paths that only read its
-`read_only()`: a copy of the client that refuses what a `ReadOnlyGit` refuses, made once (and
-again if the client's directory, program, `env`, timeout or `stopping` change). It's of the
-client's own class, so a subclass's own `process` and other methods still run, and it shares
+`read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit`
+refuses. It's of the client's own class, so a subclass's own `process` and other methods still run, and it shares
 what git told the client about where things are (`prefix()`, `object_id_length()`,
 `git_paths`). It raises `ReadOnlyError` if the client's `env` holds a variable a `ReadOnlyGit`
 doesn't take.
