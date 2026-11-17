@@ -1,5 +1,4 @@
 import os
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -48,17 +47,3 @@ def repo_from(repo_templates: RepoTemplates, tmp_path: Path) -> Callable[[str, C
         return Git(repo_templates.copy(name, tmp_path / "copy") / "repo")
 
     return copy
-
-
-@pytest.fixture
-def german(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A user who reads git in German, if git's translations are installed (through
-    LANGUAGE, which needs no German locale installed), rather than the tests' English."""
-    monkeypatch.delenv("GIT_TEXTDOMAINDIR", raising=False)
-    monkeypatch.setenv("LANGUAGE", "de")
-    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
-    said = subprocess.run(
-        [real_git(), "-C", os.devnull, "status"], capture_output=True, check=False
-    ).stderr
-    if said.startswith(b"fatal: "):
-        pytest.skip("git's German translation isn't installed")

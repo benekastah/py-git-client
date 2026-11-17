@@ -321,7 +321,7 @@ def test_text_reaches_git_as_utf8_whatever_the_locales_encoding(repo: Git) -> No
     assert repo.run_bytes("log", "-1", "--format=%an %s") == "Zoë 张 Zoë 张\n".encode()
 
 
-@pytest.mark.usefixtures("german")
+@pytest.mark.usefixtures("git_language")
 def test_captured_messages_are_in_the_users_language(repo: Git) -> None:
     # The library has no German patterns, so it can't say which failure this is.
     with pytest.raises(GitError) as raised:
@@ -331,7 +331,9 @@ def test_captured_messages_are_in_the_users_language(repo: Git) -> None:
     assert "Benötigte einen einzelnen Commit" in raised.value.stderr
 
 
-@pytest.mark.usefixtures("german")
+# Spanish leaves "fatal: " as it is, German doesn't.
+@pytest.mark.parametrize("git_language", ["de", "es"], indirect=True)
+@pytest.mark.usefixtures("git_language")
 def test_a_failure_isnt_read_in_a_language_with_no_file(repo: Git) -> None:
     # git translates the wrong type's line, but not "Not a valid commit name": read in English,
     # that would say the name names nothing.
@@ -342,7 +344,7 @@ def test_a_failure_isnt_read_in_a_language_with_no_file(repo: Git) -> None:
     assert "Not a valid commit name" in raised.value.stderr
 
 
-@pytest.mark.usefixtures("german")
+@pytest.mark.usefixtures("git_language")
 def test_answers_read_from_exit_statuses_dont_depend_on_the_users_language(repo: Git) -> None:
     assert repo.resolve("no-such-branch") is None
     assert repo.resolve("main@{u}") is None  # cat-file exits, then rev-parse --quiet checks
@@ -353,7 +355,7 @@ def test_answers_read_from_exit_statuses_dont_depend_on_the_users_language(repo:
     assert not repo.succeeds("rev-parse", "--verify", "no-such-branch")
 
 
-@pytest.mark.usefixtures("german")
+@pytest.mark.usefixtures("git_language")
 def test_passthrough_speaks_the_users_language(repo: Git, tmp_path: Path) -> None:
     with (tmp_path / "out").open("wb") as out:
         repo.passthrough("status", stdout=out)

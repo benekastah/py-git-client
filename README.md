@@ -98,11 +98,20 @@ U+FFFD.
 
 git always runs in the user's locale: the library sets no `LC_ALL` or the like, so git's
 messages are in the user's language, for a tool to show them, and so is what git runs (hooks,
-filters, credential helpers, gpg, ssh). The library reads git's messages in the languages it
-has a file for (see [Adding a language](#adding-a-language)): English, for now. In another,
-what it can't read falls back (see [Errors](#errors) and `var`). A tool that wants git's
-messages in English gives git `LC_ALL=C` in `env` (which what git runs gets too), or, on a
-`Git`, `GIT_TEXTDOMAINDIR` naming no directory (e.g. `os.devnull`), which only git reads.
+filters, credential helpers, gpg, ssh). The library reads git's messages with the file for the
+language git speaks (see [Adding a language](#adding-a-language)): English, for now. It tells
+which that is from git's environment, as gettext does: English with `GIT_TEXTDOMAINDIR` naming
+no directory, or in the C locale (the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that's set is
+`C`, `C.UTF-8` or `POSIX`, or, on Linux, none of them is); otherwise the first language in
+`LANGUAGE` that git has a translation for, else the locale's. When it has no file for git's
+language, or can't tell which that is (on macOS and Windows without a locale, where gettext
+asks the system; or with `LANGUAGE` naming languages whose files differ), it reads nothing, and
+falls back (see [Errors](#errors) and `var`): it never tries another language's file. Where
+git's translation isn't installed, git speaks English while the environment names another
+language: the library then falls back too, unless it has that language's file (see [Adding a
+language](#adding-a-language)). A tool that wants git's messages in English gives git
+`LC_ALL=C` in `env` (which what git runs gets too), or, on a `Git`, `GIT_TEXTDOMAINDIR` naming
+no directory (e.g. `os.devnull`), which only git reads.
 
 Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
 first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its
@@ -190,7 +199,7 @@ refuses. Use `succeeds` where any failure of git's means no, and `ok` where a fa
 than git's no should be reported.
 
 The subclasses are read from git's messages, which are in the user's language. In a language
-the library has no file for, a failure is a plain `GitError`, and `var` raises for a missing
+the library has no file for (or can't tell), a failure is a plain `GitError`, and `var` raises for a missing
 identity rather than return None. Whether `resolve` and `CatFile` find a name, and `ok`'s and
 `succeeds`' answers, are read from exit statuses and cat-file's output, so they're the same
 in any language.
@@ -216,8 +225,8 @@ otherwise (e.g. for a command a tool didn't run).
   `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network), `GIT_TERMINAL_PROMPT=0`
   (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are cleared, so no program asks
   either) and `GIT_TEXTDOMAINDIR` naming no directory (git speaks English, whatever the
-  developer's language; a test of another language deletes it): see `GIT_SETTINGS`. And git looks for a repository no
-  higher than a directory made in pytest's temporary directory or Python's
+  developer's language; see `git_language` for another): see `GIT_SETTINGS`. And git looks
+  for a repository no higher than a directory made in pytest's temporary directory or Python's
   (`tempfile.gettempdir()`), even if one of them is in a repository (e.g. a `--basetemp` or
   `TMPDIR` in your project), so a test that runs git in a directory that isn't a repository
   gets `NotARepositoryError`, rather than the repository around it. A test that needs
@@ -292,6 +301,15 @@ otherwise (e.g. for a command a tool didn't run).
   @pytest.fixture(autouse=True)
   def _outside_any_repository(outside_any_repository: Path) -> None:
       pass
+  ```
+- **`git_language`**: git speaking another language, as some of your users read it, which
+  the tests' English hides: German, or the language a test gives. It skips the test where
+  git's translation isn't installed. In a language the library has no file for, your code
+  gets a plain `GitError` where it would get a subclass (see [Errors](#errors)):
+
+  ```python
+  @pytest.mark.parametrize("git_language", ["de", "es"], indirect=True)
+  def test_outside_a_repository_is_still_reported(git_language: str) -> None: ...
   ```
 - **`fresh_find_git`**: `find_git` caches its answer for the whole process; a test that
   changes what it would find (PATH, or your tool's variable) asks for this fixture, which
@@ -368,9 +386,15 @@ The messages from git that the library reads (to choose a `GitError`, or to see 
 has no identity) are in `src/git_client/messages/`, one file per language: `en.toml` is
 English, and says what each kind of message is. To have the library read git in another
 language, add a file for it (e.g. `de.toml`) giving, for any of those kinds, the messages git
-prints in that language, as regular expressions. Every language's file is tried. Each
-message needs a test that makes real git print it in that language, skipped where git's
-translation isn't installed.
+prints in that language, as regular expressions; a kind it leaves out is never read in that
+language. Name it as gettext names the language (`de`), or the language and territory
+(`pt_BR`) where they differ: the library reads git's messages only with the file for the
+language git speaks. Each message needs a test that makes real git print it in that language
+(the `git_language` fixture, which skips it where git's translation isn't installed). Where
+git's translation isn't installed, git speaks English while the library reads the language's
+file: so if the file holds a message git leaves untranslated, have it hold the English of
+the message that qualifies it too (e.g. `wrong_type`'s beside an untranslated
+`unknown_revision`).
 
 ### Releasing
 

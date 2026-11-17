@@ -50,8 +50,10 @@ the shape of the code or a rule here changes.
   runs in the user's locale, never forced into English, so its messages are theirs to read;
   what the library can't read falls back (a plain GitError). The messages are in
   `messages/`, a file per language; a new language's file needs those tests under its locale,
-  skipped where git's translation isn't installed. Every language's file is tried, which is
-  fine for a few; with more than a few, pick the file for git's language instead.
+  skipped where git's translation isn't installed (`git_language`). A message is read only
+  with the file for the language git speaks, as gettext chooses it from git's environment
+  (`messages.language`), never another's: where that can't be told, or there's no file, a
+  failure is a plain GitError.
 
 ## CI
 

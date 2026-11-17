@@ -5,7 +5,7 @@ commands a tool runs.
 Load it as a pytest plugin, in a project's top conftest.py (`pytest_plugins =
 ["git_client.testing"]`) or with `-p git_client.testing`, for its fixtures (`git_config`,
 `git_config_text`, `repo_templates`, `git_calls`, `fresh_find_git`,
-`outside_any_repository`). It imports pytest, so only tests should import it.
+`outside_any_repository`, `git_language`). It imports pytest, so only tests should import it.
 """
 
 import contextlib
@@ -404,6 +404,32 @@ def outside_any_repository(
     directory = tmp_path_factory.mktemp("outside-any-repository")
     monkeypatch.chdir(directory)
     return directory
+
+
+@pytest.fixture
+def git_language(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> str:
+    """git speaking another language than English, as some of a tool's users read it: German,
+    or the one a test gives (`@pytest.mark.parametrize("git_language", ["es"],
+    indirect=True)`). It removes GIT_SETTINGS' GIT_TEXTDOMAINDIR, and sets LANGUAGE to the
+    language and LC_ALL to en_US.UTF-8, a locale in which gettext reads LANGUAGE. It skips
+    the test where git doesn't speak it (its translation, or that locale, isn't installed).
+    Returns the language."""
+    language = str(getattr(request, "param", "de"))
+    monkeypatch.delenv("GIT_TEXTDOMAINDIR", raising=False)
+    monkeypatch.setenv("LANGUAGE", language)
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    # A message every one of git's translations has.
+    nowhere = str(tmp_path_factory.mktemp("git-language") / "none")
+    said = subprocess.run(
+        [real_git(), f"--git-dir={nowhere}", "rev-parse"], capture_output=True, check=False
+    ).stderr
+    if said.startswith(b"fatal: not a git repository"):
+        pytest.skip(f"git doesn't speak {language} here (its translation isn't installed)")
+    return language
 
 
 @pytest.fixture

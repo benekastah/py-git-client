@@ -12,8 +12,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import IO, ClassVar, Final, Literal, TypeAlias
 
+from git_client import messages
 from git_client.errors import GitError, GitTimeoutError, error_for
-from git_client.messages import SAID
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -156,7 +156,7 @@ def check_names_nothing(
     args = ("rev-parse", "--verify", "--quiet", "--end-of-options", name)
     result = git.process(*args, capture_output=True, stdout=subprocess.DEVNULL, timeout=timeout)
     if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr):
-        raise error_from(args, result)
+        raise error_from(args, result, git.environment())
 
 
 # How long git, asked to stop, has to clean up (e.g. remove index.lock) before it's killed: as
@@ -241,11 +241,14 @@ def _remaining_output(process: subprocess.Popen[bytes]) -> tuple[bytes | None, b
         return expired.stdout, expired.stderr
 
 
-def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> GitError:
-    """The GitError for a command that failed: a subclass for a failure the library knows from
-    what git said (see errors.py)."""
+def error_from(
+    args: Sequence[Arg], result: subprocess.CompletedProcess[bytes], environ: Mapping[str, str]
+) -> GitError:
+    """The GitError for a command that failed, run in `environ`: a subclass for a failure the
+    library knows from what git said, in the language it speaks there (see messages)."""
     stderr, stdout = decode(result.stderr), decode(result.stdout or b"")
-    return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
+    error = error_for(stderr, stdout, messages.said(environ))
+    return error(args, result.returncode, stderr, stdout)
 
 
 class ReadOnlyError(ValueError):
@@ -611,13 +614,17 @@ class ReadOnlyGit:
         Raises GitError if it fails: a subclass (e.g. UnknownRevisionError) for a failure the
         library knows from what git said, in a language it has a file for (see messages)."""
         result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
-        return self._stdout(args, result)
+        return self._stdout(args, result, env)
 
-    @staticmethod
-    def _stdout(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
+    def _stdout(
+        self,
+        args: Sequence[Arg],
+        result: subprocess.CompletedProcess[bytes],
+        env: Mapping[str, EnvValue] | None = None,
+    ) -> bytes:
         """What git printed to stdout, if it succeeded. Raises GitError if it failed."""
         if result.returncode != 0:
-            raise error_from(args, result)
+            raise error_from(args, result, self.environment(env))
         return result.stdout
 
     def run(
@@ -656,7 +663,7 @@ class ReadOnlyGit:
             *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
         )
         if result.returncode not in (0, 1):
-            raise error_from(args, result)
+            raise error_from(args, result, self.environment(env))
         return result.returncode == 0
 
     def succeeds(
@@ -701,7 +708,12 @@ class ReadOnlyGit:
         failure (e.g. a broken config), and for a missing identity too when git says so in a
         language the library has no file for (see messages)."""
         result = self.process("var", name, capture_output=True, timeout=timeout)
-        if result.returncode == _FATAL and SAID["no_identity"].search(decode(result.stderr)):
+        no_identity = messages.said(self.environment()).get("no_identity")
+        if (
+            result.returncode == _FATAL
+            and no_identity
+            and no_identity.search(decode(result.stderr))
+        ):
             return None
         return decode(self._stdout(("var", name), result)).strip()
 

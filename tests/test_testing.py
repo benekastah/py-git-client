@@ -231,7 +231,7 @@ def test_outside_any_repository_runs_a_test_where_git_finds_none(
     result.assert_outcomes(passed=1)
 
 
-@pytest.mark.usefixtures("german")
+@pytest.mark.usefixtures("git_language")
 def test_the_tests_git_speaks_english_whatever_the_developers_language(
     pytester: pytest.Pytester,
 ) -> None:

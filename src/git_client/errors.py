@@ -3,10 +3,8 @@ want to tell from the rest, chosen from what git said (see error_for)."""
 
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, Self
-
-from git_client.messages import SAID
 
 # How much of a command line a GitError's message shows: a long one (thousands of paths, say)
 # would bury what git said.
@@ -100,27 +98,30 @@ class ConflictError(GitError):
 # Which GitError each kind of message git says (see messages/en.toml) raises: on stdout, a
 # conflict; on stderr, the rest, in the order they're tried (a push to a remote that can't be
 # reached is a RemoteError, say).
-_STDOUT_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
-    (ConflictError, SAID["conflict"]),
-)
-_STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
-    (PushRejectedError, SAID["push_rejected"]),
-    (RemoteError, SAID["remote"]),
-    (ConfigLockedError, SAID["config_locked"]),
-    (NotARepositoryError, SAID["not_a_repository"]),
-    (UnknownRevisionError, SAID["unknown_revision"]),
+_STDOUT_SAYS: tuple[tuple[type[GitError], str], ...] = ((ConflictError, "conflict"),)
+_STDERR_SAYS: tuple[tuple[type[GitError], str], ...] = (
+    (PushRejectedError, "push_rejected"),
+    (RemoteError, "remote"),
+    (ConfigLockedError, "config_locked"),
+    (NotARepositoryError, "not_a_repository"),
+    (UnknownRevisionError, "unknown_revision"),
 )
 
 
-def error_for(stderr: str, stdout: str) -> type[GitError]:
+def error_for(stderr: str, stdout: str, said: Mapping[str, re.Pattern[str]]) -> type[GitError]:
     """The GitError for a command that failed, saying stderr and stdout: a subclass for what
-    git says in a language the library has a file for (see messages), else GitError."""
-    for error, says in _STDOUT_SAYS:
-        if says.search(stdout):
+    git says, as `said` (messages.said, for git's language) reads it, else GitError."""
+
+    def says(kind: str, text: str) -> bool:
+        pattern = said.get(kind)
+        return pattern is not None and pattern.search(text) is not None
+
+    for error, kind in _STDOUT_SAYS:
+        if says(kind, stdout):
             return error
-    for error, says in _STDERR_SAYS:
-        if says.search(stderr):
-            if error is UnknownRevisionError and SAID["wrong_type"].search(stderr):
+    for error, kind in _STDERR_SAYS:
+        if says(kind, stderr):
+            if error is UnknownRevisionError and says("wrong_type", stderr):
                 return GitError  # it names something
             return error
     return GitError
