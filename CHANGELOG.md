@@ -8,6 +8,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- Python 3.15 or newer is required, where 0.0.1 took 3.11: a tool's own `requires-python`
+  must be `>=3.15` for uv to resolve this version.
+- `Arg`, `EnvValue` and `Timeout` are `type` aliases: annotations take them as before, but
+  they aren't the unions at runtime (no `isinstance(x, Arg)`; `Arg.__value__` is the union).
 - A `Git` subclass that overrides `run` takes its new `strip` keyword (#21), and one that
   overrides `prefix` takes `timeout` (#23); a type checker flags the old signatures.
 - `git_calls` gives `GitCall`s (lists of the arguments, with the `program`): an annotation
