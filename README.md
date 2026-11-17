@@ -426,6 +426,9 @@ python3 dev.py install
 It sets up `.venv` with the package (editable) and the dev tools, and makes the clone use the
 git hooks in `git_hooks/`. On Windows, run `dev.py` with `py` (`py dev.py install`).
 
+It won't install a clone in a temporary directory (the system's, `/tmp` or `/var/tmp`): there,
+run `python3 dev.py venv` and `git config core.hooksPath git_hooks` instead.
+
 `dev.py` runs the same way on Linux, macOS and Windows:
 
 ```sh
