@@ -54,7 +54,9 @@ from git_client import (
 )
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
-# a tool names its own variable so its users can choose, e.g. git itself, for speed.
+# a tool names its own variable so its users can choose, e.g. git itself, for speed. Only
+# PATH's absolute directories count: an empty or relative entry (e.g. ".") is skipped, on
+# purpose, so a git that a repository holds is never run from it.
 # Raises FileNotFoundError if there's neither, and, on Windows, ValueError if the variable
 # names a batch file (.bat, .cmd), which cmd.exe runs, reading &, | and % in arguments.
 git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (the default): none
