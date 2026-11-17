@@ -20,7 +20,7 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
     top = Path(directory)
     dot_git = top / ".git"
     if dot_git.is_file():
-        line = dot_git.read_bytes().rstrip()
+        line = _first_line(dot_git)
         if not line.startswith(b"gitdir: "):
             return None
         own = top / os.fsdecode(line.removeprefix(b"gitdir: "))
@@ -29,16 +29,18 @@ def git_common_dir(directory: str | os.PathLike[str]) -> Path | None:
     else:
         own = top
     commondir = own / "commondir"
-    common = own / os.fsdecode(commondir.read_bytes().rstrip()) if commondir.is_file() else own
-    return common.resolve() if _is_git_directory(common) else None
+    common = own / os.fsdecode(_first_line(commondir)) if commondir.is_file() else own
+    return common.resolve() if _is_git_directory(own, common) else None
 
 
-def _is_git_directory(directory: Path) -> bool:
-    """Whether `directory` looks like a common git directory, as git checks it: a HEAD file,
-    and objects and refs directories (refs too in a reftable repository, which keeps its refs
-    in reftable)."""
-    return (
-        (directory / "HEAD").is_file()
-        and (directory / "objects").is_dir()
-        and (directory / "refs").is_dir()
-    )
+def _first_line(file: Path) -> bytes:
+    """A file git wrote a path in, without its line ending: as git reads it, only "\\n" and
+    "\\r" are taken off, so a path ending in a space keeps it."""
+    return file.read_bytes().rstrip(b"\r\n")
+
+
+def _is_git_directory(own: Path, common: Path) -> bool:
+    """Whether `own` (with its common directory, `common`) is a git directory, as git checks
+    it: a HEAD file in `own`, and objects and refs directories in `common` (refs too in a
+    reftable repository, which keeps its refs in reftable)."""
+    return (own / "HEAD").is_file() and (common / "objects").is_dir() and (common / "refs").is_dir()

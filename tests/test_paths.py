@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,7 +13,9 @@ RepoFrom = Callable[[str, Callable[[Git], None]], Git]
 
 def common_dir_git_says(git: Git) -> Path:
     """The common git directory, as git itself finds it."""
-    return Path(git.run("rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+    output = git.run_bytes("rev-parse", "--path-format=absolute", "--git-common-dir")
+    # Not run's, which would strip a trailing space from the path.
+    return Path(os.fsdecode(output.removesuffix(b"\n"))).resolve()
 
 
 def test_git_common_dir_of_a_checkout_is_its_git_directory(repo: Git) -> None:
@@ -92,3 +95,37 @@ def test_git_common_dir_reads_a_git_file_with_any_line_ending(
     (checkout / ".git").write_bytes(b"gitdir: " + os.fsencode(dot_git) + ending)
 
     assert git_common_dir(checkout) == dot_git.resolve()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows can't name a directory with a trailing space"
+)
+def test_git_common_dir_keeps_a_trailing_space_in_the_paths_it_reads(
+    repo: Git, tmp_path: Path
+) -> None:
+    # git writes the .git file's gitdir, and reads it and commondir up to a line ending alone.
+    separate = tmp_path / "separate "
+    checkout = tmp_path / "checkout"
+    repo.run("init", "--quiet", "--separate-git-dir", str(separate), str(checkout))
+    linked_dir = separate / "worktrees" / "linked"
+    linked_dir.mkdir(parents=True)
+    (linked_dir / "HEAD").write_bytes((separate / "HEAD").read_bytes())
+    (linked_dir / "commondir").write_bytes(os.fsencode(separate) + b"\n")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / ".git").write_bytes(b"gitdir: " + os.fsencode(linked_dir) + b"\n")
+
+    assert git_common_dir(checkout) == separate.resolve() == common_dir_git_says(Git(checkout))
+    assert git_common_dir(linked) == separate.resolve()
+
+
+def test_git_common_dir_is_none_for_a_linked_worktree_whose_head_is_gone(
+    repo: Git, tmp_path: Path
+) -> None:
+    linked = tmp_path / "linked"
+    repo.run("worktree", "add", "--quiet", str(linked))
+    own = Path(Git(linked).run("rev-parse", "--path-format=absolute", "--git-dir"))
+    (own / "HEAD").unlink()
+
+    # As git, which says the .git file doesn't point to a valid repository.
+    assert git_common_dir(linked) is None
