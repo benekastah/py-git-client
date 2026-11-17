@@ -58,6 +58,16 @@ def test_a_failures_message_cuts_a_long_command_short() -> None:
     assert len(error.command) == 102
 
 
+def test_a_failures_message_says_timed_out_only_of_a_timeout() -> None:
+    # A tool may raise a GitError with no exit status for a command it never ran.
+    not_run = GitError(["fetch"], None, "not run: the tool is shutting down")
+    timed_out = GitTimeoutError(["fetch"], None, "")
+
+    assert str(not_run) == "git fetch failed (no exit status):\nnot run: the tool is shutting down"
+    assert str(timed_out) == "git fetch failed (timed out):\n"
+    assert str(pickle.loads(pickle.dumps(not_run))) == str(not_run)
+
+
 def test_a_failures_message_can_be_written_whatever_bytes_git_was_given() -> None:
     # A path that isn't UTF-8, as decode gives it: its byte as a surrogate, which UTF-8 can't
     # write.
