@@ -524,6 +524,14 @@ class ReadOnlyGit:
         self.timeout = timeout
         self.stopping = stopping
         self._object_id_length = object_id_length
+        self._prefixes: dict[tuple[str, tuple[tuple[str, EnvValue], ...]], str] = {}
+
+    def location(self) -> tuple[str, tuple[tuple[str, EnvValue], ...]]:
+        """What decides where git finds the repository: the directory, as an absolute path
+        (so a change of the process's directory counts for a relative one), and the client's
+        `env` (e.g. GIT_DIR). The key under which answers about where things are are kept, so
+        reassigning `directory` or changing `env` asks git again."""
+        return os.path.abspath(self.directory), tuple(sorted(self.env.items()))
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
@@ -539,10 +547,17 @@ class ReadOnlyGit:
         after each directory (e.g. "src/app/"), as `git rev-parse --show-prefix` gives it: ""
         at the top, and outside a worktree (e.g. in a bare repository or a git directory).
         Put it before a path from the directory to name that path from the top. Raises
-        GitError if git fails (e.g. NotARepositoryError)."""
-        # Not run's, which would strip a directory's leading space.
-        output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
-        return decode(output.removesuffix(b"\n"))
+        GitError if git fails (e.g. NotARepositoryError).
+
+        Asked of git once per `location()` (the directory and `env`, which a tool may change)
+        and remembered, so a repository moved or turned into another while the client keeps
+        its directory isn't noticed."""
+        key = self.location()
+        if key not in self._prefixes:
+            # Not run's, which would strip a directory's leading space.
+            output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
+            self._prefixes[key] = decode(output.removesuffix(b"\n"))
+        return self._prefixes[key]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:

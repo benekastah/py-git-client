@@ -6,6 +6,13 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ## 0.0.3 (unreleased)
 
+### What a tool may need to change
+
+- `ReadOnlyGit.prefix()` and `git_paths` (except "hooks" and what's under it) ask git once
+  per client, directory and `env`, and remember the answer: a tool that cached them itself
+  can drop its cache (and its `cdup` is `"../" * prefix().count("/")`). A repository moved
+  or replaced under a client that keeps its directory isn't noticed; make a new client.
+
 ### Added
 
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that

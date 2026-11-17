@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import weakref
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -103,6 +104,12 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
+# Where git keeps each name, per client and `ReadOnlyGit.location()`.
+_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[object, str], Path]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
     "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
@@ -111,14 +118,33 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     rest (refs, objects, config); and where config or the environment move it (e.g.
     core.hooksPath, GIT_OBJECT_DIRECTORY). Raises ValueError for a name with a line ending,
     whose path couldn't be told from the next one's, and GitError if git fails (e.g.
-    NotARepositoryError)."""
+    NotARepositoryError).
+
+    Each name is asked of git once per client and `ReadOnlyGit.location()` (its directory and
+    `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
+    may set, moves them. Nothing else `--git-path` answers depends on config."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths can't take a name with a line ending: {names}")
-    args = [arg for name in names for arg in ("--git-path", name)]
-    output = git.run_bytes("rev-parse", "--path-format=absolute", *args)
-    return [Path(os.fsdecode(line)) for line in output.splitlines()]
+    known = _git_paths.setdefault(git, {})
+    where = git.location()
+    new = [
+        name
+        for name in dict.fromkeys(names)
+        if (where, name) not in known or _moved_by_config(name)
+    ]
+    if new:
+        args = [arg for name in new for arg in ("--git-path", name)]
+        output = git.run_bytes("rev-parse", "--path-format=absolute", *args)
+        for name, line in zip(new, output.splitlines(), strict=True):
+            known[where, name] = Path(os.fsdecode(line))
+    return [known[where, name] for name in names]
+
+
+def _moved_by_config(name: str) -> bool:
+    """Whether config (core.hooksPath) can move where git keeps name."""
+    return name == "hooks" or name.startswith("hooks/")
 
 
 def patch_ids(

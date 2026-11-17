@@ -388,6 +388,48 @@ def test_git_paths_finds_each_name_where_git_keeps_it_with_one_git(
     assert len(git_calls) == started + 1
 
 
+def test_git_paths_asks_git_once_per_name(repo: Git, git_calls: list[list[str]]) -> None:
+    first = git_paths(repo, "HEAD", "index")
+    assert git_paths(repo, "index", "HEAD", "refs") == [
+        first[1],
+        first[0],
+        first[1].parent / "refs",
+    ]
+    git_paths(repo, "HEAD", "refs")
+
+    assert [call[-2:] for call in git_calls] == [
+        ["--git-path", "index"],
+        ["--git-path", "refs"],
+    ]
+    assert len(git_calls) == 2
+
+
+def test_git_paths_follows_a_change_of_directory_or_environment(
+    repo: Git, tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    linked = tmp_path / "linked"
+    repo.run("worktree", "add", "--quiet", str(linked))
+    git = Git(repo.directory)
+    [main] = git_paths(git, "HEAD")
+
+    git.directory = str(linked)
+    [own] = git_paths(git, "HEAD")
+    git.env["GIT_DIR"] = str(Path(repo.directory) / ".git")
+    [forced] = git_paths(git, "HEAD")
+
+    assert own != main
+    assert forced == main
+
+
+def test_git_paths_asks_again_for_hooks_which_a_config_change_moves(repo: Git) -> None:
+    [before] = git_paths(repo, "hooks")
+    [hook_before] = git_paths(repo, "hooks/pre-commit")
+    repo.run("config", "core.hooksPath", str(Path(repo.directory) / "my-hooks"))
+
+    assert git_paths(repo, "hooks") != [before]
+    assert git_paths(repo, "hooks/pre-commit") != [hook_before]
+
+
 def test_git_paths_refuses_a_name_with_a_line_ending(repo: Git) -> None:
     with pytest.raises(ValueError, match="line ending"):
         git_paths(repo, "HEAD", "a\nb")

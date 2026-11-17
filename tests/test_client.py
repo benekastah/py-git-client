@@ -68,6 +68,35 @@ def test_prefix_is_the_path_from_the_top_of_the_worktree_down_to_the_directory(
     assert Git(Path(repo.directory) / ".git").prefix() == ""
 
 
+def test_prefix_is_asked_of_git_once_per_directory_and_environment(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    below = Path(repo.directory) / "sub"
+    below.mkdir()
+    git = Git(repo.directory)
+
+    assert git.prefix() == ""
+    assert git.prefix(timeout=5) == ""
+    assert len(git_calls) == 1
+
+    # Another directory, or another environment, is another answer.
+    git.directory = str(below)
+    assert git.prefix() == "sub/"
+    git.env["GIT_WORK_TREE"] = str(below)
+    git.prefix()
+    assert len(git_calls) == 3
+
+
+def test_a_failed_prefix_is_not_remembered(tmp_path: Path, repo: Git) -> None:
+    git = Git(tmp_path / "later")
+    (tmp_path / "later").mkdir()
+    with pytest.raises(GitError):
+        git.prefix()
+
+    git.directory = repo.directory
+    assert git.prefix() == ""
+
+
 def test_a_failure_raises_with_what_git_said(repo: Git) -> None:
     with pytest.raises(GitError) as raised:
         repo.run("switch", "no-such-branch")
