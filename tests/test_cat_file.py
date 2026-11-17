@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -436,6 +437,24 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
 
     assert kind == "commit"
     assert commit.endswith(b"\n\nfirst\n")
+
+
+def test_reading_a_large_object_holds_it_once(repo: Git, tmp_path: Path) -> None:
+    size = 8 * 1024 * 1024
+    (tmp_path / "large").write_bytes(b"x" * size)
+    blob = repo.run("hash-object", "-w", str(tmp_path / "large"))
+
+    with CatFile(repo) as cat_file:
+        cat_file.resolve("HEAD")
+        tracemalloc.start()
+        try:
+            _, content = cat_file.read(blob)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+    assert len(content) == size
+    assert peak < 1.25 * size
 
 
 def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:

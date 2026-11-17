@@ -2,6 +2,7 @@
 without a process each."""
 
 import contextlib
+import io
 import math
 import os
 import queue
@@ -455,10 +456,22 @@ class _Output:
         return self._take(end or len(self._buffer))
 
     def read(self, size: int, deadline: float | None) -> bytes:
-        """The next `size` bytes, or fewer at the end of the output."""
-        while len(self._buffer) < size and self._fill(deadline):
-            pass
-        return self._take(min(size, len(self._buffer)))
+        """The next `size` bytes, or fewer at the end of the output. More than the buffer
+        holds are read into a file in memory as big as they are, whose value is what's
+        returned, so a large object is held once, not also in the buffer."""
+        if len(self._buffer) >= size:
+            return self._take(size)
+        read = io.BytesIO()
+        read.seek(size - 1)
+        read.write(b"\0")  # Makes it as big as it will be.
+        read.seek(0)
+        read.write(self._buffer)
+        self._buffer.clear()
+        while (left := size - read.tell()) and (chunk := self._chunk(deadline)):
+            read.write(chunk[:left])
+            self._buffer += chunk[left:]
+        read.truncate()  # If the output ended first.
+        return read.getvalue()
 
     def close(self) -> None:
         """Stop reading. On Windows, the thread closes the pipe once its read returns: closing
@@ -476,8 +489,14 @@ class _Output:
 
     def _fill(self, deadline: float | None) -> bool:
         """Add what comes next to the buffer, by the deadline. False at the end."""
+        chunk = self._chunk(deadline)
+        self._buffer += chunk
+        return bool(chunk)
+
+    def _chunk(self, deadline: float | None) -> bytes:
+        """What comes next, by the deadline: empty at the end."""
         if self._ended:
-            return False
+            return b""
         if sys.platform == "win32":
             try:
                 chunk = self._chunks.get(timeout=_left(deadline))
@@ -488,9 +507,8 @@ class _Output:
             if left is not None and not self._poll.poll(math.ceil(left * 1000)):
                 raise _PastDeadline
             chunk = os.read(self._fd, _CHUNK)
-        self._buffer += chunk
         self._ended = not chunk
-        return not self._ended
+        return chunk
 
     def _pass_on(self) -> None:
         """On Windows, in a thread of its own: pass on what the pipe gives, then the empty
