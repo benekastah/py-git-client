@@ -84,27 +84,25 @@ class CatFile:
     """Resolves names and reads objects through one `git cat-file --batch-command`, started
     when first needed and kept until `close` (or the end of a `with` block).
 
-    It sees refs and objects as they are when asked, even when other processes have changed
-    them since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with
-    no upstream), git cat-file exits rather than saying they name nothing; then that name
-    resolves to nothing, and the next request starts another process. One that stopped
-    between requests (killed, say) is started again for the request that finds it gone. A
-    request interrupted before all its answer is read (e.g. by KeyboardInterrupt) leaves the
-    rest to the process, which the next request kills, and starts another; a request that
-    isn't answered within the client's `timeout` (if it has one) kills it at once, raising
-    GitTimeoutError. Any
-    request raises GitError if git is too old for `--batch-command` (before 2.36), or if
-    git can't read the repository at all (e.g. NotARepositoryError, or a broken config), and
-    CorruptObjectError if an object git reads for it is damaged (e.g. a corrupt loose object),
-    rather than say the name names nothing: git can't tell what it would name. A ref git
-    ignores as broken names nothing, as `git rev-parse --verify` finds it.
+    It sees refs and objects as they are when asked, even when other processes have changed them
+    since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with no
+    upstream), git cat-file exits rather than saying they name nothing; then that name resolves to
+    nothing, and the next request starts another process. One that stopped between requests (killed,
+    say) is started again for the request that finds it gone. A request interrupted before all its
+    answer is read (e.g. by KeyboardInterrupt) leaves the rest to the process, which the next
+    request kills, and starts another; a request that isn't answered within the client's `timeout`
+    (if it has one) kills it at once, raising GitTimeoutError. Any request raises GitError if git is
+    too old for `--batch-command` (before 2.36), or if git can't read the repository at all (e.g.
+    NotARepositoryError, or a broken config), and CorruptObjectError if an object git reads for it
+    is damaged (e.g. a corrupt loose object), rather than say the name names nothing: git can't tell
+    what it would name. A ref git ignores as broken names nothing, as `git rev-parse --verify` finds
+    it.
 
     Its process stops when it's no longer used, as Python frees it (or, at exit, as its stdin
-    closes). With `weak`, it holds
-    `git` by a weak reference, for a CatFile the client keeps itself (e.g. `self.cat_file =
-    CatFile(self, weak=True)` in a Git subclass): a strong one would make a reference cycle,
-    which keeps a client no longer used, and its process, until the garbage collector finds
-    it. A request after `git` is freed raises ReferenceError.
+    closes). With `weak`, it holds `git` by a weak reference, for a CatFile the client keeps itself
+    (e.g. `self.cat_file = CatFile(self, weak=True)` in a Git subclass): a strong one would make a
+    reference cycle, which keeps a client no longer used, and its process, until the garbage
+    collector finds it. A request after `git` is freed raises ReferenceError.
     """
 
     def __init__(self, git: ReadOnlyGit, *, weak: bool = False) -> None:
@@ -249,22 +247,30 @@ class CatFile:
                 # can't start.
                 file = tempfile.TemporaryFile(buffering=0)  # noqa: SIM115
                 process = None
+                stopper: _Stopper | None = None
                 try:
                     self._where = location(self.git)
                     process = self.git.popen(*_COMMAND, stderr=file)
                     assert process.stdout is not None
                     output = _Output(process.stdout)
-                    stopper: _Stopper = weakref.finalize(self, _end, process, output, file)
+                    stopper = weakref.finalize(self, _end, process, output, file)
+                    # Not as Python exits, when a daemon thread may be in a request: the
+                    # process gets EOF on its stdin then, and exits by itself.
+                    stopper.atexit = False
                 except BaseException:
+                    if stopper is not None:
+                        stopper.detach()
                     if process is not None:
                         _abandon(process)
                     file.close()
                     raise
-                # Not as Python exits, when a daemon thread may be in a request: the process
-                # gets EOF on its stdin then, and exits by itself.
-                stopper.atexit = False
-                self._process, self._output, self._stderr = process, output, file
-                self._stopper = stopper
+                # In one statement, which nothing can interrupt partway.
+                self._process, self._output, self._stderr, self._stopper = (
+                    process,
+                    output,
+                    file,
+                    stopper,
+                )
             elif self._stderr is not None:
                 _empty(self._stderr)  # What it said of earlier requests.
             process, output, stderr = self._process, self._output, self._stderr
@@ -292,6 +298,8 @@ class CatFile:
                 # It writes its warnings before the reply.
                 return reply, _said(stderr) if os.fstat(stderr.fileno()).st_size else ""
             if reply:
+                # A line, read whole: what git says next answers the next request.
+                self._unanswered = False
                 reason = _said(stderr)
                 _check_intact(reason, 1)
                 return reply, reason

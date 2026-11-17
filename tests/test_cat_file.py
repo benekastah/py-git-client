@@ -170,7 +170,9 @@ def test_what_git_says_as_it_starts_is_of_no_name(
 
 def break_a_ref(git: Git) -> None:
     """Make refs/heads/broken a ref file that holds no id, which git warns of and ignores."""
-    (Path(git.directory) / ".git" / "refs" / "heads" / "broken").write_text("garbage\n")
+    (Path(git.directory) / ".git" / "refs" / "heads" / "broken").write_text(
+        "garbage\n", encoding="utf-8"
+    )
 
 
 def test_a_warning_is_no_reason(repo_from: Callable[[str, Callable[[Git], None]], Git]) -> None:
@@ -540,6 +542,21 @@ def test_a_corrupt_object_isnt_taken_for_a_missing_one(damaged_repo: Git) -> Non
             cat_file.verify("no-such-branch")
         with pytest.raises(UnknownRevisionError):
             cat_file.read("0" * 40)
+
+
+def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(repo: Git) -> None:
+    commit, blob = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD:a")
+    loose = Path(repo.directory) / ".git" / "objects" / commit[:2] / commit[2:]
+    loose.chmod(0o644)  # git makes it read-only
+    loose.write_bytes(b"garbage")
+    git = StartsKeepingGit(repo.directory)
+
+    with CatFile(git) as cat_file:
+        # cat-file says HEAD~1 is missing, and what's damaged on stderr: an answer in full.
+        with pytest.raises(CorruptObjectError):
+            cat_file.verify("HEAD~1")
+        assert cat_file.resolve(blob) == blob
+    assert len(git.started) == 1
 
 
 def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:
