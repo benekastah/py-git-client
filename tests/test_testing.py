@@ -216,6 +216,53 @@ def test_outside_any_repository_runs_a_test_where_git_finds_none(
     result.assert_outcomes(passed=1)
 
 
+def test_git_finds_no_repository_above_any_temporary_directory(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytester.makepyfile(
+        """
+        import tempfile
+        from pathlib import Path
+
+        import pytest
+
+        from git_client import Git, NotARepositoryError
+
+
+        def test_in_pytests_temporary_directory(tmp_path: Path) -> None:
+            with pytest.raises(NotARepositoryError):
+                Git(tmp_path).run("rev-parse", "--git-dir")
+
+
+        def test_in_pythons_temporary_directory() -> None:
+            with pytest.raises(NotARepositoryError):
+                Git(tempfile.mkdtemp()).run("rev-parse", "--git-dir")
+
+
+        def test_below_the_users_own_ceiling() -> None:
+            with pytest.raises(NotARepositoryError):
+                Git(Path("project", "elsewhere", "sub")).run("rev-parse", "--git-dir")
+        """
+    )
+    # Both kinds of temporary directory in a repository, as a project's tooling may put them.
+    Git(pytester.path).run("init", "--quiet", "project")
+    (pytester.path / "project" / "tmp").mkdir()
+    monkeypatch.setenv("TMPDIR", str(pytester.path / "project" / "tmp"))
+    # A ceiling of the user's own, outside both, which the tests' git keeps.
+    (pytester.path / "project" / "elsewhere" / "sub").mkdir(parents=True)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(pytester.path / "project" / "elsewhere"))
+
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "git_client.testing",
+        "-p",
+        "no:xdist",
+        f"--basetemp={pytester.path / 'project' / 'basetemp'}",
+    )
+
+    result.assert_outcomes(passed=3)
+
+
 def test_templates_build_under_the_sessions_config(
     repo_templates: RepoTemplates, tmp_path: Path
 ) -> None:

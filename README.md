@@ -177,8 +177,12 @@ otherwise (e.g. for a command a tool didn't run).
   `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
   `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
   `GIT_TERMINAL_PROMPT=0` (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are
-  cleared, so no program asks either): see `GIT_SETTINGS`. A test that needs
-  another protocol widens it in a fixture of its own:
+  cleared, so no program asks either): see `GIT_SETTINGS`. And git looks for a repository no
+  higher than a directory made in pytest's temporary directory or Python's
+  (`tempfile.gettempdir()`), even if one of them is in a repository (e.g. a `--basetemp` or
+  `TMPDIR` in your project), so a test that runs git in a directory that isn't a repository
+  gets `NotARepositoryError`, rather than the repository around it. A test that needs
+  another protocol widens `GIT_ALLOW_PROTOCOL` in a fixture of its own:
 
   ```python
   @pytest.fixture
@@ -233,10 +237,10 @@ otherwise (e.g. for a command a tool didn't run).
       status(clone)  # your code
       assert git_calls == [["status", "--porcelain=v2"]]
   ```
-- **`outside_any_repository`**: runs a test from an empty directory where git finds no
-  repository, so a git run without a directory (a `Git()` your code forgot to give one)
-  fails rather than change the repository the tests were started in. To run every test that
-  way, ask for it from an autouse fixture in your top `conftest.py`:
+- **`outside_any_repository`**: runs a test from an empty temporary directory, where git
+  finds no repository, so a git run without a directory (a `Git()` your code forgot to give
+  one) fails rather than change the repository the tests were started in. To run every test
+  that way, ask for it from an autouse fixture in your top `conftest.py`:
 
   ```python
   @pytest.fixture(autouse=True)
