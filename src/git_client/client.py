@@ -634,12 +634,29 @@ class ReadOnlyGit:
         True for 0, False for 1, which is git's no (e.g. `merge-base --is-ancestor`, `diff
         --quiet`, `merge-tree`'s conflicts, `config --get` of a key that isn't set). Raises
         GitError for any other exit status, as `run` does (e.g. UnknownRevisionError for a
-        revision that names nothing), and GitTimeoutError if it runs past its timeout."""
+        revision that names nothing), and GitTimeoutError if it runs past its timeout. Where
+        any failure means no, use `succeeds`."""
         result = self.process(
             *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
         )
         if result.returncode not in (0, 1):
             raise error_from(args, result)
+        return result.returncode == 0
+
+    def succeeds(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> bool:
+        """Run git, discarding its output, and say whether it succeeded: True for exit status
+        0, False for any other, whatever went wrong (e.g. a revision that names nothing, or no
+        repository). For a check where any failure means no; where 1 is git's no and anything
+        else a failure to report, use `ok`. Raises GitTimeoutError, rather than say no, if it
+        runs past its timeout: that's not git's answer."""
+        result = self.process(
+            *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
+        )
         return result.returncode == 0
 
     def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:

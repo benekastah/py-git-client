@@ -11,6 +11,7 @@ from git_client import (
     GitError,
     GitTimeoutError,
     NotARepositoryError,
+    ReadOnlyGit,
     UnknownRevisionError,
     find_git,
 )
@@ -105,6 +106,11 @@ def test_a_commands_own_timeout_takes_the_clients_place(waiting: Git) -> None:
         waiting.ok("wait", timeout=0.2)
     assert client.run("pause", timeout=None) == ""
     assert client.passthrough("pause", timeout=10)
+
+
+def test_succeeds_raises_rather_than_say_no_past_a_timeout(waiting: Git) -> None:
+    with pytest.raises(GitTimeoutError):
+        waiting.succeeds("wait", timeout=0.2)
 
 
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
@@ -206,6 +212,13 @@ def test_ok_raises_for_a_failure(repo: Git) -> None:
 
     assert raised.value.returncode == 128
     assert "no-such-branch" in raised.value.stderr
+
+
+def test_succeeds_answers_yes_for_exit_0_and_no_for_any_other(repo: Git, tmp_path: Path) -> None:
+    assert repo.succeeds("rev-parse", "--verify", "HEAD")
+    assert not repo.succeeds("config", "--get", "no.such-key")  # exit 1
+    assert not repo.succeeds("merge-base", "--is-ancestor", "no-such-branch", "HEAD")  # 128
+    assert not ReadOnlyGit(tmp_path / "no-such-directory").succeeds("status")
 
 
 def test_input_and_output_keep_their_line_endings(repo: Git) -> None:
