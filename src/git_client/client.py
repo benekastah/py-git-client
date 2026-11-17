@@ -843,9 +843,17 @@ class ReadOnlyGit:
         args = ("cat-file", "--batch-check")
         result = self.process(*args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout)
         answered, _, reply = result.stdout.partition(b"\n")
-        if not answered:
-            # It exited as it started, as it does when it can't read the repository.
-            raise error_from(args, result)
+        if answered != _PROBE_LINE[:-1] + b" missing":
+            if not answered and result.returncode != 0:
+                # It exited as it started, as it does when it can't read the repository.
+                raise error_from(args, result)
+            # Not git's answer (e.g. a FakeGit's, made before resolve sent the name first).
+            raise GitError(
+                args,
+                result.returncode,
+                f"cat-file answered {decode(answered)!r} for the name of all zeros sent first,"
+                " not that it's missing",
+            )
         if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
             raise CorruptObjectError(args, result.returncode, stderr)
         # If it exited, it was on the name, which names nothing.

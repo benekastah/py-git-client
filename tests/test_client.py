@@ -273,6 +273,27 @@ def test_resolve_gives_none_for_a_name_git_exits_on_in_one_process(
     assert len(git_calls) == 1
 
 
+def test_resolve_reads_a_fakes_answer_after_its_answer_for_the_name_sent_first() -> None:
+    git = FakeGit()
+    git.respond(["cat-file", "--batch-check"], f"{'0' * 40} missing\n{'a' * 40} commit 100\n")
+
+    assert git.resolve("HEAD") == "a" * 40
+    assert git.calls[0].input == b"0" * 40 + b"\nHEAD\n"
+
+
+@pytest.mark.parametrize("stdout", [f"{'a' * 40} commit 100\n", ""])
+def test_resolve_raises_for_a_fake_answer_without_one_for_the_name_sent_first(
+    stdout: str,
+) -> None:
+    # As a FakeGit answered cat-file before resolve sent a name of all zeros first: rather
+    # than take the id for that name's answer, and say HEAD names nothing.
+    git = FakeGit()
+    git.respond(["cat-file", "--batch-check"], stdout)
+
+    with pytest.raises(GitError, match="all zeros"):
+        git.resolve("HEAD")
+
+
 def test_resolve_raises_for_a_corrupt_object_rather_than_say_it_names_nothing(
     damaged_repo: Git,
 ) -> None:
