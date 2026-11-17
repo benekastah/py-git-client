@@ -74,6 +74,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
   answer unread, to answer the next request: `resolve("HEAD")` could give another name's
   id. It now kills the process, and the next request starts another (#53).
+- `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever
+  for a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch in
+  a partial clone, or writing what nothing reads). It now closes the process's stdout too,
+  and kills it if it hasn't exited within a second (#53).
 
 ## 0.0.2 (2026-11-17)
 

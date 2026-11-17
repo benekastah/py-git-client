@@ -39,6 +39,10 @@ USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
 unlike the 128 (FATAL) of `cat-file` exiting on a name."""
 
+_EXIT_WAIT = 1.0
+"""How long a process asked to stop (its stdin and stdout closed) has to exit before it's
+killed."""
+
 ObjectType = Literal["blob", "commit", "tag", "tree"]
 """The types of git's objects."""
 
@@ -118,7 +122,8 @@ class CatFile:
         self.close()
 
     def close(self) -> None:
-        """Stop the process, if one is running."""
+        """Stop the process, if one is running: it's killed if it doesn't exit within a second
+        (e.g. one waiting on a lazy fetch in a partial clone)."""
         with self._lock:
             self._stop()
 
@@ -307,12 +312,18 @@ def _failure(name: str, reply: bytes, reason: str) -> GitError:
 
 def _end(process: subprocess.Popen[bytes], stderr: IO[bytes]) -> None:
     """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
-    used, rather than left for Python to warn of and reap."""
+    used, rather than left for Python to warn of and reap. Closing its stdout stops one
+    writing what nothing will read (git exits when a write fails); one that doesn't exit
+    within _EXIT_WAIT (e.g. waiting on a lazy fetch in a partial clone) is killed."""
     if process.stdin is not None:
         # It may have stopped already (on Windows, not always with a BrokenPipeError).
         with contextlib.suppress(OSError):
             process.stdin.close()
-    process.wait()
     if process.stdout is not None:
         process.stdout.close()
+    try:
+        process.wait(_EXIT_WAIT)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
     stderr.close()

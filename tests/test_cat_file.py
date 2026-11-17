@@ -533,3 +533,69 @@ def test_an_object_cut_short_is_an_error_not_its_content(repo: Git) -> None:
         pytest.raises(GitError, match="10 of its 100 bytes"),
     ):
         cat_file.read("1" * 40)
+
+
+class GitThatAnswersOnce(Git):
+    """A git whose cat-file answers the first request (and the one CatFile sends first, before
+    it) with an object, then runs `then` (Python), whatever it's asked."""
+
+    def __init__(self, directory: str, then: str) -> None:
+        super().__init__(directory)
+        self.then = then
+        self.started: list[subprocess.Popen[bytes]] = []
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        script = (
+            "import os, sys, time\n"
+            "sys.stdin.readline(); sys.stdin.readline()\n"
+            "sys.stdout.write(2 * (sys.argv[1] + ' commit 1\\n')); sys.stdout.flush()\n" + self.then
+        )
+        self.started.append(
+            subprocess.Popen(
+                [sys.executable, "-c", script, "1" * 40],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+            )
+        )
+        return self.started[-1]
+
+
+# As a lazy fetch in a partial clone can: git exits once it's done with what it writes.
+WRITES_ON = """
+try:
+    while True:
+        sys.stdout.write("x" * 65536)
+except OSError:
+    os._exit(3)
+"""
+
+
+def test_closing_stops_a_process_writing_what_nothing_reads(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 60)  # past which it would be killed
+    git = GitThatAnswersOnce(repo.directory, WRITES_ON)
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    cat_file.close()
+
+    assert git.started[0].returncode == 3
+
+
+def test_closing_kills_a_process_that_doesnt_exit(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 0.01)
+    git = GitThatAnswersOnce(repo.directory, "time.sleep(60)")
+    cat_file = CatFile(git)
+    cat_file.resolve("HEAD")
+
+    cat_file.close()
+
+    assert git.started[0].returncode not in (None, 0)
