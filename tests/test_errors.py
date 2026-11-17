@@ -110,6 +110,17 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
 
 
+def test_a_locked_config_file_is_another_failure_when_git_gives_no_reason(repo: Git) -> None:
+    # "could not lock config file .git/config", with no reason, as for a missing directory.
+    repo.run("config", "x.y", "z")
+    (Path(repo.directory) / ".git" / "config.lock").write_bytes(b"")
+
+    with pytest.raises(GitError) as raised:
+        repo.run("-c", "core.configLockTimeout=0", "config", "--rename-section", "x", "renamed")
+
+    assert type(raised.value) is GitError
+
+
 def test_a_config_file_git_cant_lock_for_another_reason_is_another_failure(repo: Git) -> None:
     # "could not lock config file no-such-directory/x: No such file or directory"
     with pytest.raises(GitError) as raised:
