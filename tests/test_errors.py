@@ -110,6 +110,14 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
 
 
+def test_a_config_file_git_cant_lock_for_another_reason_is_another_failure(repo: Git) -> None:
+    # "could not lock config file no-such-directory/x: No such file or directory"
+    with pytest.raises(GitError) as raised:
+        repo.run("config", "--file", "no-such-directory/x", "x.y", "z")
+
+    assert type(raised.value) is GitError
+
+
 def test_a_local_file_git_cant_read_is_no_remote(repo: Git, tmp_path: Path) -> None:
     # "unable to access '<path>'", as git says of a remote's URL it can't reach.
     (tmp_path / "a-directory").mkdir()
