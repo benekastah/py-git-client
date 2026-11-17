@@ -211,9 +211,10 @@ otherwise (e.g. for a command a tool didn't run).
   or `GIT_DEFAULT_HASH`, which would make sha256 repositories; see
   `GIT_ENVIRONMENT_VARIABLES`), for the whole session, session fixtures included. git gets
   `GIT_EDITOR=true` instead of the user's editor (`GIT_SEQUENCE_EDITOR` is cleared, so
-  `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network) and
-  `GIT_TERMINAL_PROMPT=0` (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are
-  cleared, so no program asks either): see `GIT_SETTINGS`. And git looks for a repository no
+  `rebase -i` uses it too), `GIT_ALLOW_PROTOCOL=file` (no network), `GIT_TERMINAL_PROMPT=0`
+  (no asking for a password; `GIT_ASKPASS` and `SSH_ASKPASS` are cleared, so no program asks
+  either) and `GIT_TEXTDOMAINDIR` naming no directory (git speaks English, whatever the
+  developer's language; a test of another language deletes it): see `GIT_SETTINGS`. And git looks for a repository no
   higher than a directory made in pytest's temporary directory or Python's
   (`tempfile.gettempdir()`), even if one of them is in a repository (e.g. a `--basetemp` or
   `TMPDIR` in your project), so a test that runs git in a directory that isn't a repository

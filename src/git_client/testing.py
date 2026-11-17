@@ -98,11 +98,19 @@ repository (GIT_DEFAULT_HASH, GIT_DEFAULT_REF_FORMAT: e.g. sha256 ids), the user
 `rebase -i`, and the programs git runs to ask for a username or password (GIT_ASKPASS, then
 SSH_ASKPASS, which a desktop may set), even with GIT_TERMINAL_PROMPT=0."""
 
-GIT_SETTINGS = {"GIT_EDITOR": "true", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0"}
+GIT_SETTINGS = {
+    "GIT_EDITOR": "true",
+    "GIT_ALLOW_PROTOCOL": "file",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_TEXTDOMAINDIR": os.devnull,
+}
 """What the tests' git gets in its environment: an editor that leaves a message (or `rebase
 -i`'s list) as it is, rather than the user's, which would make a test depend on their shell
 or wait for them; only local remotes (no network: a test that needs more, e.g. ssh through a
-fake ssh, widens GIT_ALLOW_PROTOCOL itself); and no asking for a username or password."""
+fake ssh, widens GIT_ALLOW_PROTOCOL itself); no asking for a username or password; and no
+translations (GIT_TEXTDOMAINDIR naming no directory), so git speaks English whatever the
+developer's language, while hooks keep their locale. A test of another language removes
+it."""
 
 
 @functools.cache

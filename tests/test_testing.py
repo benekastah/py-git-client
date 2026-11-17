@@ -231,6 +231,29 @@ def test_outside_any_repository_runs_a_test_where_git_finds_none(
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.usefixtures("german")
+def test_the_tests_git_speaks_english_whatever_the_developers_language(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        from git_client import Git, NotARepositoryError
+
+
+        @pytest.mark.usefixtures("outside_any_repository")
+        def test_outside() -> None:
+            with pytest.raises(NotARepositoryError):
+                Git().run("rev-parse", "--git-dir")
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-p", "git_client.testing", "-p", "no:xdist")
+
+    result.assert_outcomes(passed=1)
+
+
 def test_git_finds_no_repository_above_any_temporary_directory(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
