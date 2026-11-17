@@ -173,9 +173,9 @@ class CatFile:
         raises UnknownRevisionError, whose `reason` is git's (e.g. "fatal: no upstream
         configured for branch 'main'"), without its warnings and hints, or "" if it gave none
         (cat-file says only "<name> missing" of most names): its `stderr` then ends with
-        rev-parse's "fatal: bad revision '<name>'". If it names an object of the wrong type (e.g. `<tree>^{commit}`), it raises
-        WrongTypeError, saying so. It takes no process of its own to find the reason:
-        cat-file's own messages give it."""
+        rev-parse's "fatal: bad revision '<name>'". If it names an object of the wrong type
+        (e.g. `<tree>^{commit}`), it raises WrongTypeError, saying so. It takes no process of
+        its own to find the reason: cat-file's own messages give it."""
         line = batch_line(name)
         if line is None:
             raise _failure(name, "", exited=False)
