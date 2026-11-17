@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import IO, ClassVar, Final, Literal, TypeAlias
+from typing import IO, ClassVar, Final, Literal
 
 from git_client.errors import (
     ConfigLockedError,
@@ -31,10 +31,10 @@ from git_client.errors import (
 # another thread is setting up for its own process.
 CLOSE_FDS = sys.platform == "win32"
 
-Arg: TypeAlias = str | bytes
+type Arg = str | bytes
 """An argument to git: text (str), or a path in the filesystem (bytes, in its encoding)."""
 
-EnvValue: TypeAlias = str | bytes
+type EnvValue = str | bytes
 """A value for git's environment: text (str, e.g. an author's name), or a path in the
 filesystem (bytes, in its encoding)."""
 
@@ -68,7 +68,7 @@ class ClientTimeout(enum.Enum):
 CLIENT_TIMEOUT: Final = ClientTimeout.CLIENT
 """A command's timeout when it's given none of its own: the client's (see Git)."""
 
-Timeout: TypeAlias = float | None | Literal[ClientTimeout.CLIENT]
+type Timeout = float | None | Literal[ClientTimeout.CLIENT]
 """A command's timeout, in seconds: None for none, or (the default) the client's."""
 
 
@@ -167,9 +167,7 @@ def object_header(line: bytes) -> tuple[str, str, int] | None:
     return parts[0].decode(), decode(parts[1]), int(parts[2])
 
 
-def check_names_nothing(
-    git: "ReadOnlyGit", name: str, *, timeout: Timeout = CLIENT_TIMEOUT
-) -> None:
+def check_names_nothing(git: ReadOnlyGit, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> None:
     """After `git cat-file` exited on `name`: return if that's only because the name names
     nothing (cat-file exits on some, e.g. `@{u}` on a branch with no upstream), else raise
     the GitError for what made it exit (e.g. NotARepositoryError, or a broken config), as
@@ -421,7 +419,7 @@ def _refuse_writes(args: Sequence[Arg]) -> None:
             raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
 
 
-def refuse_if_stopping(git: "ReadOnlyGit", args: Sequence[Arg]) -> None:
+def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
     each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
     run, so that programming error isn't passed off as stopping."""

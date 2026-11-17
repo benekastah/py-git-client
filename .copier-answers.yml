@@ -7,7 +7,7 @@ copyright_year: '2026'
 description: 'Run git from Python with as few processes as possible: one way to start
     git, a long-lived cat-file, and batched reads and writes.'
 github_user: benekastah
-min_python: '3.11'
+min_python: '3.15'
 newest_python: '3.15'
 package_name: git_client
 project_name: py-git-client
