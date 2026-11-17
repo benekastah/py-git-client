@@ -1,12 +1,14 @@
 import gc
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -74,6 +76,51 @@ def test_a_name_git_exits_on_starts_no_more_processes(
     assert git_calls == [["cat-file", "--batch-command"]] * 3
 
 
+def test_verify_gives_the_id_or_git_s_reason_without_another_process(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    with CatFile(repo) as cat_file:
+        main = cat_file.verify("main")
+        # Names cat-file says nothing of but "missing" (or "ambiguous").
+        with pytest.raises(UnknownRevisionError, match="no-such-branch missing"):
+            cat_file.verify("no-such-branch")
+        with pytest.raises(UnknownRevisionError, match="'' names nothing"):
+            cat_file.verify("")
+        # Names git exits on, at a later request, then at a new process's first.
+        with pytest.raises(UnknownRevisionError, match="no upstream configured for branch 'main'"):
+            cat_file.verify("main@{u}")
+        with pytest.raises(UnknownRevisionError, match="log for 'HEAD' only has 1 entries"):
+            cat_file.verify("HEAD@{999}")
+
+    assert git_calls == [["cat-file", "--batch-command"]] * 2
+    assert main == repo.run("rev-parse", "main")
+
+
+def test_verify_says_a_name_that_names_the_wrong_type_names_something(repo: Git) -> None:
+    with CatFile(repo) as cat_file, pytest.raises(GitError) as raised:
+        cat_file.verify("HEAD^{tree}^{commit}")
+
+    assert type(raised.value) is GitError
+    assert "expected commit type, but the object dereferences to tree type" in str(raised.value)
+
+
+def test_verify_gives_only_what_git_said_of_that_name(
+    repo_from: Callable[[str, Callable[[Git], None]], Git],
+) -> None:
+    def tag_main(git: Git) -> None:
+        git.run("tag", "main")
+
+    # git warns that main is ambiguous, but resolves it.
+    repo = repo_from("main-tag", tag_main)
+
+    with CatFile(repo) as cat_file:
+        assert cat_file.verify("main") == repo.run("rev-parse", "refs/heads/main")
+        with pytest.raises(UnknownRevisionError) as raised:
+            cat_file.verify("no-such-branch")
+
+    assert raised.value.stderr == "no-such-branch missing"
+
+
 class StartsKeepingGit(Git):
     """A Git that keeps each long-lived process it starts. It runs git itself: Git for
     Windows' launcher on PATH starts git as a child, which killing the launcher leaves
@@ -84,9 +131,12 @@ class StartsKeepingGit(Git):
         self.started: list[subprocess.Popen[bytes]] = []
 
     def popen(
-        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
-        self.started.append(super().popen(*args, env=env))
+        self.started.append(super().popen(*args, env=env, stderr=stderr))
         return self.started[-1]
 
 
@@ -230,6 +280,25 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
     assert commit.endswith(b"\n\nfirst\n")
 
 
+def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:
+    commit, tree = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD^{tree}")
+    blob = repo.run("rev-parse", "HEAD:a")
+
+    with CatFile(repo) as cat_file:
+        assert cat_file.read(blob, "blob") == ("blob", b"a\n")
+        # A commit's tree, as `git cat-file tree <commit>` reads it.
+        assert cat_file.read(commit, "tree") == cat_file.read(tree)
+        with pytest.raises(GitError) as raised:
+            cat_file.read(blob, "commit")
+        with pytest.raises(UnknownRevisionError):
+            cat_file.read("0" * 40, "commit")
+        with pytest.raises(ValueError):  # from a caller whose types aren't checked
+            cat_file.read(commit, "HEAD")  # pyright: ignore[reportArgumentType]
+
+    assert type(raised.value) is GitError
+    assert "expected commit type, but the object dereferences to blob type" in str(raised.value)
+
+
 def test_reading_an_object_that_isnt_there_fails(repo: Git) -> None:
     with CatFile(repo) as cat_file:
         with pytest.raises(UnknownRevisionError, match="0{40}"):
@@ -288,11 +357,58 @@ def test_stopping_leaves_no_pipe_open(repo: Git) -> None:
     assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
 
 
+class GitThatCantStart(Git):
+    """A git whose long-lived process can't start (e.g. a tool's that's shutting down)."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        raise RuntimeError("not now")
+
+
+def test_a_process_that_cant_start_leaves_no_file_open(repo: Git) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        cat_file = CatFile(GitThatCantStart(repo.directory))
+        with pytest.raises(RuntimeError):
+            cat_file.resolve("HEAD")
+        del cat_file
+        gc.collect()
+
+    assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
+
+
+class GitThatDropsStderr(Git):
+    """A git whose popen takes `stderr`, but doesn't pass it on."""
+
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        return super().popen(*args, env=env)
+
+
+def test_verify_names_the_name_when_git_said_nothing_of_it(repo: Git) -> None:
+    with (
+        CatFile(GitThatDropsStderr(repo.directory)) as cat_file,
+        pytest.raises(UnknownRevisionError, match=re.escape("main@{u} missing")),
+    ):
+        cat_file.verify("main@{u}")
+
+
 class GitWithoutBatchCommand(Git):
     """A git older than 2.36, whose cat-file exits with a usage error at --batch-command."""
 
     def popen(
-        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
         return subprocess.Popen(
             [sys.executable, "-c", "import sys; sys.exit(129)"],
@@ -314,7 +430,10 @@ class GitThatDiesMidObject(Git):
     100 bytes, and stops after 10."""
 
     def popen(
-        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
         script = (
             "import sys; sys.stdin.readline(); sys.stdin.readline();"

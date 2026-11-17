@@ -554,7 +554,10 @@ class FakeGit(Git):
         raise UnexpectedCommand(f"no response for git {' '.join(command)}")
 
     def popen(
-        self, *args: Arg, env: Mapping[str, EnvValue] | None = None
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
         refuse_if_stopping(self, args)
         raise UnexpectedCommand(

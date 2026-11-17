@@ -71,9 +71,11 @@ git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
+    upstream = cat_file.verify("main@{u}")  # an object id, or UnknownRevisionError: git's reason
     readme = cat_file.resolve("HEAD:README.md")
     if readme is not None:
         kind, content = cat_file.read(readme)
+    _, tree = cat_file.read(upstream, "tree")  # its tree; GitError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
 push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
