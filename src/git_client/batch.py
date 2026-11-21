@@ -294,17 +294,14 @@ def _moved_by_config(name: str) -> bool:
 
 
 def patch_ids(
-    git: ReadOnlyGit, *commands: Sequence[str], paths_from_top: bool = False
+    git: Git, *commands: Sequence[str], paths_from_top: bool = False
 ) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
-    "main..topic"]` or `["diff", "a", "b"]`), the (patch id, commit) of each patch it prints, in
-    order, as `git patch-id --stable` gives them. A diff's commit is all zeros. A diff of two
-    revisions (two arguments before `--`, and no options, which are taken as revisions: name
-    paths after `--`) runs as `git diff-tree -p`, which a ReadOnlyGit runs and which writes no
-    index. Any other runs as `git diff`, which a ReadOnlyGit doesn't run (see there): of the
-    index or the worktree, of one argument (`a..b`), or of a revision holding a `:`: a blob's
-    name (`a:path`), which diff-tree doesn't take, but also `:/text`, a tree's `a:` and
-    `@{<date> <time>}`, which it would. Whatever the user's config says, each command shows
+    "main..topic"]`, `["diff-tree", "-p", "a", "b"]` or `["diff", "a", "b"]`), the (patch id,
+    commit) of each patch it prints, in order, as `git patch-id --stable` gives them. A diff's
+    commit is all zeros. Each command runs as it's given, with the options below added: so
+    patch_ids takes a Git, and raises TypeError, running nothing, for a read-only client (a
+    ReadOnlyGit, or a Git's `read_only()`). Whatever the user's config says, each command shows
     changes in the whole repository (not only under `git.directory`, as diff.relative would) and
     in every submodule (each as the commit it moves from and to, as diff.submodule's default
     shows it), none through a textconv, with git's usual a/ and b/ prefixes, renames, 3 lines
@@ -322,6 +319,12 @@ def patch_ids(
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
     """
+    # A function that runs any command it's given isn't for a client that promises to read.
+    if (
+        not isinstance(git, Git)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or git._read_only  # pyright: ignore[reportPrivateUsage]
+    ):
+        raise TypeError("patch_ids takes a Git, not a read-only client")
     if not commands:
         return []
     length = git.object_id_length()
@@ -331,13 +334,6 @@ def patch_ids(
             # Without a commit line, patch-id would take the diff as part of the marker
             # before it.
             patches.append(f"commit {'0' * length}")
-            # Two revisions and nothing else: an option's value could look like one. Not a
-            # blob's name (`<rev>:<path>`), which diff-tree doesn't take.
-            revisions = rest[: rest.index("--")] if "--" in rest else rest
-            if len(revisions) == 2 and not any(
-                arg.startswith("-") or ":" in arg for arg in revisions
-            ):
-                command, rest = "diff-tree", ["-p", *rest]
         settings = (
             (*_PATCH_SETTINGS, *_COMMIT_SETTINGS)
             if command in _SHOWING_COMMITS
