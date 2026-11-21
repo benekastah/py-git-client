@@ -31,7 +31,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `GIT_WORK_TREE`, from the client's `env` and the process's environment, which it ignored:
   a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
   removes them from `os.environ` first (a client's `env` can set a variable, not remove
-  one), or gets the hook's repository (#65, #PR).
+  one), or gets the hook's repository (#65, #69).
 - `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
   one back unchanged, so a lookup found nothing where git says "key does not contain a
   section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
@@ -70,7 +70,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a path holds a newline, so that the lines can't be told apart, each question is asked
   alone. One still answering the old way (without the git directories, or the prefix's line
   alone) gets too few lines: `ValueError: rev-parse printed N lines, too few for M` (#67,
-  #PR).
+  #69).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -87,7 +87,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
   gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
   client that keeps its directory isn't noticed, unless the client's `remember_for` has
-  passed or `forget()` was called (see "Added") (#50, #PR).
+  passed or `forget()` was called (see "Added") (#50, #69).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -160,7 +160,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   A client and its `read_only()` copies share them, `forget()` too. A long-lived tool (e.g.
   move-forward) keeps a client per repository and gives it `remember_for=` a few seconds,
   or calls `forget()` after each refresh, rather than make a new client. A given
-  `object_id_length=` never expires (#PR).
+  `object_id_length=` never expires (#69).
 - `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
   the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
