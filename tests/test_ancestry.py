@@ -238,6 +238,23 @@ def test_an_odd_parent_line_answers_as_merge_base_does(
     assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
 
 
+def test_a_tag_a_corrupt_commit_names_as_parent_is_still_its_commit(
+    shapes: tuple[Git, list[str]],
+) -> None:
+    git, c = shapes
+    git.run("tag", "-a", "-m", "tag", "t", c[1])
+    tag = git.run("rev-parse", "refs/tags/t")
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    who = "T <t@example.com> 1000000000 +0000"
+    content = f"tree {tree}\nparent {tag}\nauthor {who}\ncommitter {who}\n\nodd\n"
+    odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
+    # Once cat-file has parsed odd, it takes the tag's id for a commit's, and fails to peel it.
+    pairs = [(c[0], odd), (tag, c[3])]
+
+    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+    assert merge_base_says(git, tag, c[3])
+
+
 def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> None:
     # 40 hex digits: an abbreviation there, which cat-file would resolve.
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "repo")

@@ -69,8 +69,10 @@ def is_ancestor(
     commits is its own, so calls in different threads don't share or race on it.
 
     A pair whose walk is long (see _WALK_LIMIT) or reads a commit git can't (damaged or
-    missing) is asked of `git merge-base --is-ancestor`, a process each, as is every pair
-    while the repository has a grafts file (deprecated in git), which cat-file doesn't apply.
+    missing, or with a parent line git can't follow), or with a full id cat-file can't peel to
+    a commit (a missing object, a tree), is asked of `git merge-base --is-ancestor`, a process
+    each, as is every pair while the repository has a grafts file (deprecated in git), which
+    cat-file doesn't apply.
     FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
     Each pair's walk is git's own for `merge-base` (paint_down_to_common), in Python: from
@@ -126,7 +128,7 @@ class _Walker:
         # The commits a shallow clone has cut from their parents, as git treats them.
         self._shallow = shallow
         self._commits: dict[str, tuple[int, tuple[str, ...]]] = {}
-        # Each id a pair gave: the commit it is or peels to, or None.
+        # Each id a pair gave: what _peel makes of it.
         self._peeled: dict[str, str | None] = {}
 
     def answer_all(self, pairs: tuple[tuple[str, str], ...]) -> list[bool]:
@@ -141,6 +143,11 @@ class _Walker:
         a, d = self._peel(ancestor), self._peel(descendant)
         if a is None or d is None:
             return False
+        if not (a and d):
+            # A full id cat-file couldn't peel: none of a commit to git either (a tree, a
+            # missing object), or one cat-file has taken for another type's, as it does a
+            # tag's once it has parsed a corrupt commit naming the tag as a parent.
+            return _merge_base_says(self._git, ancestor, descendant)
         try:
             return self._walk(a, d)
         except (_TooFar, _OddCommit, *_UNREADABLE):
@@ -148,7 +155,7 @@ class _Walker:
 
     def _peel(self, object_id: str) -> str | None:
         """The commit `object_id` is, or a tag of it points to; None if it's not a full
-        object id of the repository's length, or of no object that peels to a commit."""
+        object id of the repository's length, and "" if cat-file can't peel it to a commit."""
         if object_id not in self._peeled:
             found = None
             if OBJECT_ID.fullmatch(object_id):
@@ -156,11 +163,14 @@ class _Walker:
                     found = self._cat_file.info(f"{object_id}^{{commit}}")
                 except _UNREADABLE:
                     found = None
-            # An id shorter than the repository's (40 hex digits in a SHA-256 one) is an
-            # abbreviation, which cat-file resolves: the commit's id has the full length.
-            if found is not None and len(found.id) != len(object_id):
-                found = None
-            self._peeled[object_id] = None if found is None else found.id
+            if found is None:
+                self._peeled[object_id] = "" if OBJECT_ID.fullmatch(object_id) else None
+            elif len(found.id) != len(object_id):
+                # An id shorter than the repository's (40 hex digits in a SHA-256 one) is an
+                # abbreviation, which cat-file resolves: the commit's id has the full length.
+                self._peeled[object_id] = None
+            else:
+                self._peeled[object_id] = found.id
         return self._peeled[object_id]
 
     def _commit(self, commit_id: str) -> tuple[int, tuple[str, ...]]:
