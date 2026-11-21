@@ -368,3 +368,33 @@ def test_a_read_only_client_is_refused(repo: Git, git_calls: list[GitCall]) -> N
 def test_no_pairs_start_no_git(repo: Git, git_calls: list[GitCall]) -> None:
     assert merge_trees(repo, []) == []
     assert git_calls == []
+
+
+# Output git never gives, as a FakeGit can: each is git's fault, so it raises.
+TREE = "a" * 40
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "says"),
+    [
+        (f"1\0{TREE}\0\0", 0, "merge-tree gave 1 results for 2 pairs"),
+        (f"1\0{TREE}\0\0" + f"1\0{TREE}\0", 0, "merge-tree gave 1 results for 2 pairs"),
+        (f"2\0{TREE}\0\0" * 2, 0, "merge-tree printed"),
+        (f"1\0{TREE[1:]}\0\0" * 2, 0, "merge-tree printed"),
+        ("1\0not a tree\0\0", 128, "merge-tree printed"),
+    ],
+    ids=["too few", "one unfinished", "bad status", "short tree", "failed with garbage"],
+)
+def test_output_git_never_gives_raises_with_gits_status_and_stderr(
+    stdout: str, returncode: int, says: str
+) -> None:
+    git = FakeGit()
+    git.respond(
+        ["merge-tree"], stdout=stdout, stderr="warning: what git said\n", returncode=returncode
+    )
+
+    with pytest.raises(GitError, match=says) as raised:
+        merge_trees(git, [("b" * 40, "c" * 40)] * 2)
+
+    assert raised.value.returncode == returncode
+    assert raised.value.stderr == "warning: what git said\n"

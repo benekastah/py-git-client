@@ -90,19 +90,15 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
         args = ("merge-tree", _WRITE_TREE, _STDIN, *_OUTPUT)
         lines = "".join(f"{ours} {theirs}\n" for ours, theirs in rest).encode()
         result = git.process(*args, capture_output=True, input=lines)
-        if result.returncode == _USAGE and not results:
+        if result.returncode == _USAGE:
             return _one_at_a_time(git, pairs)
-        merged = _merges(args, result.stdout)
+        merged = _merges(args, result, result.stdout)
         results += merged
         if result.returncode == 0 and len(merged) == len(rest):
             break
         if result.returncode == 0 or len(merged) >= len(rest):
-            raise GitError(
-                args,
-                result.returncode,
-                decode(result.stderr),
-                f"merge-tree gave {len(merged)} results for {len(rest)} pairs",
-            )
+            why = f"merge-tree gave {len(merged)} results for {len(rest)} pairs"
+            raise _unexpected(args, result, why)
         # git stopped at the next pair.
         results.append(_failed(args, result))
     return results
@@ -125,17 +121,19 @@ def _one_at_a_time(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResu
         # nothing.
         if result.returncode in (0, 1) and result.stdout:
             clean = b"1" if result.returncode == 0 else b"0"
-            [merged] = _merges(args, clean + b"\0" + result.stdout + b"\0")
+            [merged] = _merges(args, result, clean + b"\0" + result.stdout + b"\0")
             results.append(merged)
         else:
             results.append(_failed(args, result))
     return results
 
 
-def _merges(args: Sequence[Arg], output: bytes) -> list[MergeResult]:
-    """The merges in `merge-tree --stdin --name-only --no-messages`'s output that git finished
-    printing: for each, its status (1 if clean, 0 if not), its tree and its conflicted paths,
-    each ended by a NUL, then a NUL."""
+def _merges(
+    args: Sequence[Arg], result: subprocess.CompletedProcess[bytes], output: bytes
+) -> list[MergeResult]:
+    """The merges in `merge-tree --stdin --name-only --no-messages`'s output (`result`'s, or
+    made from it) that git finished printing: for each, its status (1 if clean, 0 if not), its
+    tree and its conflicted paths, each ended by a NUL, then a NUL."""
     fields = output.split(b"\0")
     # What's after the last NUL: git hadn't finished it.
     finished = len(fields) - 1
@@ -144,7 +142,7 @@ def _merges(args: Sequence[Arg], output: bytes) -> list[MergeResult]:
     while start + 1 < finished:
         status, tree = fields[start], fields[start + 1]
         if status not in (b"0", b"1") or not OBJECT_ID.fullmatch(decode(tree)):
-            raise GitError(args, 0, "", f"merge-tree printed {decode(output)!r}")
+            raise _unexpected(args, result, "merge-tree printed what merge_trees can't read")
         end = start + 2
         while end < finished and fields[end]:
             end += 1
@@ -166,3 +164,12 @@ def _failed(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> 
     if not isinstance(error, _ABOUT_THE_PAIR) and not _SAYS_OF_THE_PAIR.search(error.stderr):
         raise error
     return MergeResult(None, None, (), error)
+
+
+def _unexpected(
+    args: Sequence[Arg], result: subprocess.CompletedProcess[bytes], why: str
+) -> GitError:
+    """The GitError for output of git's that merge_trees can't take, saying why in a note."""
+    error = GitError(args, result.returncode, decode(result.stderr), decode(result.stdout))
+    error.add_note(why)
+    return error
