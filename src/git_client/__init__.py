@@ -46,6 +46,7 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client.merging import MergeResult, merge_trees
 from git_client.paths import git_common_dir, git_dir
 from git_client.snapshot import RefSnapshot
 
@@ -62,6 +63,7 @@ __all__ = [
     "GitError",
     "GitTimeoutError",
     "Head",
+    "MergeResult",
     "MissingObjectError",
     "NoAnswerError",
     "NotARepositoryError",
@@ -90,6 +92,7 @@ __all__ = [
     "hash_blob_at",
     "hash_blobs",
     "merge_file",
+    "merge_trees",
     "patch_ids",
     "printable",
     "refs",
