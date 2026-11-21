@@ -638,6 +638,7 @@ def where_questions(git: ReadOnlyGit, where: Location, needed: Sequence[str] = (
         length = memory.recall_locked(where, [_FORMAT_QUESTION], remember_for)
         dirs = memory.recall_locked(where, DIR_QUESTIONS, remember_for)
     questions: list[str] = []
+    # What the caller needs, even if another thread has learned it since the caller looked.
     if top is None or TOP_QUESTIONS[0] in needed:
         questions += TOP_QUESTIONS
     if length is None and git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]

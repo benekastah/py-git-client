@@ -2,13 +2,15 @@ import copy
 import pickle
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from git_client import Arg, Git, git_common_dir, git_dir, git_paths
+import git_client.client
+from git_client import Arg, Git, ReadOnlyGit, git_common_dir, git_dir, git_paths
 from git_client.testing import FakeGit, GitCall
 
 
@@ -263,3 +265,21 @@ def test_threads_asking_object_id_length_at_once_take_one_gits_answer(
     with ThreadPoolExecutor(4) as pool:
         assert list(pool.map(length, range(4))) == [40] * 4
     assert git_calls == [["rev-parse", "--show-object-format"]]
+
+
+@pytest.mark.parametrize("ask", [git_dir, Git.prefix])
+def test_what_another_thread_learns_mid_call_still_answers_the_caller(
+    repo: Git, monkeypatch: pytest.MonkeyPatch, ask: Callable[[Git], object]
+) -> None:
+    git = Git(repo.directory)
+    asking = git_client.client.asking
+
+    def others_learn_it_meanwhile(client: ReadOnlyGit) -> int:
+        """As another thread would, between the caller's look at memory and its question."""
+        asked = asking(client)
+        git_paths(git.read_only(), "HEAD")  # which asks everything (batch's own `asking`)
+        return asked
+
+    monkeypatch.setattr("git_client.client.asking", others_learn_it_meanwhile)
+
+    assert ask(git) == (Path(repo.directory) / ".git" if ask is git_dir else "")
