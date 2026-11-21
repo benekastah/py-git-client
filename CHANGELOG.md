@@ -8,6 +8,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `patch_ids` takes a `Git`, not a `ReadOnlyGit`: it runs whatever commands it's given, which
+  a function that takes a read-only client mustn't. Given a read-only client (a `ReadOnlyGit`,
+  or a `Git`'s `read_only()`), it raises `TypeError`, running nothing. A tool that passed one
+  passes its `Git` (#TBD).
 - `patch_ids` runs each command as it's given (with its pinned options), as 0.0.2 did: a
   `diff` of two revisions runs as `git diff`, no longer as `git diff-tree -p`, which failed
   for what `git diff` takes and `diff-tree` doesn't (two blobs' ids, or two paths without

@@ -10,7 +10,7 @@ from git_client import (
     GitError,
     Head,
     NotARepositoryError,
-    ReadOnlyError,
+    ReadOnlyGit,
     RefUpdate,
     config,
     decode,
@@ -345,8 +345,15 @@ def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(repo_from: RepoFrom) -> None
     [[(_, commit)]] = patch_ids(repo, blobs)
 
     assert commit == "0" * 40
-    with pytest.raises(ReadOnlyError):
-        patch_ids(repo.read_only(), blobs)
+
+
+def test_patch_ids_takes_no_read_only_client(repo: Git, git_calls: list[GitCall]) -> None:
+    # It runs whatever command it's given, which a function taking a read-only client mustn't.
+    for reader in (ReadOnlyGit(repo.directory), repo.read_only()):
+        with pytest.raises(TypeError, match="patch_ids takes a Git, not a read-only client"):
+            patch_ids(reader, ["log", "-p", "HEAD"])  # pyright: ignore[reportArgumentType]
+
+    assert git_calls == []
 
 
 def test_patch_ids_takes_pathspec_magic(repo_from: RepoFrom) -> None:

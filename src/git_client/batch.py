@@ -294,13 +294,14 @@ def _moved_by_config(name: str) -> bool:
 
 
 def patch_ids(
-    git: ReadOnlyGit, *commands: Sequence[str], paths_from_top: bool = False
+    git: Git, *commands: Sequence[str], paths_from_top: bool = False
 ) -> list[list[tuple[str, str]]]:
     """For each command (git's arguments for one that prints patches, e.g. `["log", "-p",
     "main..topic"]`, `["diff-tree", "-p", "a", "b"]` or `["diff", "a", "b"]`), the (patch id,
     commit) of each patch it prints, in order, as `git patch-id --stable` gives them. A diff's
-    commit is all zeros. Each command runs as it's given, with the options below added (a
-    ReadOnlyGit runs no `diff`: see there). Whatever the user's config says, each command shows
+    commit is all zeros. Each command runs as it's given, with the options below added: so
+    patch_ids takes a Git, and raises TypeError, running nothing, for a read-only client (a
+    ReadOnlyGit, or a Git's `read_only()`). Whatever the user's config says, each command shows
     changes in the whole repository (not only under `git.directory`, as diff.relative would) and
     in every submodule (each as the commit it moves from and to, as diff.submodule's default
     shows it), none through a textconv, with git's usual a/ and b/ prefixes, renames, 3 lines
@@ -318,6 +319,9 @@ def patch_ids(
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
     """
+    # A function that runs any command it's given isn't for a client that promises to read.
+    if not isinstance(git, Git) or git._read_only:  # pyright: ignore[reportUnnecessaryIsInstance, reportPrivateUsage]
+        raise TypeError("patch_ids takes a Git, not a read-only client")
     if not commands:
         return []
     length = git.object_id_length()

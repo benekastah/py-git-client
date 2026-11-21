@@ -230,9 +230,10 @@ it's closed, though one that has to start (again) raises. `FakeGit` takes it too
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git`, and runs only commands that read. Anything else raises `ReadOnlyError`
 before git starts. `Git` extends it, so a function that only reads can take a `ReadOnlyGit`,
-and be given either; `CatFile`, `config`, `refs`, `patch_ids` and `git_paths` do. A parameter typed
+and be given either; `CatFile`, `config`, `refs` and `git_paths` do. A parameter typed
 `ReadOnlyGit` says what the function asks of git, not that the client can't write: the
-promise is the client's, so make a `ReadOnlyGit` to have it.
+promise is the client's, so make a `ReadOnlyGit` to have it. `patch_ids` runs the commands it's
+given, so it takes a `Git`, and raises `TypeError` for a read-only client.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
