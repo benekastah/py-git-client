@@ -48,7 +48,9 @@ class MergeResult:
     """What `merge_trees` gives for one pair, as `git merge-tree --write-tree` gives it.
     `clean`: whether the merge had no conflicts (True or False), or None if git couldn't merge
     the pair at all, in which case `error` says why. `tree`: the id of the merged tree (None
-    if git couldn't merge), with conflict markers in conflicted files. `conflicts`: the paths
+    if git couldn't merge), with conflict markers in conflicted files, which name the commits
+    by the ids given: so a conflicted tree differs from one `git merge-tree --write-tree` makes
+    of branch names, though a clean one is the same. `conflicts`: the paths
     with conflicts, each once, in git's order, relative to the client's directory (`../a`
     from a subdirectory), as git gives them. A merge with conflicts can have none to list
     (e.g. some conflicts of directory renames): `clean` is what says whether it had any."""
