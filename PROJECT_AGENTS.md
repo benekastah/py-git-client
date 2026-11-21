@@ -16,6 +16,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
+- `src/git_client/ancestry.py`: `is_ancestor`, merge-base's walk in Python over commits a
+  CatFile reads.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
 - `src/git_client/config_file.py`: the changes `Git.write_config` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
