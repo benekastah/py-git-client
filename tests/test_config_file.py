@@ -534,6 +534,29 @@ def test_write_config_leaves_a_read_only_config_to_git(repo: Git, git_calls: lis
     assert not config_file(repo).with_name("config.lock").exists()
 
 
+def test_write_config_writes_no_file_when_nothing_changes(repo: Git) -> None:
+    before = config_file(repo).stat().st_mtime_ns
+    time.sleep(0.01)
+
+    results = repo.write_config(ConfigUnset("branch.a.x"), ConfigUnset("branch.b.y", "1"))
+
+    assert results == [ConfigResult.NOT_FOUND, ConfigResult.NOT_FOUND]
+    assert config_file(repo).stat().st_mtime_ns == before
+    assert not config_file(repo).with_name("config.lock").exists()
+
+
+def test_write_config_makes_a_config_file_where_there_is_none(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    git_paths(repo, "config")
+    config_file(repo).unlink()
+
+    repo.write_config(ConfigUnset("branch.a.y"), ConfigSet("branch.a.x", "1"))
+
+    assert config_file(repo).read_bytes() == b'[branch "a"]\n\tx = 1\n'  # as git makes it
+    assert [call[0] for call in git_calls] == ["rev-parse"]
+
+
 def test_write_config_writes_nothing_once_the_tool_is_stopping(repo: Git) -> None:
     git_paths(repo, "config")
     before = config_file(repo).read_bytes()
