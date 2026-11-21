@@ -1,6 +1,7 @@
 import copy
 import pickle
 import threading
+import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -240,3 +241,25 @@ def test_a_client_with_answers_goes_to_a_process_pool(repo: Git) -> None:
 
     with ProcessPoolExecutor(1) as pool:
         assert pool.submit(prefix_of, git).result() == ""
+
+
+def test_threads_asking_object_id_length_at_once_take_one_gits_answer(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    class SlowGit(Git):
+        """Takes long enough to answer that the threads all ask before it does."""
+
+        def run(self, *args: Arg, **kwargs: Any) -> str:
+            time.sleep(0.05)
+            return super().run(*args, **kwargs)
+
+    git = SlowGit(repo.directory, remember_for=0)  # expired before a waiter could read it
+    asking = threading.Barrier(4)
+
+    def length(_: int) -> int:
+        asking.wait()
+        return git.object_id_length()
+
+    with ThreadPoolExecutor(4) as pool:
+        assert list(pool.map(length, range(4))) == [40] * 4
+    assert git_calls == [["rev-parse", "--show-object-format"]]

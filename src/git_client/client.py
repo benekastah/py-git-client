@@ -493,6 +493,16 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
+class AskingFormat:
+    """A thread asking git for object_id_length() alone: `done` is set once it has git's
+    answer, `format` (None if it failed), which the threads waiting for it take as it is,
+    however soon it expires."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.format: bytes | None = None
+
+
 # When git gave an answer, and how long ago that is, for remember_for: a seam the tests
 # replace, so they needn't sleep.
 _clock = time.monotonic
@@ -511,9 +521,9 @@ class Memory:
         self._answers: dict[tuple[Location, str], tuple[bytes, float]] = {}
         # How many times forget() was called: what git was asked before isn't kept.
         self._forgotten = 0
-        # Per location: an Event that a thread asking git for object_id_length() alone sets
-        # once it has its answer (or has failed), for the threads waiting for it.
-        self.asking_format: dict[Location, threading.Event] = {}
+        # Per location: the thread asking git for object_id_length() alone, for the threads
+        # waiting for its answer.
+        self.asking_format: dict[Location, AskingFormat] = {}
 
     def __deepcopy__(self, memo: dict[int, object]) -> Memory:
         """An empty Memory: a deep copy of a client remembers nothing, and forgets alone."""
@@ -925,7 +935,8 @@ class ReadOnlyGit:
         `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the
         length of an id git printed: in a repository with `extensions.compatObjectFormat`, git
         gives a SHA-1 id back for one, whatever the repository's format. Threads that ask at
-        once wait for one git's answer; if it fails, the next asks."""
+        once wait for one git's answer, and take it however soon it expires; if it fails, the
+        next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
         where = location(self)
@@ -938,20 +949,22 @@ class ReadOnlyGit:
                 asking = memory.asking_format.get(where)
                 mine = asking is None
                 if asking is None:
-                    asking = memory.asking_format[where] = threading.Event()
+                    asking = memory.asking_format[where] = AskingFormat()
             if not mine:
-                asking.wait()
-                continue  # its answer, or (if it failed) ask again
+                asking.done.wait()
+                if asking.format is not None:
+                    return object_id_length_of(asking.format)
+                continue  # it failed: ask again
             try:
                 asked = memory.asking()
-                format = encode(self.run("rev-parse", _FORMAT_QUESTION))
-                memory.remember(where, {_FORMAT_QUESTION: format}, asked)
-                return object_id_length_of(format)
+                asking.format = encode(self.run("rev-parse", _FORMAT_QUESTION))
+                memory.remember(where, {_FORMAT_QUESTION: asking.format}, asked)
+                return object_id_length_of(asking.format)
             finally:
                 # Whatever stops it (e.g. KeyboardInterrupt), so no waiter waits for good.
                 with memory.lock:
                     del memory.asking_format[where]
-                asking.set()
+                asking.done.set()
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
