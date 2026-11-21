@@ -147,6 +147,18 @@ def test_cdup_outside_the_worktree_is_its_top(repo: Git, tmp_path: Path) -> None
     assert git.prefix() == ""
 
 
+def test_prefix_tells_the_object_id_length_in_the_same_process(
+    tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(tmp_path / "sha256")
+    started = len(git_calls)
+
+    git.prefix()
+    assert git.object_id_length() == 64
+    assert len(git_calls) == started + 1
+
+
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
     git = Git(tmp_path / "later")
     (tmp_path / "later").mkdir()
