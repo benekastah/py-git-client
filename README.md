@@ -19,6 +19,9 @@ what git-stack, git-recommit and move-forward share for that:
   (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
+- **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
+  merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
+  why git couldn't merge that pair.
 - **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
   own (`git_dir`: a linked worktree's own), read from its `.git` file or directory.
 
@@ -50,6 +53,7 @@ from git_client import (
     hash_blob_at,
     hash_blobs,
     merge_file,
+    merge_trees,
     refs,
     update_refs,
 )
@@ -118,6 +122,17 @@ cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
 merged, conflicts = merge_file(
     git, ours=b"ours\n", base=b"base\n", theirs=b"theirs\n", options=["--diff3"]
 )
+
+# Merges of commits, by their full ids (each pair as `git merge-tree --write-tree` merges it),
+# with one git for all of them: whether each is clean, its tree and its conflicted paths (from
+# git.directory), or, if git couldn't merge a pair (clean is None), why. Needs git 2.38.
+heads = refs(git, "refs/heads/")
+a, b = heads["refs/heads/a"].object, heads["refs/heads/b"].object
+for merge in merge_trees(git, [(a, b), (b, a)]):
+    if merge.clean is None:
+        print(merge.error)  # e.g. UnknownRevisionError, or histories that share nothing
+    else:
+        print(merge.clean, merge.tree, merge.conflicts)  # e.g. True, "<a tree id>", ()
 ```
 
 A CatFile's process stops once nothing uses it. With a client's `timeout`, a request it

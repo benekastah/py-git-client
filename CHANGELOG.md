@@ -107,6 +107,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ObjectType`, the types `CatFile.read` takes, exported from `git_client` (#50).
 - `git_paths_and_head`: `git_paths`, and what HEAD points at (`Head`: a ref's full name,
   detached, or unknown, as for an unborn branch), from the same one `git rev-parse` (#58).
+- `merge_trees` and `MergeResult`: many pairs of commits (full ids) merged as `git merge-tree
+  --write-tree` merges each, with one `git merge-tree --stdin` (git 2.39; on 2.38, one
+  process each): whether each is clean, its tree and its conflicted paths, or why git
+  couldn't merge that pair. It takes a `Git`, as merge-tree writes objects (#59).
 - `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
   worktree's own, not the main one), read from its files without starting git (#50).
 - `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
