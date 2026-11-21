@@ -1,6 +1,7 @@
 """Git.write_config, and the config file editor behind it, checked against `git
 config`'s own edits of a copy of the same file."""
 
+import errno
 import os
 import stat
 import sys
@@ -442,6 +443,26 @@ def test_write_config_leaves_a_write_that_fails_midway_to_git(
     ]
     assert config_file(repo).read_bytes() == by_git
     assert not config_file(repo).with_name("config.lock").exists()
+
+
+def test_write_config_whose_close_fails_leaves_no_lock_and_falls_back(
+    repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
+) -> None:
+    git_paths(repo, "config")
+    close = os.close
+    failures = [OSError(errno.EIO, "I/O error")]
+
+    def close_then_fail(fd: int) -> None:
+        close(fd)  # Linux lets go of the descriptor even when close reports an error
+        if failures:
+            raise failures.pop()
+
+    monkeypatch.setattr(os, "close", close_then_fail)
+    repo.write_config(ConfigSet("branch.a.x", "1"))
+
+    assert [call[:2] for call in git_calls[1:]] == [["config", "branch.a.x"]]
+    assert not config_file(repo).with_name("config.lock").exists()
+    assert repo.run("config", "branch.a.x") == "1"
 
 
 def test_write_config_interrupted_once_written_leaves_anothers_lock(

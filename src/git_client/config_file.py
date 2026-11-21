@@ -315,8 +315,9 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
                 view = view[os.write(fd, view) :]
             os.fsync(fd)
             ours = os.fstat(fd)
-            os.close(fd)
-            fd = None
+            # Let go of it first: a failed close may still free the number for another file.
+            fd, closing = None, fd
+            os.close(closing)
             if sys.platform == "win32":
                 # Windows refuses to replace a file another process has open without sharing
                 # its deletion, for as long as it's open: try again, as git for Windows does.
@@ -327,13 +328,16 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
             return None  # nothing changed: git's to make them, or say why it can't
         return results
     finally:
-        # Whatever stops it (e.g. KeyboardInterrupt), but only our lock: once renamed, the
-        # lock may be another process's.
-        if fd is not None:
-            ours = os.fstat(fd)
-            os.close(fd)
-        if ours is not None:
-            _remove_if_ours(lock, ours)
+        # Whatever stops it (e.g. KeyboardInterrupt, or a failed close), but only our lock:
+        # once renamed, the lock may be another process's.
+        try:
+            if fd is not None:
+                ours = os.fstat(fd)
+                fd, closing = None, fd
+                os.close(closing)
+        finally:
+            if ours is not None:
+                _remove_if_ours(lock, ours)
 
 
 def _remove_if_ours(lock: Path, ours: os.stat_result) -> None:
