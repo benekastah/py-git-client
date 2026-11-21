@@ -544,7 +544,9 @@ def test_a_corrupt_object_isnt_taken_for_a_missing_one(damaged_repo: Git) -> Non
             cat_file.read("0" * 40)
 
 
-def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(repo: Git) -> None:
+def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(
+    repo: Git, git_version: tuple[int, int, int]
+) -> None:
     commit, blob = repo.run("rev-parse", "HEAD"), repo.run("rev-parse", "HEAD:a")
     loose = Path(repo.directory) / ".git" / "objects" / commit[:2] / commit[2:]
     loose.chmod(0o644)  # git makes it read-only
@@ -553,13 +555,14 @@ def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(repo: Git) -> No
 
     with CatFile(git) as cat_file:
         # cat-file says HEAD~1 is missing, and what's damaged on stderr: an answer in full.
-        # (git 2.36 dies on it instead, "fatal: loose object ... is corrupt", and CatFile
-        # starts another.)
         with pytest.raises(CorruptObjectError):
             cat_file.verify("HEAD~1")
         assert cat_file.resolve(blob) == blob
-    # Kept, unless git exited by itself (FATAL): CatFile ended none that answered.
-    assert [process.returncode for process in git.started] in ([0], [FATAL, 0])
+    # So its process is kept. git 2.36 dies on it instead ("fatal: loose object ... is
+    # corrupt"), and CatFile starts another. Which release stopped dying isn't pinned down:
+    # CI runs 2.36 and the newest git, where it answers.
+    expected = [FATAL, 0] if git_version < (2, 37) else [0]
+    assert [process.returncode for process in git.started] == expected
 
 
 def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:
