@@ -175,14 +175,17 @@ def test_an_ancestor_below_another_pairs_ancestor(tmp_path: Path) -> None:
 
 
 def test_a_missing_object_is_no_ones_ancestor_or_descendant(
-    shapes: tuple[Git, list[str]],
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
 ) -> None:
     git, c = shapes
-    missing = "1" * 40
+    missing = [f"{i:040x}" for i in range(1, 501)]
+    started = len(git_calls)
 
-    answers = is_ancestor(git, (missing, c[6]), (c[0], missing), (missing, missing))
+    answers = is_ancestor(git, *((m, c[6]) for m in missing), (c[0], missing[0]))
 
-    assert answers == [False, False, False]
+    assert answers == [False] * 501
+    # merge-base can only fail on them: none is asked.
+    assert "merge-base" not in [call[0] for call in git_calls[started:]]
 
 
 @pytest.mark.parametrize("name", ["c6", "refs/heads/c6", "HEAD", "-h", "--all", "", "a\nb"])
@@ -239,7 +242,7 @@ def test_an_odd_parent_line_answers_as_merge_base_does(
 
 
 def test_a_tag_a_corrupt_commit_names_as_parent_is_still_its_commit(
-    shapes: tuple[Git, list[str]],
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
 ) -> None:
     git, c = shapes
     git.run("tag", "-a", "-m", "tag", "t", c[1])
@@ -250,8 +253,13 @@ def test_a_tag_a_corrupt_commit_names_as_parent_is_still_its_commit(
     odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
     # Once cat-file has parsed odd, it takes the tag's id for a commit's, and fails to peel it.
     pairs = [(c[0], odd), (tag, c[3])]
+    started = len(git_calls)
 
-    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+    answers = is_ancestor(git, *pairs)
+
+    asked = [call for call in git_calls[started:] if call[0] == "merge-base"]
+    assert ["merge-base", "--is-ancestor", tag, c[3]] in asked
+    assert answers == [merge_base_says(git, a, d) for a, d in pairs]
     assert merge_base_says(git, tag, c[3])
 
 
@@ -265,13 +273,18 @@ def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> No
     assert is_ancestor(git, (commit[:40], commit), (commit, commit)) == [False, True]
 
 
-def test_a_tag_is_its_commit_and_a_tree_no_commit(shapes: tuple[Git, list[str]]) -> None:
+def test_a_tag_is_its_commit_and_a_tree_no_commit(
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
+) -> None:
     git, c = shapes
     git.run("tag", "-a", "-m", "tag", "t", c[1])
     tag = git.run("rev-parse", "refs/tags/t")
     tree = git.run("rev-parse", f"{c[1]}^{{tree}}")
+    started = len(git_calls)
 
     answers = is_ancestor(git, (tag, c[3]), (c[0], tag), (tree, c[3]), (c[1], tree))
+
+    assert "merge-base" not in [call[0] for call in git_calls[started:]]
 
     assert answers == [merge_base_says(git, a, d) for a, d in [(tag, c[3]), (c[0], tag)]] + [
         False,

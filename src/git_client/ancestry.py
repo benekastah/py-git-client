@@ -78,9 +78,9 @@ def is_ancestor(
     commits is its own, so calls in different threads don't share or race on it.
 
     A pair whose walk is long (see _WALK_LIMIT) or reads a commit git can't (damaged or
-    missing, or with a parent line git can't follow), or with a full id cat-file can't peel to
-    a commit (a missing object, a tree), is asked of `git merge-base --is-ancestor`, a process
-    each, as is every pair while the repository has a grafts file (deprecated in git), which
+    missing, or with a parent line git can't follow), or with the full id of a tag or commit
+    cat-file can't peel to a commit (which takes damage), is asked of `git merge-base
+    --is-ancestor`, a process each (a missing object, a tree or a blob is False with none), as is every pair while the repository has a grafts file (deprecated in git), which
     cat-file doesn't apply, or while git's environment sets GIT_SHALLOW_FILE.
     FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
@@ -155,9 +155,9 @@ class _Walker:
         if a is None or d is None:
             return False
         if not (a and d):
-            # A full id cat-file couldn't peel: none of a commit to git either (a tree, a
-            # missing object), or one cat-file has taken for another type's, as it does a
-            # tag's once it has parsed a corrupt commit naming the tag as a parent.
+            # A tag's or commit's full id cat-file couldn't peel: one it has taken for another
+            # type's, as it does a tag's once it has parsed a corrupt commit naming the tag as a
+            # parent.
             return _merge_base_says(self._git, ancestor, descendant)
         try:
             return self._walk(a, d)
@@ -166,7 +166,8 @@ class _Walker:
 
     def _peel(self, object_id: str) -> str | None:
         """The commit `object_id` is, or a tag of it points to; None if it's not a full
-        object id of the repository's length, and "" if cat-file can't peel it to a commit."""
+        object id of the repository's length, or of no object merge-base could peel, and "" for
+        a tag or a commit cat-file can't peel to a commit (see _needs_git)."""
         if object_id not in self._peeled:
             found = None
             if OBJECT_ID.fullmatch(object_id):
@@ -175,7 +176,7 @@ class _Walker:
                 except _UNREADABLE:
                     found = None
             if found is None:
-                self._peeled[object_id] = "" if OBJECT_ID.fullmatch(object_id) else None
+                self._peeled[object_id] = "" if self._needs_git(object_id) else None
             elif len(found.id) != len(object_id):
                 # An id shorter than the repository's (40 hex digits in a SHA-256 one) is an
                 # abbreviation, which cat-file resolves: the commit's id has the full length.
@@ -183,6 +184,19 @@ class _Walker:
             else:
                 self._peeled[object_id] = found.id
         return self._peeled[object_id]
+
+    def _needs_git(self, object_id: str) -> bool:
+        """Whether merge-base could answer for `object_id`, which cat-file couldn't peel to a
+        commit: a full id of a tag or a commit (a tag cat-file took for a commit's id, say),
+        as `info` without peeling still tells; not a missing object, a tree or a blob, which
+        merge-base can only fail on."""
+        if not OBJECT_ID.fullmatch(object_id):
+            return False
+        try:
+            found = self._cat_file.info(object_id)
+        except _UNREADABLE:
+            return False
+        return found is not None and found.type in ("tag", "commit")
 
     def _commit(self, commit_id: str) -> tuple[int, tuple[str, ...]]:
         """The commit's committer date and parents (none for one a shallow clone cut).
