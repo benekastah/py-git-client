@@ -184,7 +184,8 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
-    paths and exits 1 without a word (it's asked to `--verify` HEAD), and the Head is the empty
+    paths and exits 1 (it's asked to `--verify` HEAD, `--quiet`ly, so it says nothing of it,
+    though it may warn of other things, e.g. its config), and the Head is the empty
     one, `Head()`, which isn't `detached`."""
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
@@ -201,8 +202,8 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     if result.returncode == 0:
         # No HEAD line where git can't say which ref "HEAD" is (a branch named HEAD).
         head_lines = 0 if _AMBIGUOUS_HEAD.search(stderr) else 1
-    elif result.returncode == 1 and not stderr.strip():
-        head_lines = 0  # unborn
+    elif result.returncode == 1:
+        head_lines = 0  # unborn, whatever git warned of (e.g. its config)
     else:
         raise error_from(command, result)  # git said why
     try:
@@ -282,7 +283,7 @@ def _head_alone(git: ReadOnlyGit) -> list[bytes]:
     newline."""
     args = ("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "HEAD")
     result = git.process(*args, capture_output=True)
-    if result.returncode not in (0, 1) or result.returncode == 1 and result.stderr.strip():
+    if result.returncode not in (0, 1):  # 1: unborn, whatever git warned of
         raise error_from(args, result)
     return rev_parse_lines(result.stdout)
 

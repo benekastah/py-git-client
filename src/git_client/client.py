@@ -529,9 +529,10 @@ _INSIDE_WORK_TREE = (b"true", b"false")
 
 
 class LinesUnfit(ValueError):
-    """rev-parse printed more lines than the answers asked of it, so they can't be told apart:
-    a path it printed holds a newline. The caller then asks each question in a process of its
-    own (see `ask_where_alone`)."""
+    """rev-parse's lines can't be told apart: there are more than the answers asked of it, or
+    as many with "true" or "false" after the prefix (no cdup, and a line more). A path it
+    printed holds a newline. The caller then asks each question in a process of its own (see
+    `ask_where_alone`)."""
 
 
 def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:

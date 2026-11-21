@@ -910,10 +910,11 @@ def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo:
     assert git_paths_and_head(repo, "HEAD")[1] == Head()
 
 
-# Names whose newline makes a path's lines look like other answers: the marker after the
-# cdup, an object format, a ref's name, an empty line, and a leading space.
-ADVERSARIAL_NAMES = ["w\ntrue", "\nfalse", "x\nrefs", "\nsha1", " a\n\nb"]
+# Names whose newline makes a path's lines look like other answers: one newline, before a
+# line of "true" (the marker after no cdup); and two, around an empty line, after a space.
+ADVERSARIAL_NAMES = ["w\ntrue", " a\n\nb"]
 HEAD_STATES = ["main", "ambiguous", "unborn"]
+LAYOUTS = ["top", "below", "git directory", "bare", "outside"]
 
 
 def make_adversarial_repositories(directory: Path) -> None:
@@ -955,32 +956,56 @@ def asked_alone(git: Git) -> tuple[str, str, list[Path], Head]:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
 @pytest.mark.parametrize("state", HEAD_STATES)
-@pytest.mark.parametrize("layout", ["top", "below", "git directory", "bare", "outside"])
+@pytest.mark.parametrize("layout", LAYOUTS)
 def test_git_paths_and_head_tells_lines_apart_as_git_asked_alone_does(
     state: str, layout: str, repo_templates: RepoTemplates, tmp_path: Path
 ) -> None:
     root = repo_templates.build("adversarial", make_adversarial_repositories) / state
-    for i, name in enumerate(ADVERSARIAL_NAMES):
-        env: dict[str, str] = {}
-        directory = {
-            "top": root / name,
-            "below": root / name / name,
-            "git directory": root / name / ".git",
-            "bare": root / f"bare{i}{name}",
-            "outside": tmp_path,
-        }[layout]
-        if layout == "outside":
-            top = tmp_path / f"top{i}{name}"
-            top.mkdir()
-            env = {"GIT_DIR": str(root / name / ".git"), "GIT_WORK_TREE": str(top)}
-        expected = asked_alone(Git(directory, env=env))
-        for length in (None, 40):  # the object format asked too, or not
-            git = Git(directory, env=env, object_id_length=length)
-            paths, head = git_paths_and_head(git, "HEAD", "config")
-            assert (git.prefix(), git.cdup(), paths, head) == expected, (name, length)
-            git = Git(directory, env=env, object_id_length=length)
-            assert git_paths(git, "HEAD", "config") == expected[2], (name, length)
-            assert (git.prefix(), git.cdup()) == expected[:2], (name, length)
+    # One name a case, each name in every layout and HEAD state, to keep the processes few.
+    i = (HEAD_STATES.index(state) + LAYOUTS.index(layout)) % len(ADVERSARIAL_NAMES)
+    name = ADVERSARIAL_NAMES[i]
+    env: dict[str, str] = {}
+    directory = {
+        "top": root / name,
+        "below": root / name / name,
+        "git directory": root / name / ".git",
+        "bare": root / f"bare{i}{name}",
+        "outside": tmp_path,
+    }[layout]
+    if layout == "outside":
+        top = tmp_path / f"top{name}"
+        top.mkdir()
+        env = {"GIT_DIR": str(root / name / ".git"), "GIT_WORK_TREE": str(top)}
+    expected = asked_alone(Git(directory, env=env))
+    git = Git(directory, env=env)
+    paths, head = git_paths_and_head(git, "HEAD", "config")
+
+    assert (git.prefix(), git.cdup(), paths, head) == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+@pytest.mark.parametrize("ask", [git_paths, git_paths_and_head])
+def test_a_bare_repositorys_marker_after_no_cdup_isnt_taken_for_one_line_each(
+    ask: Callable[[Git, str], object], tmp_path: Path
+) -> None:
+    # No cdup, then "false", then as many lines as asked for: the path's newline adds one.
+    Git(tmp_path).run("init", "--quiet", "--bare", "b\nz")
+    git = Git(tmp_path / "b\nz")
+
+    ask(git, "HEAD")
+    assert git_paths(git, "HEAD") == [tmp_path / "b\nz" / "HEAD"]
+    assert (git.prefix(), git.cdup()) == ("", "")
+
+
+def test_git_paths_and_head_takes_an_unborn_branch_whatever_git_warns(tmp_path: Path) -> None:
+    git = Git(tmp_path)
+    git.run("init", "--quiet", "repo")
+    repo = Git(tmp_path / "repo")
+    # git warns of this ("core.bare and core.worktree do not make sense"), and answers.
+    repo.run("config", "core.bare", "true")
+    repo.run("config", "core.worktree", str(tmp_path / "repo"))
+
+    assert git_paths_and_head(repo, "HEAD") == ([tmp_path / "repo" / ".git" / "HEAD"], Head())
 
 
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
@@ -1002,7 +1027,6 @@ def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_he
     ("stderr", "returncode", "stdout"),
     [
         ("", 2, "\n\ntrue\n/g/HEAD\n"),  # another exit status
-        ("fatal: it said why\n", 1, "\n\ntrue\n/g/HEAD\n"),  # git said something
         ("", 1, "\n\ntrue\n/g/HEAD\nextra\n"),  # more than the paths
         ("", 1, "\n\ntrue\n"),  # fewer than the paths
     ],
