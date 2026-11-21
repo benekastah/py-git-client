@@ -15,9 +15,10 @@ from git_client.client import (
     error_from,
     known_git_dirs,
     known_git_paths,
-    learn_object_id_length,
+    learn_where,
     location,
-    prefixes,
+    rev_parse_lines,
+    where_questions,
 )
 from git_client.errors import GitError
 
@@ -104,7 +105,6 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
     full ref names or object ids rather than short names."""
     extra = "".join(f"%00%({name})" for name in fields)
-    where = location(git)
     listing = git.run_bytes(
         "for-each-ref",
         f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
@@ -121,8 +121,6 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
         found[name] = Ref(
             name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
         )
-    if found:
-        learn_object_id_length(git, where, next(iter(found.values())).object)
     return found
 
 
@@ -139,7 +137,8 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()`, if it isn't known yet."""
+    process tells the client's `prefix()` and `object_id_length()`, if they aren't known
+    yet."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -152,14 +151,10 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         if (where, name) not in known or _moved_by_config(name)
     ]
     if new:
-        # The prefix too, if it's not known: it costs no process of its own here.
-        known_prefixes = prefixes.setdefault(git, {})
-        prefix = [] if where in known_prefixes else ["--show-prefix"]
+        questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
-        output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
-        lines = _lines(output)
-        if prefix:
-            known_prefixes[where] = decode(lines.pop(0))
+        output = git.run_bytes("rev-parse", *questions, "--path-format=absolute", *args)
+        lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
         for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
@@ -179,9 +174,9 @@ class Head:
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
     (so a tool that wants both pays for one process). The paths are as `git_paths` gives
-    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept) and
-    `git.prefix()`; HEAD is read afresh each time,
-    since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
+    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept),
+    `git.prefix()` and `git.object_id_length()`; HEAD is read afresh each time, since it
+    moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
@@ -191,23 +186,24 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
         raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
     unique = list(dict.fromkeys(names))
     where = location(git)
-    known_prefixes = prefixes.setdefault(git, {})
-    prefix = [] if where in known_prefixes else ["--show-prefix"]
+    questions = where_questions(git, where)
     args = [arg for name in unique for arg in ("--git-path", name)]
-    wanted = len(prefix) + len(unique)
     # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
     # taken for a path and printed as "HEAD", which a detached HEAD prints too.
-    command = ["rev-parse", *prefix, "--path-format=absolute", *args]
+    command = ["rev-parse", *questions, "--path-format=absolute", *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
     try:
-        output = git.run_bytes(*command)
+        output = rev_parse_lines(git.run_bytes(*command))
+        # No HEAD line where git can't say (e.g. a branch named HEAD)
+        lines = learn_where(git, where, questions, output, len(unique), len(unique) + 1)
     except GitError as error:
-        output = encode(error.stdout)
-        if error.returncode != 1 or error.stderr.strip() or len(_lines(output)) != wanted:
-            raise  # not an unborn HEAD: git said why, or didn't print what was asked
-    lines = _lines(output)
-    if prefix:
-        known_prefixes[where] = decode(lines.pop(0))
+        if error.returncode != 1 or error.stderr.strip():
+            raise  # not an unborn HEAD: git said why
+        try:
+            output = rev_parse_lines(encode(error.stdout))
+            lines = learn_where(git, where, questions, output, len(unique))
+        except ValueError:
+            raise error from None  # it didn't print what was asked
     found = {
         name: Path(os.fsdecode(line))
         for name, line in zip(unique, lines[: len(unique)], strict=True)
@@ -250,15 +246,9 @@ def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
         output = git.run_bytes(
             "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"
         )
-        own, common = (Path(os.fsdecode(line)) for line in _lines(output))
+        own, common = (Path(os.fsdecode(line)) for line in rev_parse_lines(output))
         known[where] = own, common
     return known[where]
-
-
-def _lines(output: bytes) -> list[bytes]:
-    """The lines of rev-parse's output. Not splitlines(): the prefix's line can be empty, and
-    a path can't hold a line ending."""
-    return output.removesuffix(b"\n").split(b"\n") if output else []
 
 
 def _moved_by_config(name: str) -> bool:

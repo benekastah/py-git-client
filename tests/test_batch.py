@@ -723,6 +723,24 @@ def test_git_paths_learns_the_prefix_in_the_same_process(
     assert len(git_calls) == 1
 
 
+@pytest.mark.parametrize("ask", [git_paths, git_paths_and_head])
+def test_git_paths_learns_the_object_id_length_in_the_same_process(
+    ask: Callable[[Git, str], object], tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(tmp_path / "sha256")
+    started = len(git_calls)
+    ask(git, "HEAD")
+    assert git.object_id_length() == 64
+    assert len(git_calls) == started + 1
+
+
+def test_git_paths_asks_no_object_id_length_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
+    repo.object_id_length()
+    git_paths(repo, "HEAD")
+    assert "--show-object-format" not in git_calls[-1]
+
+
 def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
     repo.prefix()
     git_paths(repo, "HEAD")
@@ -730,14 +748,14 @@ def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]
 
 
 def test_git_paths_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)  # so rev-parse is asked no object format
     git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
     with pytest.raises(ValueError):
         git_paths(git, "HEAD")
 
 
 def test_git_paths_refuses_an_empty_answer() -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse", "--show-prefix"], stdout="\n")
     git.prefix()
     git.respond(["rev-parse", "--path-format=absolute"])  # nothing
@@ -831,7 +849,7 @@ def test_git_paths_and_head_without_names_still_gives_the_head(repo: Git) -> Non
     ],
 )
 def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse"], stdout=f"\n{stdout}")  # the prefix's line first
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], head)
@@ -878,7 +896,7 @@ def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo:
 
 
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse"], stdout="\n/g/HEAD\n")  # one path too few for two names
 
     with pytest.raises(ValueError):
@@ -886,7 +904,7 @@ def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
 
 
 def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse"], stdout="\n/g/HEAD\n", returncode=1)
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
@@ -904,7 +922,7 @@ def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_he
 def test_git_paths_and_head_raises_for_a_failure_that_is_not_an_unborn_head(
     stderr: str, returncode: int, stdout: str
 ) -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse"], stdout=stdout, stderr=stderr, returncode=returncode)
 
     with pytest.raises(GitError):

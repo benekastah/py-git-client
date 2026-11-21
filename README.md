@@ -75,7 +75,6 @@ git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
 # asked of git once per client (and directory), as are git_paths and object_id_length()
-# (which an id read by refs, resolve or CatFile also tells)
 # git config, tried again while locked, for each change; what each did: an unset that removes
 # nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
 # remove), not an error. Other config writes (--add, ...): git.run("config", ...).

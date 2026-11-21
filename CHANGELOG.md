@@ -19,6 +19,13 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
   removes them from `os.environ` first (a client's `env` can set a variable, not remove
   one), or gets the hook's repository (#65).
+- `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
+  the length of an id git printed, which in a SHA-256 repository with
+  `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
+  `git_paths` and `git_paths_and_head` asks it too while it isn't known, so it usually costs
+  no process: their command is `rev-parse --show-prefix --show-object-format ...` then, and a
+  `FakeGit` answering it gives `sha1` (or `sha256`) after the prefix's line, or is made with
+  `object_id_length=40`, which asks none (#67).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -33,10 +40,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
   that cached them itself can drop its cache (and its `cdup` is
   `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process: its
-  command is `rev-parse --show-prefix --path-format=absolute --git-path ...` while the
-  prefix isn't known, so a `FakeGit` answering it gives the prefix's line first. A
-  repository moved or replaced under a client that keeps its directory isn't noticed; make a
-  new client (#50).
+  command starts `rev-parse --show-prefix` while the prefix isn't known, so a `FakeGit`
+  answering it gives the prefix's line first (and the object format's after it: see #67's
+  entry above). A repository moved or replaced under a client that keeps its directory isn't
+  noticed; make a new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -80,10 +87,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
   failure raises `RemoteError` from `run`, as before (#52).
 
-- `object_id_length()` learns the length from the first full id `refs`, `Git.resolve` or a
-  `CatFile` reads at the client's location, and then starts no `git rev-parse
-  --show-object-format`: a `FakeGit` test that expects that command after one of those no
-  longer sees it. Threads that ask at once wait for one git's answer, where each could
+- `object_id_length()`: threads that ask at once wait for one git's answer, where each could
   start its own (#54).
 - `Git.resolve` takes one process for every name, where a name `git cat-file` exits on (e.g.
   `main@{upstream}` with no upstream) took a second, a `rev-parse`: it sends cat-file a name
@@ -128,8 +132,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   process group of its own, so a command with a timeout starts faster without a terminal,
   but what git started isn't stopped with it (#52).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
-  already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
-  starts no `git rev-parse --show-object-format` (#50).
+  knows the length some other way than asking git gives it, and `object_id_length()` starts
+  no `git rev-parse --show-object-format` (#50).
 - `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
   but holds paths from the top of the worktree, as git reports them, as `patch_ids` has
   (#50).

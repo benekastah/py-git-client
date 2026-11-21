@@ -31,9 +31,8 @@ from git_client import (
     decode,
     find_git,
     printable,
-    refs,
 )
-from git_client.testing import FakeGit, GitCall
+from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
 @pytest.mark.usefixtures("fresh_find_git")
@@ -934,48 +933,39 @@ def test_object_id_length_asks_git_once_for_threads_asking_at_once(
     assert git_calls == [["rev-parse", "--show-object-format"]]
 
 
-def make_sha256_repo(directory: Path) -> Git:
-    """A SHA-256 repository, with one commit, in directory, and a client for it."""
-    Git(directory).run("init", "--quiet", "--object-format=sha256", str(directory / "sha256"))
-    git = Git(directory / "sha256")
+def make_sha256_repo_with_sha1_ids(directory: Path) -> None:
+    """A SHA-256 repository, `repo`, with one commit, that also knows each object's SHA-1 id
+    (extensions.compatObjectFormat)."""
+    Git(directory).run("init", "--quiet", "--object-format=sha256", "repo")
+    git = Git(directory / "repo")
+    git.run("config", "extensions.compatObjectFormat", "sha1")
     git.run("commit", "--quiet", "--allow-empty", "-m", "first")
-    return git
 
 
-def resolve(git: Git) -> None:
-    git.resolve("HEAD")
-
-
-def resolve_with_cat_file(git: Git) -> None:
+def resolve_with_cat_file(git: Git, name: str) -> str | None:
     with CatFile(git) as cat_file:
-        cat_file.resolve("HEAD")
+        return cat_file.resolve(name)
 
 
+@pytest.mark.needs_git(2, 46, reason="extensions.compatObjectFormat")
 @pytest.mark.parametrize(
-    "read_an_id",
-    [refs, resolve, resolve_with_cat_file],
-    ids=["refs", "resolve", "CatFile"],
+    "resolve", [Git.resolve, resolve_with_cat_file], ids=["resolve", "CatFile"]
 )
-def test_object_id_length_is_learned_from_an_id_the_library_reads(
-    read_an_id: Callable[[Git], object], tmp_path: Path, git_calls: list[GitCall]
+def test_object_id_length_is_the_repositorys_whatever_ids_were_read(
+    resolve: Callable[[Git, str], str | None], repo_templates: RepoTemplates, tmp_path: Path
 ) -> None:
-    git = Git(make_sha256_repo(tmp_path).directory)
-    read_an_id(git)
+    try:
+        repo_templates.build("sha256 with sha1 ids", make_sha256_repo_with_sha1_ids)
+    except GitError as error:
+        # As the git on macOS CI says: it's built without what makes the SHA-1 ids.
+        if "compatibility hash algorithm support requires Rust" not in error.stderr:
+            raise
+        pytest.skip("this git can't keep SHA-1 ids beside SHA-256 ones (it's built without Rust)")
+    git = Git(repo_templates.copy("sha256 with sha1 ids", tmp_path / "copy") / "repo")
+    sha1 = git.run("rev-parse", "--output-object-format=sha1", "HEAD")
 
+    assert resolve(git, sha1) == sha1  # git gives a SHA-1 id back for one
     assert git.object_id_length() == 64
-    assert ["rev-parse", "--show-object-format"] not in git_calls
-
-
-def test_an_object_id_length_learned_counts_only_where_it_was_read(
-    repo: Git, tmp_path: Path
-) -> None:
-    git = Git(make_sha256_repo(tmp_path).directory)
-    with CatFile(git) as cat_file:
-        assert cat_file.resolve("nothing") is None  # starts its process, reading no id
-        git.directory = repo.directory
-        # Its process is still the SHA-256 repository's.
-        assert cat_file.resolve("HEAD") is not None
-        assert git.object_id_length() == 40
 
 
 def test_a_failed_object_id_length_is_not_remembered(tmp_path: Path) -> None:

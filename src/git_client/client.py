@@ -497,7 +497,7 @@ def location(git: ReadOnlyGit) -> Location:
 
 prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
 """Each client's `prefix()`, per location: kept here rather than on the client, so that
-`git_paths` can learn it from the `rev-parse` it runs anyway. A client and its `read_only()`
+`git_paths` can ask for it in the `rev-parse` it runs anyway (see `where_questions`). A client and its `read_only()`
 share theirs."""
 
 known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str], Path]] = (
@@ -518,19 +518,51 @@ its `read_only()` share theirs."""
 _lengths_lock = threading.Lock()
 
 
-def learn_object_id_length(git: ReadOnlyGit, where: Location, object_id: str) -> None:
-    """Remember the length of `object_id`, a full id git printed at `where` (the client's
-    `location` when it started that git), as the repository's there, so `object_id_length()`
-    needn't ask git; and wake any thread waiting for git's answer. Not if it's no full id
-    (e.g. a ref's empty object)."""
-    if not OBJECT_ID.fullmatch(object_id):
-        return
+def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
+    """The `rev-parse` options that ask git what the client doesn't know yet at `where` (its
+    `location`): `--show-prefix` for `prefix()`, and `--show-object-format` for
+    `object_id_length()` (unless the client was given it). A function that runs `rev-parse`
+    anyway puts them first, so they cost no process of their own, then gives the lines git
+    printed to `learn_where`."""
+    questions = [] if where in prefixes.setdefault(git, {}) else ["--show-prefix"]
+    if git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
+        with _lengths_lock:
+            known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
+        if not isinstance(known, int):
+            questions.append("--show-object-format")
+    return questions
+
+
+def learn_where(
+    git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], *rest: int
+) -> list[bytes]:
+    """Remember git's answers to `questions` (from `where_questions`) at `where`, from the first
+    of `lines`, what `rev-parse` printed, and return the lines after them, the caller's.
+    Raises ValueError, remembering nothing, unless as many follow as one of `rest` says, so an
+    answer a line short isn't taken for another's."""
+    if len(lines) - len(questions) not in rest:
+        raise ValueError(f"rev-parse printed {len(lines)} lines, not {len(questions)} + {rest}")
+    answers = dict(zip(questions, lines, strict=False))
+    if "--show-prefix" in answers:
+        prefixes.setdefault(git, {})[where] = decode(answers["--show-prefix"])
+    if "--show-object-format" in answers:
+        _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
+    return lines[len(questions) :]
+
+
+def rev_parse_lines(output: bytes) -> list[bytes]:
+    """The lines of rev-parse's output. Not splitlines(): an answer can be an empty line (e.g.
+    the prefix's at the top), and a path can't hold a line ending."""
+    return output.removesuffix(b"\n").split(b"\n") if output else []
+
+
+def _remember_length(git: ReadOnlyGit, where: Location, length: int) -> None:
+    """Remember `length`, git's answer, as the object id length at `where`, and wake any thread
+    waiting for git's answer to `object_id_length()`."""
     with _lengths_lock:
         known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
-        if isinstance(known, int):
-            return
-        git._object_id_lengths[where] = len(object_id)  # pyright: ignore[reportPrivateUsage]
-    if known is not None:
+        git._object_id_lengths[where] = length  # pyright: ignore[reportPrivateUsage]
+    if isinstance(known, threading.Event):
         known.set()
 
 
@@ -615,9 +647,9 @@ class ReadOnlyGit:
     interrupted), and a CatFile's process keeps answering until it's closed, though one
     that has to start (again) raises. `object_id_length` (40 for SHA-1, 64 for SHA-256), if
     given, is the repository's, which `object_id_length()` then returns without starting git:
-    for a tool that already knows it, e.g. from the length of an id it has read. It's trusted,
-    not checked (that would start the process it saves): a wrong one makes what reads ids by
-    it (e.g. `patch_ids`) fail.
+    for a tool that knows it some other way than asking git. It's trusted, not checked (that
+    would start the process it saves): a wrong one makes what reads ids by it (e.g.
+    `patch_ids`) fail.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
     first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
@@ -706,10 +738,13 @@ class ReadOnlyGit:
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
-        SHA-256: the client's `object_id_length` if given, else asked of git once per
-        `location` (the directory and `env`, which a tool may change) and remembered, or
-        learned from a full id the library has read there (`refs`, `resolve`, CatFile).
-        Threads that ask at once wait for one git's answer; if it fails, the next asks."""
+        SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
+        --show-object-format`) once per `location` (the directory and `env`, which a tool may
+        change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths` or
+        `git_paths_and_head`, which asks it too while it isn't known. Not the length of an id
+        git printed: in a repository with `extensions.compatObjectFormat`, git gives a SHA-1
+        id back for one, whatever the repository's format. Threads that ask at once wait for
+        one git's answer; if it fails, the next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
         key = location(self)
@@ -747,14 +782,16 @@ class ReadOnlyGit:
 
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
-        its directory isn't noticed."""
+        its directory isn't noticed. The same process tells `object_id_length()`, if it isn't
+        known yet."""
         known = prefixes.setdefault(self, {})
-        key = location(self)
-        if key not in known:
+        where = location(self)
+        if where not in known:
             # Not run's, which would strip a directory's leading space.
-            output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
-            known[key] = decode(output.removesuffix(b"\n"))
-        return known[key]
+            questions = where_questions(self, where)
+            output = self.run_bytes("rev-parse", *questions, timeout=timeout)
+            learn_where(self, where, questions, rev_parse_lines(output), 0)
+        return known[where]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
@@ -974,7 +1011,6 @@ class ReadOnlyGit:
         line = batch_line(name)
         if line is None:
             return None
-        where = location(self)
         args = ("cat-file", "--batch-check")
         result = self.process(*args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout)
         answered, _, reply = result.stdout.partition(b"\n")
@@ -997,7 +1033,6 @@ class ReadOnlyGit:
             if MISSING_OBJECT.search(stderr):
                 raise MissingObjectError(args, result.returncode, stderr)
             return None  # if it exited, it was on the name, which names nothing
-        learn_object_id_length(self, where, header[0])
         return header[0]
 
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
