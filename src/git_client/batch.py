@@ -320,7 +320,10 @@ def patch_ids(
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
     """
     # A function that runs any command it's given isn't for a client that promises to read.
-    if not isinstance(git, Git) or git._read_only:  # pyright: ignore[reportUnnecessaryIsInstance, reportPrivateUsage]
+    if (
+        not isinstance(git, Git)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or git._read_only  # pyright: ignore[reportPrivateUsage]
+    ):
         raise TypeError("patch_ids takes a Git, not a read-only client")
     if not commands:
         return []
