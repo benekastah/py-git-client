@@ -12,14 +12,14 @@ from git_client.testing import GitCall
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
 
 
-def git_says(git: Git, option: str) -> Path:
+def git_says(git: ReadOnlyGit, option: str) -> Path:
     """What git prints for one rev-parse option, asked on its own, as a path."""
     output = git.run_bytes("rev-parse", "--path-format=absolute", option)
     # Not run's, which would strip a trailing space from the path.
     return Path(os.fsdecode(output.removesuffix(b"\n")))
 
 
-def assert_as_git_says(git: Git) -> None:
+def assert_as_git_says(git: ReadOnlyGit) -> None:
     """git_dir and git_common_dir give what git gives, each asked on its own."""
     assert git_dir(git) == git_says(git, "--absolute-git-dir")
     assert git_common_dir(git) == git_says(git, "--git-common-dir")
@@ -48,6 +48,12 @@ def test_a_linked_worktree_has_its_own_and_the_main_ones(repo: Git, tmp_path: Pa
 
     assert_as_git_says(linked)
     assert git_dir(linked) != git_common_dir(linked) == git_common_dir(repo)
+
+
+def test_a_read_only_client_runs_the_command_itself(repo: Git, tmp_path: Path) -> None:
+    repo.run("worktree", "add", "--quiet", str(tmp_path / "linked"))
+
+    assert_as_git_says(ReadOnlyGit(tmp_path / "linked"))
 
 
 def test_a_bare_repository(repo: Git, tmp_path: Path) -> None:
