@@ -408,6 +408,21 @@ def test_replace_refs_change_history_as_they_do_for_merge_base(
     assert answers[0] is False
 
 
+def test_a_shared_cat_file_closed_sees_replace_refs_made_since(
+    shapes: tuple[Git, list[str]],
+) -> None:
+    git, c = shapes
+    with CatFile(git) as cat_file:
+        assert is_ancestor(git, (c[1], c[3]), cat_file=cat_file) == [True]
+        root = git.run("commit-tree", "-m", "root", f"{c[2]}^{{tree}}")
+        git.run("replace", c[2], root)
+        # Its process read the replace refs as it started: the next starts afresh.
+        cat_file.close()
+
+        assert is_ancestor(git, (c[1], c[3]), cat_file=cat_file) == [False]
+    assert not merge_base_says(git, c[1], c[3])
+
+
 def test_grafts_change_history_as_they_do_for_merge_base(
     shapes: tuple[Git, list[str]],
 ) -> None:

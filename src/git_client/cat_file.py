@@ -87,7 +87,9 @@ class CatFile:
     when first needed and kept until `close` (or the end of a `with` block).
 
     It sees refs and objects as they are when asked, even when other processes have changed them
-    since it started. Threads can share it. For some names (e.g. `@{u}` on a branch with no
+    since it started, but for replace refs (`git replace`), which its process reads once, as it
+    starts: after changing them, `close` it, and the next request starts a process that sees
+    them. Threads can share it. For some names (e.g. `@{u}` on a branch with no
     upstream), git cat-file exits rather than saying they name nothing; then that name resolves to
     nothing, and the next request starts another process. One that stopped between requests (killed,
     say) is started again for the request that finds it gone. A request interrupted before all its

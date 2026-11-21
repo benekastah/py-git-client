@@ -62,6 +62,11 @@ def is_ancestor(
     `git_paths` or `git_paths_and_head` ask for them too, on the same client, starts no git
     for them here. With both, a call starts no process (but the fallbacks below).
 
+    A shared `cat_file` applies replace refs as they were when its process started (see
+    CatFile), so a tool that changes them (`git replace`) closes it before asking again, or
+    gets the answers of the history it replaced; one started for the call sees them as they
+    are.
+
     A shared `cat_file` can serve other threads at once: the walk asks it for one commit at a
     time, each request under the CatFile's lock, so other threads' requests go between them;
     holding it for a whole walk would save nothing worth having (an uncontended lock costs far
