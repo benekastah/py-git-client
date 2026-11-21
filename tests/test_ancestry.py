@@ -216,6 +216,28 @@ def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]
     assert merge_base_says(git, c[0], odd)
 
 
+@pytest.mark.parametrize(
+    "parent",
+    ["{upper}", "{short}", "{commit} x", "\u00e9" * 40, "{tree}"],
+    ids=["uppercase", "short", "trailing", "not-hex", "tree"],
+)
+def test_an_odd_parent_line_answers_as_merge_base_does(
+    shapes: tuple[Git, list[str]], parent: str
+) -> None:
+    git, c = shapes
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    who = "T <t@example.com> 1000000000 +0000"
+    # git reads an id's hex in either case, and fails a commit with a parent it can't read.
+    line = parent.format(upper=c[0].upper(), short=c[0][:39], commit=c[0], tree=tree)
+    content = f"tree {tree}\nparent {line}\nauthor {who}\ncommitter {who}\n\nodd\n"
+    odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
+    # Read as an endpoint (which cat-file parses as it peels it) and as a parent (read as it is).
+    child = git.run("commit-tree", "-p", odd, "-m", "child", tree)
+    pairs = [(c[0], odd), (odd, odd), (c[9], odd), (c[0], child), (odd, child)]
+
+    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+
+
 def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> None:
     # 40 hex digits: an abbreviation there, which cat-file would resolve.
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "repo")

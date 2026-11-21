@@ -1,6 +1,7 @@
 """Which commits are ancestors of which: many pairs answered through one git process."""
 
 import heapq
+import re
 
 from git_client.batch import git_paths
 from git_client.cat_file import CatFile
@@ -24,11 +25,18 @@ _FROM_BOTH = _FROM_ANCESTOR | _FROM_DESCENDANT
 
 # What reading a commit can raise of that commit (missing, damaged, or not a commit), rather
 # than of the repository or git.
+_OBJECT_ID_BYTES = re.compile(OBJECT_ID.pattern.encode())
+
 _UNREADABLE = (UnknownRevisionError, CorruptObjectError, MissingObjectError, WrongTypeError)
 
 
 class _TooFar(Exception):
     """A pair's walk took more than _WALK_LIMIT commits."""
+
+
+class _OddCommit(Exception):
+    """A commit the walk can't follow as git would: of another type than its parent line
+    says, or with a parent line git reads as no id (whose commit git fails to parse)."""
 
 
 def is_ancestor(
@@ -135,7 +143,7 @@ class _Walker:
             return False
         try:
             return self._walk(a, d)
-        except (_TooFar, *_UNREADABLE):
+        except (_TooFar, _OddCommit, *_UNREADABLE):
             return _merge_base_says(self._git, a, d)
 
     def _peel(self, object_id: str) -> str | None:
@@ -157,9 +165,12 @@ class _Walker:
 
     def _commit(self, commit_id: str) -> tuple[int, tuple[str, ...]]:
         """The commit's committer date and parents (none for one a shallow clone cut).
-        Raises what CatFile.read does for one it can't read."""
+        Raises what CatFile.read does for one it can't read, and _OddCommit."""
         if commit_id not in self._commits:
-            _, content = self._cat_file.read(commit_id, "commit")
+            # Not peeled (`<id>^{commit}`): a parent line naming a tag names no commit to git.
+            kind, content = self._cat_file.read(commit_id)
+            if kind != "commit":
+                raise _OddCommit
             # Read as git's parse_commit_buffer reads it: its parents are the run of parent
             # lines right after its tree (a later one is no parent), and its date is that of
             # the committer line right after them and the author line (else 0).
@@ -167,7 +178,13 @@ class _Walker:
             end = 1
             while end < len(headers) and headers[end].startswith(b"parent "):
                 end += 1
-            parents = [line.removeprefix(b"parent ").decode("ascii") for line in headers[1:end]]
+            # git reads each id's hex in either case; one it can't read fails the commit.
+            parents = [line.removeprefix(b"parent ").lower() for line in headers[1:end]]
+            if not all(
+                _OBJECT_ID_BYTES.fullmatch(parent) and len(parent) == len(commit_id)
+                for parent in parents
+            ):
+                raise _OddCommit
             date = 0
             after = headers[end : end + 2]
             if (
@@ -178,7 +195,8 @@ class _Walker:
                 # "committer <name> <<email>> <seconds> <zone>"; any number orders it.
                 fields = after[1].rsplit(b" ", 2)
                 date = int(fields[1]) if len(fields) == 3 and fields[1].isdigit() else 0
-            self._commits[commit_id] = (date, () if commit_id in self._shallow else tuple(parents))
+            ids = () if commit_id in self._shallow else tuple(parent.decode() for parent in parents)
+            self._commits[commit_id] = (date, ids)
         return self._commits[commit_id]
 
     def _walk(self, ancestor: str, descendant: str) -> bool:
