@@ -1,4 +1,3 @@
-import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -829,7 +828,7 @@ def test_git_paths_and_head_does_not_know_an_unborn_branch_wherever_it_is(tmp_pa
 
 def test_git_paths_and_head_raises_when_git_fails_with_no_names_to_print(repo: Git) -> None:
     repo.prefix()  # known, so only the head is asked for
-    shutil.rmtree(Path(repo.directory) / ".git")
+    (Path(repo.directory) / ".git" / "HEAD").unlink()  # no longer a repository
 
     with pytest.raises(NotARepositoryError):
         git_paths_and_head(repo)
