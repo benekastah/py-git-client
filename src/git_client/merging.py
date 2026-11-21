@@ -10,7 +10,6 @@ from git_client.client import OBJECT_ID, Arg, Git, decode, error_from
 from git_client.errors import (
     CorruptObjectError,
     GitError,
-    MissingObjectError,
     UnknownRevisionError,
     WrongTypeError,
 )
@@ -30,8 +29,10 @@ _OUTPUT = ("--name-only", "--no-messages")
 _USAGE = 129
 
 # The errors that are about the pair git stopped at: an id that names no commit, or one that
-# names another object (e.g. a tree), and objects of its history that git couldn't read.
-_ABOUT_THE_PAIR = (UnknownRevisionError, WrongTypeError, CorruptObjectError, MissingObjectError)
+# names another object (e.g. a tree), and a damaged object of its history. Not
+# MissingObjectError: a partial clone that can't fetch one object (most often, as its remote
+# can't be reached) can't fetch the next pair's either.
+_ABOUT_THE_PAIR = (UnknownRevisionError, WrongTypeError, CorruptObjectError)
 
 # What else git says of the pair it stopped at: commits that share no history, and an object
 # lost from their history: a blob it merges, a subtree, a blob it reads to find renames, and a
@@ -77,8 +78,9 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
     commits that share no history (which merge-tree refuses, as `git merge` does) or whose
     objects it can't read (e.g. a damaged object store). git stops at such a pair, so the
     pairs after it are merged by another process: each pair git can't merge costs one. Any
-    other failure, which isn't about one pair (e.g. NotARepositoryError, or no room to write
-    objects), is raised, wherever it comes.
+    other failure, which isn't about one pair, is raised, wherever it comes: e.g.
+    NotARepositoryError, no room to write objects, or MissingObjectError, for an object a
+    partial clone couldn't fetch, as each pair after it would wait to fail the same way.
 
     Raises ValueError, starting no git, for a pair that isn't two full object ids: names (a
     branch, `HEAD`) aren't taken, so nothing given can be read as an option or as more than

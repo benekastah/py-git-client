@@ -9,6 +9,7 @@ from git_client import (
     Git,
     GitError,
     MergeResult,
+    MissingObjectError,
     NotARepositoryError,
     ReadOnlyError,
     UnknownRevisionError,
@@ -303,6 +304,35 @@ def test_a_failure_not_about_one_pair_is_raised_even_after_a_merge() -> None:
 
 
 @NEEDS_WRITE_TREE
+@NEEDS_STDIN
+def test_an_object_a_partial_clone_cant_fetch_is_raised_at_once(
+    repo: Git, tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    ids = {
+        "ours": commit(repo, head, {b"a": b"ours\n"}),
+        "theirs": commit(repo, head, {b"a": b"theirs\n"}),
+        "x": commit(repo, head, {b"x": b"x\n"}),
+        "y": commit(repo, head, {b"y": b"y\n"}),
+    }
+    for name, object_id in ids.items():
+        repo.run("update-ref", f"refs/heads/{name}", object_id)
+    repo.run("config", "uploadpack.allowFilter", "true")
+    git, origin = repo, Path(repo.directory)
+    clone = tmp_path / "clone"
+    git.run("clone", "--quiet", "--filter=blob:none", origin.as_uri(), str(clone))
+    origin.rename(tmp_path / "gone")  # as a remote that can't be reached
+    git_calls.clear()
+    # The second pair's merge reads blobs the clone doesn't have.
+    pairs = [(ids["x"], ids["y"]), (ids["ours"], ids["theirs"]), (ids["x"], ids["y"])]
+
+    with pytest.raises(MissingObjectError, match="could not fetch"):
+        merge_trees(Git(clone), pairs)
+
+    # Not a fetch, and its wait, for each pair left: each would fail the same way.
+    assert len(git_calls) == 1
+
+
 def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_results(
     merges: tuple[Git, dict[str, str]],
     git_calls: list[GitCall],
