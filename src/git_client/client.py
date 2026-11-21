@@ -1064,14 +1064,12 @@ class Git(ReadOnlyGit):
         much past `wait`. Older git fails at once, so without this, any write racing another
         process's (e.g. an editor's git) would fail."""
         for change in changes:
-            # Before any is made: git config's own arguments (what the old `write_config`
-            # took) come here too.
+            # Before any is made: git config's own arguments come here too.
             wrong = not isinstance(change, (ConfigSet, ConfigUnset))  # pyright: ignore[reportUnnecessaryIsInstance]
             if wrong:
                 raise TypeError(
                     f"write_configs takes a ConfigSet or ConfigUnset for each change, not"
-                    f' {change!r}: the old write_config("k", "v") is'
-                    f' write_configs(ConfigSet("k", "v")),'
+                    f' {change!r}: write_configs(ConfigSet("k", "v")) sets a key,'
                     ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
                 )
         if not changes:
