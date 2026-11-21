@@ -72,7 +72,7 @@ def is_ancestor(
     missing, or with a parent line git can't follow), or with a full id cat-file can't peel to
     a commit (a missing object, a tree), is asked of `git merge-base --is-ancestor`, a process
     each, as is every pair while the repository has a grafts file (deprecated in git), which
-    cat-file doesn't apply.
+    cat-file doesn't apply, or while git's environment sets GIT_SHALLOW_FILE.
     FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
     Each pair's walk is git's own for `merge-base` (paint_down_to_common), in Python: from
@@ -99,7 +99,9 @@ def is_ancestor(
     if not pairs:
         return []
     shallow_file, grafts_file = git_paths(git, "shallow", "info/grafts")
-    if grafts_file.exists():
+    # GIT_SHALLOW_FILE (mostly git's own, for receive-pack and its hooks) moves the shallow
+    # list where `--git-path shallow` doesn't look.
+    if grafts_file.exists() or "GIT_SHALLOW_FILE" in git.environment():
         return [_merge_base_says(git, *pair) for pair in pairs]
     shallow = frozenset[str]()
     if shallow_file.exists():

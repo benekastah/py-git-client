@@ -377,6 +377,22 @@ def test_a_shallow_clones_cut_history(git_calls: list[GitCall], tmp_path: Path) 
     assert answers[pairs.index((c[1], c[4]))] is True
 
 
+def test_a_shallow_file_named_by_the_environment_cuts_history(
+    shapes: tuple[Git, list[str]], tmp_path: Path
+) -> None:
+    git, c = shapes
+    # Where git (receive-pack, say) keeps a shallow list elsewhere: c3 cut from c2.
+    shallow = tmp_path / "shallow"
+    shallow.write_text(f"{c[3]}\n", encoding="utf-8")
+    git = Git(git.directory, env={"GIT_SHALLOW_FILE": str(shallow)})
+    pairs = [(c[2], c[3]), (c[0], c[6]), (c[0], c[2])]
+
+    answers = is_ancestor(git, *pairs)
+
+    assert answers == [merge_base_says(git, a, d) for a, d in pairs]
+    assert answers[0] is False
+
+
 def test_replace_refs_change_history_as_they_do_for_merge_base(
     shapes: tuple[Git, list[str]],
 ) -> None:
