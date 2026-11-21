@@ -3,6 +3,7 @@ config`'s own edits of a copy of the same file."""
 
 import os
 import stat
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -379,13 +380,17 @@ def test_write_config_waits_while_the_config_is_locked(repo: Git) -> None:
     assert repo.run("config", "branch.a.x") == "1"
 
 
-def test_write_config_gives_up_once_its_wait_is_over(repo: Git) -> None:
+@pytest.mark.parametrize("key", ["branch.a.x", "core.x"], ids=["itself", "falling back to git"])
+def test_write_config_gives_up_once_its_wait_is_over(repo: Git, key: str) -> None:
+    repo.run("config", "core.configLockTimeout", "0")  # git fails at once, as before 2.56
     before = config_file(repo).read_bytes()
     held = lock(repo)
 
-    with pytest.raises(ConfigLockedError):
-        repo.write_config(ConfigSet("branch.a.x", "1"), wait=0.2)
+    with pytest.raises(ConfigLockedError) as raised:
+        repo.write_config(ConfigSet(key, "1"), wait=0.2)
 
+    # git's own error, or the same.
+    assert (raised.value.command, raised.value.returncode) == (["config", key, "1"], 255)
     assert held.exists()  # another's, to leave
     assert config_file(repo).read_bytes() == before
 
@@ -407,21 +412,35 @@ def test_write_config_and_git_config_writing_at_once_lose_nothing(repo: Git) -> 
 
 
 @pytest.mark.parametrize(
-    ("call", "error"), [("fsync", OSError("disk full")), ("replace", PermissionError("in use"))]
+    ("call", "error"),
+    [
+        ("write", OSError("disk full")),
+        ("fsync", OSError("I/O error")),
+        ("replace", PermissionError()),
+    ],
 )
-def test_write_config_changes_nothing_if_it_fails_midway(
-    repo: Git, monkeypatch: pytest.MonkeyPatch, call: str, error: OSError
+def test_write_config_leaves_a_write_that_fails_midway_to_git(
+    repo: Git,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    git_calls: list[GitCall],
+    call: str,
+    error: OSError,
 ) -> None:
-    before = config_file(repo).read_bytes()
+    by_git, _ = git_edits(tmp_path, config_file(repo).read_bytes(), [ConfigSet("branch.a.x", "1")])
+    started = len(git_calls)
 
     def fail(*args: object) -> None:
         raise error
 
     monkeypatch.setattr(os, call, fail)
-    with pytest.raises(type(error)):
-        repo.write_config(ConfigSet("branch.a.x", "1"), wait=0.1)
+    repo.write_config(ConfigSet("branch.a.x", "1"), wait=0.1)
 
-    assert config_file(repo).read_bytes() == before
+    # Nothing of ours kept, and git's own write (or its error) instead.
+    assert [call for call in git_calls[started:] if call[0] == "config"] == [
+        ["config", "branch.a.x", "1"]
+    ]
+    assert config_file(repo).read_bytes() == by_git
     assert not config_file(repo).with_name("config.lock").exists()
 
 
@@ -443,8 +462,8 @@ def test_write_config_interrupted_once_written_leaves_anothers_lock(
     assert b'[branch "a"]' in config_file(repo).read_bytes()
 
 
-def test_write_config_tries_a_refused_rename_again(
-    repo: Git, monkeypatch: pytest.MonkeyPatch
+def test_write_config_tries_a_rename_windows_refuses_again(
+    repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
 ) -> None:
     refusals = [PermissionError("in use")]  # as Windows refuses while the file is open
     replace = os.replace
@@ -458,6 +477,8 @@ def test_write_config_tries_a_refused_rename_again(
     repo.write_config(ConfigSet("branch.a.x", "1"))
 
     assert repo.run("config", "branch.a.x") == "1"
+    # Only Windows' refusal passes: elsewhere, git writes it.
+    assert any(call[0] == "config" for call in git_calls[:-1]) == (sys.platform != "win32")
 
 
 def test_write_config_leaves_a_lock_it_cant_make_to_git(

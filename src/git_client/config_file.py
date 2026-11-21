@@ -13,6 +13,7 @@ import enum
 import os
 import re
 import stat
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -250,6 +251,19 @@ def _entry(reader: _Reader, first: int) -> tuple[bytes, bytes | None, bool] | No
             value.append(c)
 
 
+# git config's exit status when it can't take the lock.
+_NO_LOCK = 255
+
+
+def config_args(change: ConfigChange) -> list[str]:
+    """`git config`'s arguments for a change."""
+    if isinstance(change, ConfigSet):
+        return [change.key, change.value]
+    if change.value is None:
+        return ["--unset", change.key]
+    return ["--unset", "--fixed-value", change.key, change.value]
+
+
 def editable(changes: Sequence[ConfigChange]) -> bool:
     """Whether every change is of a valid `branch.<name>.<key>`, with no NUL, as `edit`
     needs."""
@@ -264,17 +278,16 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
     did: all or none, under git's own lock (`<path>.lock`, made as git makes it, so `git
     config` and any other writer waits for it), written whole to the lock, flushed to disk,
     then renamed over the file, keeping its permissions. None, having changed nothing, where
-    it's git's to make them: where `edit` says, for a file that's a symbolic link (git writes
-    the file it names), one it can't read or that's read-only, or a lock it can't make other
-    than for being held (git says why). Raises ConfigLockedError if another process holds the lock past `wait`
-    seconds, and the OSError of a rename that still fails after trying `wait` seconds more
-    (Windows refuses one while another process has the file open without sharing its
-    deletion)."""
+    it's git's to make them (or say why it can't): where `edit` says; for a file that's a
+    symbolic link (git writes the file it names), read-only, or that can't be read; for a
+    lock that can't be made other than for being held; and if writing, flushing or renaming
+    fails (e.g. a full disk). Raises ConfigLockedError, as `git config` for the first change
+    would, if another process holds the lock past `wait` seconds."""
     lock = path.with_name(path.name + ".lock")
     fd: int | None = None
     ours: os.stat_result | None = None  # the lock's, once closed
     try:
-        fd = _lock(lock, path, wait)
+        fd = _lock(lock, path, wait, config_args(changes[0]))
         if fd is None:
             return None
         try:
@@ -294,16 +307,24 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
         written, results = edited
         if written is None or ConfigResult.CHANGED not in results:
             return results
-        if mode is not None:
-            os.chmod(lock, mode)
-        view = memoryview(written)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
-        ours = os.fstat(fd)
-        os.close(fd)
-        fd = None
-        _retry(PermissionError, wait, lambda: os.replace(lock, path))
+        try:
+            if mode is not None:
+                os.chmod(lock, mode)
+            view = memoryview(written)
+            while view:
+                view = view[os.write(fd, view) :]
+            os.fsync(fd)
+            ours = os.fstat(fd)
+            os.close(fd)
+            fd = None
+            if sys.platform == "win32":
+                # Windows refuses to replace a file another process has open without sharing
+                # its deletion, for as long as it's open: try again, as git for Windows does.
+                _retry(PermissionError, wait, lambda: os.replace(lock, path))
+            else:
+                os.replace(lock, path)
+        except OSError:
+            return None  # nothing changed: git's to make them, or say why it can't
         return results
     finally:
         # Whatever stops it (e.g. KeyboardInterrupt), but only our lock: once renamed, the
@@ -325,9 +346,10 @@ def _remove_if_ours(lock: Path, ours: os.stat_result) -> None:
         lock.unlink(missing_ok=True)
 
 
-def _lock(lock: Path, path: Path, wait: float) -> int | None:
-    """Make `lock`, as git does, trying again while it's held, for up to `wait` seconds;
-    None if it can't be made for another reason."""
+def _lock(lock: Path, path: Path, wait: float, command: list[str]) -> int | None:
+    """Make `lock`, as git does, trying again while it's held, for up to `wait` seconds, then
+    raising ConfigLockedError as `git config <command>` would; None if it can't be made for
+    another reason."""
 
     def make() -> int:
         # O_BINARY: Windows would write each LF as CRLF.
@@ -337,8 +359,9 @@ def _lock(lock: Path, path: Path, wait: float) -> int | None:
     try:
         return _retry(FileExistsError, wait, make)
     except FileExistsError:
+        # As git's: the command of the first change, and git config's exit status.
         message = f"error: could not lock config file {path}: File exists"
-        raise ConfigLockedError(["config"], None, message) from None
+        raise ConfigLockedError(["config", *command], _NO_LOCK, message) from None
     except OSError:
         return None
 

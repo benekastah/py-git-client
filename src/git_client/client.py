@@ -946,7 +946,9 @@ class Git(ReadOnlyGit):
         `git_paths` asks where the file is (none once known): it edits the file itself, as git
         would (see config_file for the two points where it doesn't write git's bytes), all or
         none, under git's lock, which it waits up to `wait` seconds for before raising
-        ConfigLockedError.
+        ConfigLockedError as `git config` of the first change would. If writing the file
+        fails (e.g. a full disk), it has changed nothing, and the changes are git's to make
+        (or to say why not), as below: its errors are git's.
 
         Otherwise, or where it can't be sure of making a change as git would (see
         config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link,
@@ -1006,17 +1008,11 @@ class Git(ReadOnlyGit):
         return git_paths(self, "config")[0]
 
     def _write_config_change(self, change: ConfigChange, wait: float) -> ConfigResult:
-        if isinstance(change, ConfigSet):
-            self._config_write(change.key, change.value, wait=wait)
-            return ConfigResult.CHANGED
-        if change.value is None:
-            args = ["--unset", change.key]
-        else:
-            args = ["--unset", "--fixed-value", change.key, change.value]
         try:
-            self._config_write(*args, wait=wait)
+            self._config_write(*config_file.config_args(change), wait=wait)
         except GitError as error:
-            if error.returncode != _NOTHING_SET:
+            # Exit status 5 is a failure of a set (e.g. of a key with several values).
+            if isinstance(change, ConfigSet) or error.returncode != _NOTHING_SET:
                 raise
             if _SEVERAL_VALUES.search(error.stderr):
                 return ConfigResult.SEVERAL_VALUES
