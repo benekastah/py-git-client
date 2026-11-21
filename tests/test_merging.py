@@ -24,17 +24,8 @@ from git_client.testing import FakeGit, GitCall
 Changes = Callable[[Git], None]
 
 
-def _git_version() -> tuple[int, int]:
-    version = Git(".").run("--version")
-    major, minor = re.findall(r"\d+", version)[:2]
-    return int(major), int(minor)
-
-
-GIT_VERSION = _git_version()
-NEEDS_WRITE_TREE = pytest.mark.skipif(
-    GIT_VERSION < (2, 38), reason="merge-tree --write-tree is git 2.38's"
-)
-NEEDS_STDIN = pytest.mark.skipif(GIT_VERSION < (2, 39), reason="merge-tree --stdin is git 2.39's")
+NEEDS_WRITE_TREE = pytest.mark.needs_git(2, 38, reason="for merge-tree --write-tree")
+NEEDS_STDIN = pytest.mark.needs_git(2, 39, reason="for merge-tree --stdin")
 
 
 def commit(git: Git, parent: str | None, changes: Mapping[bytes, bytes | None]) -> str:
@@ -389,10 +380,12 @@ def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_re
 
 
 def test_without_write_tree_it_says_which_git_it_needs(
-    merges: tuple[Git, dict[str, str]], monkeypatch: pytest.MonkeyPatch
+    merges: tuple[Git, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int],
 ) -> None:
     git, ids = merges
-    if GIT_VERSION >= (2, 38):
+    if git_version >= (2, 38):
         # As git 2.37 does --write-tree, which its merge-tree doesn't know.
         monkeypatch.setattr(git_client.merging, "_STDIN", "--no-such-option")
         monkeypatch.setattr(git_client.merging, "_WRITE_TREE", "--no-such-option")
