@@ -163,22 +163,34 @@ def test_an_answer_git_gave_before_forget_is_not_kept(repo: Git, git_calls: list
     assert len(git_calls) == 2
 
 
-def test_threads_get_gits_answers_while_others_ask_again(
+def test_threads_get_gits_answers_while_another_forgets(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
     (Path(repo.directory) / "sub").mkdir()
-    git = Git(Path(repo.directory) / "sub", remember_for=0)  # each call asks again
-    start = threading.Barrier(4)
+    git = Git(Path(repo.directory) / "sub")
+    asking = threading.Barrier(4)
+    done = threading.Event()
 
-    def ask(_: int) -> list[tuple[str, str]]:
-        start.wait()
-        return [(git.prefix(), git.cdup()) for _ in range(2)]
+    def forget() -> None:
+        asking.wait()
+        while not done.is_set():
+            git.forget()
+
+    def ask() -> list[tuple[str, str, Path]]:
+        asking.wait()
+        return [(git.prefix(), git.cdup(), git_dir(git)) for _ in range(3)]
 
     with ThreadPoolExecutor(4) as pool:
-        answers = [answer for answers in pool.map(ask, range(4)) for answer in answers]
+        forgetting = pool.submit(forget)
+        askers = [pool.submit(ask) for _ in range(3)]
+        try:
+            answers = {answer for asker in askers for answer in asker.result()}
+        finally:
+            done.set()  # whatever the askers raised, so the forgetter stops
+        forgetting.result()
 
-    assert set(answers) == {("sub/", "../")}
-    assert len(git_calls) <= 16  # at most one process a call
+    assert answers == {("sub/", "../", Path(repo.directory) / ".git")}
+    assert len(git_calls) <= 27  # at most one process a call
 
 
 def test_a_fake_remembers_for_remember_for(clock: list[float]) -> None:
