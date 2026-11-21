@@ -12,9 +12,7 @@ import subprocess
 import sys
 import threading
 import time
-import weakref
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import IO, Final, Literal
 
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
@@ -495,40 +493,69 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
-tops: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[str, str]]] = (
-    weakref.WeakKeyDictionary()
-)
-"""Each client's `prefix()` and `cdup()`, per location: kept here rather than on the client,
-so that `git_paths` can ask for them in the `rev-parse` it runs anyway (see
-`where_questions`). A client and its `read_only()` share theirs."""
+class Memory:
+    """What git told a client about where things are (the answers of the `rev-parse` options
+    `where_questions` lists, and `--git-path`'s), by location and option, as git printed
+    each, but the newline that ends it. A client and its `read_only()` copies share one."""
 
-known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str], Path]] = (
-    weakref.WeakKeyDictionary()
-)
-"""Where git keeps each name, per client, location and name (see `git_paths`). A client and its
-`read_only()` share theirs."""
+    def __init__(self) -> None:
+        # Held only to read or change what's here, never while git runs.
+        self.lock = threading.Lock()
+        self._answers: dict[tuple[Location, str], bytes] = {}
+        # Per location: an Event that a thread asking git for object_id_length() alone sets
+        # once it has its answer (or has failed), for the threads waiting for it.
+        self.asking_format: dict[Location, threading.Event] = {}
 
-known_git_dirs: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[Path, Path]]] = (
-    weakref.WeakKeyDictionary()
-)
-"""Each client's own and common git directories, per location (see `git_dir`): kept here, as
-`tops` is, so that the `rev-parse` that asks where things are asks them too (see
-`where_questions`). A client and its `read_only()` share theirs."""
+    def recall_locked(self, where: Location, questions: Sequence[str]) -> dict[str, bytes] | None:
+        """git's answers to `questions` at `where`, or None unless all are known. The caller
+        holds `lock`."""
+        found: dict[str, bytes] = {}
+        for question in questions:
+            answer = self._answers.get((where, question))
+            if answer is None:
+                return None
+            found[question] = answer
+        return found
+
+    def recall(self, where: Location, questions: Sequence[str]) -> dict[str, bytes] | None:
+        """git's answers to `questions` at `where`, or None unless all are known."""
+        with self.lock:
+            return self.recall_locked(where, questions)
+
+    def remember(self, where: Location, answers: Mapping[str, bytes]) -> None:
+        """Remember git's `answers` at `where`, by the option each answers, all at once, so
+        that no thread sees some of them without the others."""
+        with self.lock:
+            self._answers.update(
+                ((where, question), answer) for question, answer in answers.items()
+            )
 
 
-# Guards each client's object id lengths: held only to read or change them, never while git
-# runs.
-_lengths_lock = threading.Lock()
+def git_path_question(name: str) -> str:
+    """What `Memory` keeps `--git-path name`'s answer under: a name holds no line ending (see
+    `git_paths`), so nothing else is kept under it."""
+    return f"--git-path\n{name}"
+
+
+def recall_where(git: ReadOnlyGit, where: Location, *questions: str) -> dict[str, bytes] | None:
+    """git's answers to `questions` at `where`, as `Memory.recall` gives them."""
+    return git._memory.recall(where, questions)  # pyright: ignore[reportPrivateUsage]
+
+
+def remember_where(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -> None:
+    """Remember git's `answers` at `where`, as `Memory.remember` does."""
+    git._memory.remember(where, answers)  # pyright: ignore[reportPrivateUsage]
 
 
 # What asks for prefix() and cdup(). Where git knows no worktree (in a bare repository, or a
 # git directory), it prints no cdup at all, not even an empty line (where it knows the top but
 # the directory is outside it, it prints the top's absolute path). --is-inside-work-tree's
-# "true" or "false" after it tells the two apart (see learn_where).
-_TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
+# "true" or "false" after it tells the two apart (see read_where).
+TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
 _INSIDE_WORK_TREE = (b"true", b"false")
 # What asks for git_dir and git_common_dir, absolute paths (see where_command).
-_DIR_QUESTIONS = ("--git-dir", "--git-common-dir")
+DIR_QUESTIONS = ("--git-dir", "--git-common-dir")
+_FORMAT_QUESTION = "--show-object-format"
 
 
 class LinesUnfit(ValueError):
@@ -538,22 +565,27 @@ class LinesUnfit(ValueError):
     `ask_where_alone`)."""
 
 
-def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
+def where_questions(git: ReadOnlyGit, where: Location, needed: Sequence[str] = ()) -> list[str]:
     """The `rev-parse` options that ask git what the client doesn't know yet at `where` (its
-    `location`), in this order: `--show-prefix` and `--show-cdup` (with
+    `location`), and those of `needed` (TOP_QUESTIONS or DIR_QUESTIONS, which the caller
+    wants answered whatever is known), in this order: `--show-prefix` and `--show-cdup` (with
     `--is-inside-work-tree`) for `prefix()` and `cdup()`, `--show-object-format` for
     `object_id_length()` (unless the client was given it), and `--git-dir` and
     `--git-common-dir` for `git_dir` and `git_common_dir`. A function that runs `rev-parse`
     anyway runs `where_command(questions)`, then its own options, so they cost no process of
-    their own, then gives the lines git printed to `learn_where`."""
-    questions: list[str] = [] if where in tops.setdefault(git, {}) else [*_TOP_QUESTIONS]
-    if git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
-        with _lengths_lock:
-            known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
-        if not isinstance(known, int):
-            questions.append("--show-object-format")
-    if where not in known_git_dirs.setdefault(git, {}):
-        questions += _DIR_QUESTIONS
+    their own, then reads the lines git printed with `read_where`."""
+    memory = git._memory  # pyright: ignore[reportPrivateUsage]
+    with memory.lock:
+        top = memory.recall_locked(where, TOP_QUESTIONS[:2])
+        length = memory.recall_locked(where, [_FORMAT_QUESTION])
+        dirs = memory.recall_locked(where, DIR_QUESTIONS)
+    questions: list[str] = []
+    if top is None or TOP_QUESTIONS[0] in needed:
+        questions += TOP_QUESTIONS
+    if length is None and git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
+        questions.append(_FORMAT_QUESTION)
+    if dirs is None or DIR_QUESTIONS[0] in needed:
+        questions += DIR_QUESTIONS
     return questions
 
 
@@ -564,15 +596,14 @@ def where_command(questions: Sequence[str]) -> list[str]:
     return ["rev-parse", "--path-format=absolute", *questions]
 
 
-def learn_where(
-    git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], rest: int
-) -> list[bytes]:
-    """Remember git's answers to `questions` (from `where_questions`) at `where`, from the first
-    of `lines`, what `rev-parse` printed, and return the `rest` lines after them, the caller's
-    answers (each one line, unless it's a path with a newline in it). Remembers nothing, and
-    raises ValueError where there are too few lines (e.g. a FakeGit's answer a line short),
-    and LinesUnfit where a line's answer can't be told (then the caller asks each question in
-    a process of its own).
+def read_where(
+    questions: Sequence[str], lines: list[bytes], rest: int
+) -> tuple[dict[str, bytes], list[bytes]]:
+    """git's answers to `questions` (from `where_questions`), by question, from the first of
+    `lines`, what `rev-parse` printed, and the `rest` lines after them, the caller's answers
+    (each one line, unless it's a path with a newline in it). Raises ValueError where there
+    are too few lines (e.g. a FakeGit's answer a line short), and LinesUnfit where a line's
+    answer can't be told (then the caller asks each question in a process of its own).
 
     Each answer is one line, but a path's (the prefix, an absolute cdup, the git directories,
     a `--git-path`), which is one more line for each newline in it, and the cdup's, which is
@@ -596,56 +627,52 @@ def learn_where(
     if answers.get("--is-inside-work-tree", b"true") not in _INSIDE_WORK_TREE:
         # Not git's answer (e.g. a FakeGit's, made for another question).
         raise ValueError(f"rev-parse's lines don't answer {questions}")
-    _remember(git, where, answers)
-    return lines[len(lines) - rest :]
+    return answers, lines[len(lines) - rest :]
 
 
 def ask_where_alone(
-    git: ReadOnlyGit,
-    where: Location,
-    questions: Sequence[str],
-    *,
-    timeout: Timeout = CLIENT_TIMEOUT,
-) -> None:
-    """Ask each of `questions` (from `where_questions`) in a `rev-parse` of its own, and
-    remember git's answers, each its whole output but the newline that ends it: for where
-    their answers in one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a
-    newline in it makes them."""
-    answers = {
+    git: ReadOnlyGit, questions: Sequence[str], *, timeout: Timeout = CLIENT_TIMEOUT
+) -> dict[str, bytes]:
+    """git's answers to `questions` (from `where_questions`), each asked in a `rev-parse` of
+    its own, each its whole output but the newline that ends it: for where their answers in
+    one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a newline in it makes
+    them."""
+    return {
         question: git.run_bytes(*where_command([question]), timeout=timeout).removesuffix(b"\n")
         for question in questions
         if question != "--is-inside-work-tree"
     }
-    _remember(git, where, answers)
 
 
-def _remember(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -> None:
-    """Remember git's answers at `where`, by the question each answers."""
-    if "--show-prefix" in answers:
-        prefix, cdup = answers["--show-prefix"], answers["--show-cdup"]
-        tops.setdefault(git, {})[where] = decode(prefix), decode(cdup)
-    if "--show-object-format" in answers:
-        _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
-    if "--git-dir" in answers:
-        own, common = (Path(os.fsdecode(answers[question])) for question in _DIR_QUESTIONS)
-        known_git_dirs.setdefault(git, {})[where] = own, common
+def ask_where(
+    git: ReadOnlyGit, where: Location, needed: Sequence[str], timeout: Timeout
+) -> dict[str, bytes]:
+    """git's answers to `needed` (TOP_QUESTIONS or DIR_QUESTIONS) at `where`, from memory or
+    else from one `rev-parse` that asks whatever else isn't known too, and remembers it all."""
+    found = recall_where(git, where, *needed[:2])
+    if found is None:
+        questions = where_questions(git, where, needed)
+        # Not run's, which would strip a directory's leading space.
+        output = git.run_bytes(*where_command(questions), timeout=timeout)
+        try:
+            found, _ = read_where(questions, rev_parse_lines(output), 0)
+        except LinesUnfit:
+            found = ask_where_alone(git, questions, timeout=timeout)
+        remember_where(git, where, found)
+    return found
 
 
 def rev_parse_lines(output: bytes) -> list[bytes]:
     """The lines of rev-parse's output. Not splitlines(): an answer can be an empty line (e.g.
     the prefix's at the top), and only "\\n" ends one. A path git prints can hold a newline
-    (off Windows), which makes it two lines: `learn_where` tells."""
+    (off Windows), which makes it two lines: `read_where` tells."""
     return output.removesuffix(b"\n").split(b"\n") if output else []
 
 
-def _remember_length(git: ReadOnlyGit, where: Location, length: int) -> None:
-    """Remember `length`, git's answer, as the object id length at `where`, and wake any thread
-    waiting for git's answer to `object_id_length()`."""
-    with _lengths_lock:
-        known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
-        git._object_id_lengths[where] = length  # pyright: ignore[reportPrivateUsage]
-    if isinstance(known, threading.Event):
-        known.set()
+def object_id_length_of(format: bytes) -> int:
+    """The length of an object id in the object format `rev-parse --show-object-format`
+    names."""
+    return 64 if format == b"sha256" else 40
 
 
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
@@ -794,8 +821,7 @@ class ReadOnlyGit:
         self.stopping = stopping
         self.process_groups = process_groups
         self._object_id_length = object_id_length
-        # Per location: the length, or an Event a thread asking git sets once it has answered.
-        self._object_id_lengths: dict[Location, int | threading.Event] = {}
+        self._memory = Memory()
 
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
@@ -812,10 +838,7 @@ class ReadOnlyGit:
         _refuse_environment(self.env)
         reader = copy.copy(self)
         reader.env = dict(self.env)
-        reader._read_only = True
-        tops[reader] = tops.setdefault(self, {})
-        known_git_paths[reader] = known_git_paths.setdefault(self, {})
-        known_git_dirs[reader] = known_git_dirs.setdefault(self, {})
+        reader._read_only = True  # and shares the client's _memory
         return reader
 
     def object_id_length(self) -> int:
@@ -823,37 +846,35 @@ class ReadOnlyGit:
         SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
         --show-object-format`) once per `location` (the directory and `env`, which a tool may
         change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths`,
-        `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the length of an id
-        git printed: in a repository with `extensions.compatObjectFormat`, git gives a SHA-1
-        id back for one, whatever the repository's format. Threads that ask at once wait for
-        one git's answer; if it fails, the next asks."""
+        `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the
+        length of an id git printed: in a repository with `extensions.compatObjectFormat`, git
+        gives a SHA-1 id back for one, whatever the repository's format. Threads that ask at
+        once wait for one git's answer; if it fails, the next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
-        key = location(self)
+        where = location(self)
+        memory = self._memory
         while True:
-            with _lengths_lock:
-                known = self._object_id_lengths.get(key)
-                if isinstance(known, int):
-                    return known
-                asking = known is None
-                if known is None:
-                    known = self._object_id_lengths[key] = threading.Event()
-            if not asking:
-                known.wait()
+            with memory.lock:
+                known = memory.recall_locked(where, [_FORMAT_QUESTION])
+                if known is not None:
+                    return object_id_length_of(known[_FORMAT_QUESTION])
+                asking = memory.asking_format.get(where)
+                mine = asking is None
+                if asking is None:
+                    asking = memory.asking_format[where] = threading.Event()
+            if not mine:
+                asking.wait()
                 continue  # its answer, or (if it failed) ask again
-            length: int | None = None
             try:
-                sha256 = self.run("rev-parse", "--show-object-format") == "sha256"
-                length = 64 if sha256 else 40
-                return length
+                format = encode(self.run("rev-parse", _FORMAT_QUESTION))
+                memory.remember(where, {_FORMAT_QUESTION: format})
+                return object_id_length_of(format)
             finally:
                 # Whatever stops it (e.g. KeyboardInterrupt), so no waiter waits for good.
-                with _lengths_lock:
-                    if length is not None:
-                        self._object_id_lengths[key] = length
-                    elif self._object_id_lengths.get(key) is known:
-                        del self._object_id_lengths[key]
-                known.set()
+                with memory.lock:
+                    del memory.asking_format[where]
+                asking.set()
 
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
@@ -881,17 +902,8 @@ class ReadOnlyGit:
 
     def _top(self, timeout: Timeout) -> tuple[str, str]:
         """`prefix()` and `cdup()`."""
-        known = tops.setdefault(self, {})
-        where = location(self)
-        if where not in known:
-            # Not run's, which would strip a directory's leading space.
-            questions = where_questions(self, where)
-            output = self.run_bytes(*where_command(questions), timeout=timeout)
-            try:
-                learn_where(self, where, questions, rev_parse_lines(output), 0)
-            except LinesUnfit:
-                ask_where_alone(self, where, questions, timeout=timeout)
-        return known[where]
+        found = ask_where(self, location(self), TOP_QUESTIONS, timeout)
+        return decode(found["--show-prefix"]), decode(found["--show-cdup"])
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:

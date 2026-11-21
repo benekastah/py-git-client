@@ -7,19 +7,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from git_client.client import (
+    CLIENT_TIMEOUT,
+    DIR_QUESTIONS,
     Arg,
     EnvValue,
     Git,
     LinesUnfit,
     ReadOnlyGit,
+    ask_where,
     ask_where_alone,
     decode,
     encode,
     error_from,
-    known_git_dirs,
-    known_git_paths,
-    learn_where,
+    git_path_question,
     location,
+    read_where,
+    recall_where,
+    remember_where,
     rev_parse_lines,
     where_command,
     where_questions,
@@ -138,31 +142,34 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
     process tells the client's `prefix()` and `cdup()`, `object_id_length()`, `git_dir` and
-    `git_common_dir`, if they aren't known yet. Where a path git prints holds a newline, which makes its answers'
-    lines impossible to tell apart, each is asked in a process of its own."""
+    `git_common_dir`, if they aren't known yet. Where a path git prints holds a newline,
+    which makes its answers' lines impossible to tell apart, each is asked in a process of its
+    own."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths can't take a name with a line ending: {names}")
-    known = known_git_paths.setdefault(git, {})
     where = location(git)
-    new = [
-        name
-        for name in dict.fromkeys(names)
-        if (where, name) not in known or _moved_by_config(name)
-    ]
+    found: dict[str, bytes] = {}
+    for name in dict.fromkeys(names):
+        question = git_path_question(name)
+        known = None if _moved_by_config(name) else recall_where(git, where, question)
+        if known is not None:
+            found[name] = known[question]
+    new = [name for name in dict.fromkeys(names) if name not in found]
     if new:
         questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
         output = git.run_bytes(*where_command(questions), *args)
         try:
-            lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
+            answers, lines = read_where(questions, rev_parse_lines(output), len(new))
         except LinesUnfit:  # a path with a newline: each in a process of its own
-            ask_where_alone(git, where, questions)
+            answers = ask_where_alone(git, questions)
             lines = [_git_path_alone(git, name) for name in new]
-        for name, line in zip(new, lines, strict=True):
-            known[where, name] = Path(os.fsdecode(line))
-    return [known[where, name] for name in names]
+        found.update(zip(new, lines, strict=True))
+        answers.update((git_path_question(name), found[name]) for name in new)
+        remember_where(git, where, answers)
+    return [Path(os.fsdecode(found[name])) for name in names]
 
 
 @dataclass(frozen=True)
@@ -209,29 +216,26 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     else:
         raise error_from(command, result)  # git said why
     try:
-        lines = learn_where(
-            git, where, questions, rev_parse_lines(result.stdout), len(unique) + head_lines
+        answers, lines = read_where(
+            questions, rev_parse_lines(result.stdout), len(unique) + head_lines
         )
     except LinesUnfit:  # a path with a newline: each in a process of its own
-        ask_where_alone(git, where, questions)
+        answers = ask_where_alone(git, questions)
         lines = [_git_path_alone(git, name) for name in unique]
         lines += _head_alone(git)
     except ValueError:
         if result.returncode == 0:
             raise
         raise error_from(command, result) from None  # it didn't print what was asked
-    found = {
-        name: Path(os.fsdecode(line))
-        for name, line in zip(unique, lines[: len(unique)], strict=True)
-    }
-    known = known_git_paths.setdefault(git, {})
-    for name, path in found.items():
-        known[where, name] = path  # git_paths asks again for hooks, whatever is kept
+    found = dict(zip(unique, lines[: len(unique)], strict=True))
+    # git_paths asks again for hooks, whatever is kept.
+    answers.update((git_path_question(name), line) for name, line in found.items())
+    remember_where(git, where, answers)
     head = Head()
     if len(lines) > len(unique):
         named = os.fsdecode(lines[len(unique)])
         head = Head(detached=True) if named == "HEAD" else Head(branch=named)
-    return [found[name] for name in names], head
+    return [Path(os.fsdecode(found[name])) for name in names], head
 
 
 def git_dir(git: ReadOnlyGit) -> Path:
@@ -259,16 +263,9 @@ def git_common_dir(git: ReadOnlyGit) -> Path:
 
 def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
     """The client's own and common git directories (see git_dir)."""
-    known = known_git_dirs.setdefault(git, {})
-    where = location(git)
-    if where not in known:
-        questions = where_questions(git, where)
-        output = git.run_bytes(*where_command(questions))
-        try:
-            learn_where(git, where, questions, rev_parse_lines(output), 0)
-        except LinesUnfit:  # a path with a newline: each in a process of its own
-            ask_where_alone(git, where, questions)
-    return known[where]
+    found = ask_where(git, location(git), DIR_QUESTIONS, CLIENT_TIMEOUT)
+    own, common = (Path(os.fsdecode(found[question])) for question in DIR_QUESTIONS)
+    return own, common
 
 
 # What git says (on stderr, with exit 0) where it prints no HEAD line: a ref named HEAD (e.g.
