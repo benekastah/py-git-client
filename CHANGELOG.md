@@ -33,7 +33,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   For a key a user typed, a tool runs `git config --get <key>` (one process; `git config
   get` from git 2.46): git takes the key however it's written and canonicalizes it itself.
   It exits 1 both for a key that isn't set and for one that isn't a key (`nosection`, `a.b
-  c`), saying why only on stderr ("key does not contain a section"), so a tool that reads
+  c`), saying why only on stderr (e.g. "key does not contain a section"), so a tool that reads
   exit 1 as "not set" reads a mistyped key as unset: one that must tell them apart checks
   stderr (#67).
 - `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
