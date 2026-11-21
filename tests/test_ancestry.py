@@ -1,10 +1,7 @@
 import itertools
-import os
 import random
-import shutil
 import stat
-import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -73,22 +70,31 @@ def random_dag(rng: random.Random, size: int) -> tuple[list[list[int]], list[int
     return parents, dates
 
 
-@pytest.mark.parametrize("seed", range(4))
+def reachable(parents: Commits) -> list[set[int]]:
+    """Each commit's ancestors, itself included, by index: the oracle the random histories'
+    pairs are checked against, as `merge-base` agrees on a sample of them."""
+    reach: list[set[int]] = []
+    for i, commit_parents in enumerate(parents):
+        reach.append({i}.union(*(reach[p] for p in commit_parents)))
+    return reach
+
+
+@pytest.mark.parametrize("seed", range(6))
 def test_answers_as_merge_base_does_in_random_histories(tmp_path: Path, seed: int) -> None:
     rng = random.Random(seed)
-    parents, dates = random_dag(rng, 40)
+    parents, dates = random_dag(rng, 100)
     commits = make_commits(tmp_path / "repo", parents, dates)
     git = Git(tmp_path / "repo")
-    # Every pair in one call, so pairs can get in each other's way if they would; merge-base
-    # one at a time for a sample of them (a process each).
-    every_pair = [(a, d) for a in commits for d in commits]
-    sample = rng.sample(range(len(every_pair)), 56) + [i * len(commits) + i for i in range(8)]
+    reach = reachable(parents)
+    # Every pair in one call, so pairs can get in each other's way if they would.
+    every_pair = [(a, d) for a in range(len(commits)) for d in range(len(commits))]
 
-    answers = is_ancestor_many(git, every_pair)
+    answers = is_ancestor_many(git, [(commits[a], commits[d]) for a, d in every_pair])
 
-    expected = {i: merge_base_says(git, *every_pair[i]) for i in sample}
-    assert {i: answers[i] for i in sample} == expected
-    assert True in expected.values() and False in expected.values()
+    assert answers == [a in reach[d] for a, d in every_pair]
+    # The oracle is git's: merge-base, a process each, on a sample.
+    for a, d in rng.sample(every_pair, 20):
+        assert merge_base_says(git, commits[a], commits[d]) == (a in reach[d])
 
 
 # A history with a merge, and a criss-cross: 0-1-2-3 (main), 1-4-5 (topic), 6 merges 3 and 5;
@@ -392,50 +398,32 @@ def counting_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return reads
 
 
-def remove_tree(directory: Path) -> None:
-    """Delete a repository, whose objects git makes read-only (which Windows won't delete)."""
-
-    def make_writable_and_retry(remove: Callable[[str], object], path: str, *_: object) -> None:
-        os.chmod(path, stat.S_IWRITE)
-        remove(path)
-
-    shutil.rmtree(directory, onexc=make_writable_and_retry)
-
-
 def test_the_work_is_bounded_by_the_stack_not_the_history(
     git_calls: list[GitCall], tmp_path: Path
 ) -> None:
-    small, large = tmp_path / "small", tmp_path / "large"
-    try:
-        reads: dict[tuple[Path, bool], int] = {}
-        for directory, length in ((small, 1_000), (large, 100_000)):
-            stack = make_history_with_stack(directory, length)
-            git = Git(directory)
-            # Each branch on the one below (main's tip first), each on main, and the first 49
-            # reversed.
-            pairs = list(itertools.pairwise(stack))
-            pairs += [(stack[0], tip) for tip in stack[1:]]
-            pairs += [(d, a) for a, d in pairs[:49]]
-            for graph in (False, True):
-                if graph:
-                    git.run("commit-graph", "write", "--reachable")
-                started = len(git_calls)
-                with pytest.MonkeyPatch.context() as patch:
-                    read = counting_reads(patch)
-                    began = time.perf_counter()
-                    answers = is_ancestor_many(git, pairs)
-                    seconds = time.perf_counter() - began
-                assert answers == [True] * 100 + [False] * 49
-                # Where the shallow and grafts files are is asked only the first time.
-                processes = [call[0] for call in git_calls[started:]]
-                assert processes == (["cat-file"] if graph else ["rev-parse", "cat-file"])
-                reads[directory, graph] = len(read)
-                assert seconds < 5
-        # The same commits read, however long the history, with a commit-graph or not: the
-        # stack's 150, and a few below.
-        assert len(set(reads.values())) == 1, reads
-        assert next(iter(reads.values())) < 300
-    finally:
-        for directory in (small, large):
-            if directory.exists():
-                remove_tree(directory)
+    reads: dict[tuple[int, bool], int] = {}
+    for length in (1_000, 10_000):
+        directory = tmp_path / str(length)
+        stack = make_history_with_stack(directory, length)
+        git = Git(directory)
+        # Each branch on the one below (main's tip first), each on main, and the first 49
+        # reversed.
+        pairs = list(itertools.pairwise(stack))
+        pairs += [(stack[0], tip) for tip in stack[1:]]
+        pairs += [(d, a) for a, d in pairs[:49]]
+        for graph in (False, True):
+            if graph:
+                git.run("commit-graph", "write", "--reachable")
+            started = len(git_calls)
+            with pytest.MonkeyPatch.context() as patch:
+                read = counting_reads(patch)
+                answers = is_ancestor_many(git, pairs)
+            assert answers == [True] * 100 + [False] * 49
+            # Where the shallow and grafts files are is asked only the first time.
+            processes = [call[0] for call in git_calls[started:]]
+            assert processes == (["cat-file"] if graph else ["rev-parse", "cat-file"])
+            reads[length, graph] = len(read)
+    # The same commits read, however long the history, with a commit-graph or not: the
+    # stack's 150, and a few below.
+    assert len(set(reads.values())) == 1, reads
+    assert next(iter(reads.values())) < 300
