@@ -493,42 +493,70 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
+# When git gave an answer, and how long ago that is, for remember_for: a seam the tests
+# replace, so they needn't sleep.
+_clock = time.monotonic
+
+
 class Memory:
     """What git told a client about where things are (the answers of the `rev-parse` options
     `where_questions` lists, and `--git-path`'s), by location and option, as git printed
-    each, but the newline that ends it. A client and its `read_only()` copies share one."""
+    each, but the newline that ends it, with when git gave it. A client and its `read_only()`
+    copies share one, so forget() on any forgets for all."""
 
     def __init__(self) -> None:
         # Held only to read or change what's here, never while git runs.
         self.lock = threading.Lock()
-        self._answers: dict[tuple[Location, str], bytes] = {}
+        self._answers: dict[tuple[Location, str], tuple[bytes, float]] = {}
+        # How many times forget() was called: what git was asked before isn't kept.
+        self._forgotten = 0
         # Per location: an Event that a thread asking git for object_id_length() alone sets
         # once it has its answer (or has failed), for the threads waiting for it.
         self.asking_format: dict[Location, threading.Event] = {}
 
-    def recall_locked(self, where: Location, questions: Sequence[str]) -> dict[str, bytes] | None:
-        """git's answers to `questions` at `where`, or None unless all are known. The caller
-        holds `lock`."""
+    def recall_locked(
+        self, where: Location, questions: Sequence[str], remember_for: float | None
+    ) -> dict[str, bytes] | None:
+        """git's answers to `questions` at `where`, or None unless all are known, each given
+        less than `remember_for` seconds ago (None: whenever). The caller holds `lock`."""
+        now = _clock()
         found: dict[str, bytes] = {}
         for question in questions:
-            answer = self._answers.get((where, question))
-            if answer is None:
+            known = self._answers.get((where, question))
+            if known is None or (remember_for is not None and now - known[1] >= remember_for):
                 return None
-            found[question] = answer
+            found[question] = known[0]
         return found
 
-    def recall(self, where: Location, questions: Sequence[str]) -> dict[str, bytes] | None:
-        """git's answers to `questions` at `where`, or None unless all are known."""
+    def recall(
+        self, where: Location, questions: Sequence[str], remember_for: float | None
+    ) -> dict[str, bytes] | None:
+        """git's answers to `questions` at `where`, as `recall_locked` gives them."""
         with self.lock:
-            return self.recall_locked(where, questions)
+            return self.recall_locked(where, questions, remember_for)
 
-    def remember(self, where: Location, answers: Mapping[str, bytes]) -> None:
-        """Remember git's `answers` at `where`, by the option each answers, all at once, so
-        that no thread sees some of them without the others."""
+    def asking(self) -> int:
+        """What a caller gives `remember` for answers git is asked from now on."""
         with self.lock:
-            self._answers.update(
-                ((where, question), answer) for question, answer in answers.items()
-            )
+            return self._forgotten
+
+    def remember(self, where: Location, answers: Mapping[str, bytes], asked: int) -> None:
+        """Remember git's `answers` at `where`, by the option each answers, as given now, all
+        at once, so that no thread sees some of them without the others; unless forget() was
+        called since `asked` (from `asking()`, before git was asked), as git may have
+        answered before what forget() was called for (e.g. a refresh) changed things."""
+        with self.lock:
+            if asked == self._forgotten:
+                now = _clock()
+                self._answers.update(
+                    ((where, question), (answer, now)) for question, answer in answers.items()
+                )
+
+    def forget(self) -> None:
+        """Forget every answer, and any that git is giving now."""
+        with self.lock:
+            self._answers.clear()
+            self._forgotten += 1
 
 
 def git_path_question(name: str) -> str:
@@ -538,13 +566,23 @@ def git_path_question(name: str) -> str:
 
 
 def recall_where(git: ReadOnlyGit, where: Location, *questions: str) -> dict[str, bytes] | None:
-    """git's answers to `questions` at `where`, as `Memory.recall` gives them."""
-    return git._memory.recall(where, questions)  # pyright: ignore[reportPrivateUsage]
+    """git's answers to `questions` at `where`, as `Memory.recall` gives them for `git`'s
+    `remember_for`."""
+    memory = git._memory  # pyright: ignore[reportPrivateUsage]
+    return memory.recall(where, questions, git.remember_for)
 
 
-def remember_where(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -> None:
+def asking(git: ReadOnlyGit) -> int:
+    """What a caller gives `remember_where` for answers git is asked from now on (see
+    `Memory.remember`)."""
+    return git._memory.asking()  # pyright: ignore[reportPrivateUsage]
+
+
+def remember_where(
+    git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes], asked: int
+) -> None:
     """Remember git's `answers` at `where`, as `Memory.remember` does."""
-    git._memory.remember(where, answers)  # pyright: ignore[reportPrivateUsage]
+    git._memory.remember(where, answers, asked)  # pyright: ignore[reportPrivateUsage]
 
 
 # What asks for prefix() and cdup(). Where git knows no worktree (in a bare repository, or a
@@ -574,11 +612,11 @@ def where_questions(git: ReadOnlyGit, where: Location, needed: Sequence[str] = (
     `--git-common-dir` for `git_dir` and `git_common_dir`. A function that runs `rev-parse`
     anyway runs `where_command(questions)`, then its own options, so they cost no process of
     their own, then reads the lines git printed with `read_where`."""
-    memory = git._memory  # pyright: ignore[reportPrivateUsage]
+    memory, remember_for = git._memory, git.remember_for  # pyright: ignore[reportPrivateUsage]
     with memory.lock:
-        top = memory.recall_locked(where, TOP_QUESTIONS[:2])
-        length = memory.recall_locked(where, [_FORMAT_QUESTION])
-        dirs = memory.recall_locked(where, DIR_QUESTIONS)
+        top = memory.recall_locked(where, TOP_QUESTIONS[:2], remember_for)
+        length = memory.recall_locked(where, [_FORMAT_QUESTION], remember_for)
+        dirs = memory.recall_locked(where, DIR_QUESTIONS, remember_for)
     questions: list[str] = []
     if top is None or TOP_QUESTIONS[0] in needed:
         questions += TOP_QUESTIONS
@@ -651,6 +689,7 @@ def ask_where(
     else from one `rev-parse` that asks whatever else isn't known too, and remembers it all."""
     found = recall_where(git, where, *needed[:2])
     if found is None:
+        asked = asking(git)
         questions = where_questions(git, where, needed)
         # Not run's, which would strip a directory's leading space.
         output = git.run_bytes(*where_command(questions), timeout=timeout)
@@ -658,7 +697,7 @@ def ask_where(
             found, _ = read_where(questions, rev_parse_lines(output), 0)
         except LinesUnfit:
             found = ask_where_alone(git, questions, timeout=timeout)
-        remember_where(git, where, found)
+        remember_where(git, where, found, asked)
     return found
 
 
@@ -760,6 +799,17 @@ class ReadOnlyGit:
     would start the process it saves): a wrong one makes what reads ids by it (e.g.
     `patch_ids`) fail.
 
+    What git tells a client about where things are (`prefix()`, `cdup()`,
+    `object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`) is remembered, per
+    `location` (the directory and `env`), and shared with its `read_only()` copies.
+    `remember_for`, if given, is how many seconds an answer is kept, from when git gave it
+    (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything else
+    the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
+    together. With None, the default, an answer is kept as long as the client, so a
+    repository moved or replaced under a client that keeps its directory isn't noticed.
+    `forget()` drops them all at once, e.g. for a long-lived tool to call after each
+    refresh. A given `object_id_length` never expires.
+
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
     first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
     of a second later, or at once if the tool is interrupted again meanwhile; the call then
@@ -811,27 +861,33 @@ class ReadOnlyGit:
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
+        remember_for: float | None = None,
     ) -> None:
         if object_id_length not in (None, 40, 64):
             raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
+        if remember_for is not None and not remember_for >= 0:
+            raise ValueError(f"remember_for is None or at least 0, not {remember_for}")
         self.directory = os.fspath(directory)
         self.program = program or find_git(env_var)
         self.env: dict[str, EnvValue] = dict(env or {})
         self.timeout = timeout
         self.stopping = stopping
         self.process_groups = process_groups
+        self.remember_for = remember_for
         self._object_id_length = object_id_length
         self._memory = Memory()
 
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
         (see there), and otherwise runs as the client does, with the same `program`,
-        `timeout`, `stopping`, `process_groups` and `env`, as they are now. It's of the
+        `timeout`, `stopping`, `process_groups`, `remember_for` and `env`, as they are now.
+        It's of the
         client's own class, so a subclass's methods (e.g. its own `process`) and attributes
         are kept (an attribute that holds the client itself still writes through it); and it
         shares what git told the client about where things are (`prefix()`, `cdup()`,
         `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
-        asked, nor the client one it asked. A new copy each call; a read-only client gives
+        asked, nor the client one it asked, and `forget()` on either forgets for both. A new
+        copy each call; a read-only client gives
         itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
@@ -841,11 +897,21 @@ class ReadOnlyGit:
         reader._read_only = True  # and shares the client's _memory
         return reader
 
+    def forget(self) -> None:
+        """Forget what git told the client (and its `read_only()` copies) about where things
+        are, everywhere (see the class), and any answer git is giving now in another thread,
+        so that each is asked of git again the next time it's wanted: one process, the
+        `rev-parse` that asks them all. For a long-lived tool to call after each request or
+        refresh, when the repository may have moved or changed under the client. It starts
+        no git."""
+        self._memory.forget()
+
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
         SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
         --show-object-format`) once per `location` (the directory and `env`, which a tool may
-        change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths`,
+        change) and remembered (see the class: it expires too, for simplicity, though a
+        repository's can't change), or told by the `rev-parse` of `prefix()`, `git_paths`,
         `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the
         length of an id git printed: in a repository with `extensions.compatObjectFormat`, git
         gives a SHA-1 id back for one, whatever the repository's format. Threads that ask at
@@ -856,7 +922,7 @@ class ReadOnlyGit:
         memory = self._memory
         while True:
             with memory.lock:
-                known = memory.recall_locked(where, [_FORMAT_QUESTION])
+                known = memory.recall_locked(where, [_FORMAT_QUESTION], self.remember_for)
                 if known is not None:
                     return object_id_length_of(known[_FORMAT_QUESTION])
                 asking = memory.asking_format.get(where)
@@ -867,8 +933,9 @@ class ReadOnlyGit:
                 asking.wait()
                 continue  # its answer, or (if it failed) ask again
             try:
+                asked = memory.asking()
                 format = encode(self.run("rev-parse", _FORMAT_QUESTION))
-                memory.remember(where, {_FORMAT_QUESTION: format})
+                memory.remember(where, {_FORMAT_QUESTION: format}, asked)
                 return object_id_length_of(format)
             finally:
                 # Whatever stops it (e.g. KeyboardInterrupt), so no waiter waits for good.
@@ -885,8 +952,9 @@ class ReadOnlyGit:
 
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
-        its directory isn't noticed. The same process tells `cdup()`, and `object_id_length()`,
-        `git_dir` and `git_common_dir` if they aren't known yet."""
+        its directory isn't noticed, unless the client's `remember_for` has passed since, or
+        `forget()` was called (see the class). The same process tells `cdup()`, and
+        `object_id_length()`, `git_dir` and `git_common_dir` if they aren't known yet."""
         return self._top(timeout)[0]
 
     def cdup(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:

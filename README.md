@@ -227,6 +227,27 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
+### What a client remembers
+
+A client asks git where things are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
+`git_dir`, `git_common_dir`) once per directory and `env`, all in one `git rev-parse` while
+any is unknown, and remembers the answers, shared with its `read_only()` copies. By default
+they're kept as long as the client, which suits a command that runs and exits, but a
+repository moved or replaced under the client isn't noticed. A long-lived tool (an editor's
+helper, a daemon such as move-forward) asks git, but remembers it for a while: it keeps a
+client per repository, and gives it `remember_for` (seconds, from when git answered), or
+calls `forget()` after each request or refresh:
+
+```python
+git = Git("path/to/repo", remember_for=5)  # asked again once 5 seconds old
+git.prefix()  # one git, which tells the rest too
+git.forget()  # every answer, so the next call asks git again (one process)
+```
+
+What one `rev-parse` told expires together, and is asked again together. An
+`object_id_length=` given to the client never expires. Threads may share a client: each gets
+git's answer, and threads that ask at once what isn't known may each start a process.
+
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
@@ -252,8 +273,9 @@ A tool with a `Git` for the commands that write gives the paths that only read i
 `read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
 It's of the client's own class, so a subclass's own `process` and other methods still run, and
 it shares what git told the client about where things are (`prefix()`, `cdup()`,
-`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError`
-if the client's `env` holds a variable a `ReadOnlyGit` doesn't take.
+`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`; see "What a client
+remembers"). It raises `ReadOnlyError` if the client's `env` holds a variable a
+`ReadOnlyGit` doesn't take.
 
 ```python
 git = Git("path/to/repo")

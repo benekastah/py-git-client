@@ -16,6 +16,7 @@ from git_client.client import (
     ReadOnlyGit,
     ask_where,
     ask_where_alone,
+    asking,
     decode,
     encode,
     error_from,
@@ -158,6 +159,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
             found[name] = known[question]
     new = [name for name in dict.fromkeys(names) if name not in found]
     if new:
+        asked = asking(git)
         questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
         output = git.run_bytes(*where_command(questions), *args)
@@ -168,7 +170,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
             lines = [_git_path_alone(git, name) for name in new]
         found.update(zip(new, lines, strict=True))
         answers.update((git_path_question(name), found[name]) for name in new)
-        remember_where(git, where, answers)
+        remember_where(git, where, answers, asked)
     return [Path(os.fsdecode(found[name])) for name in names]
 
 
@@ -200,6 +202,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
         raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
     unique = list(dict.fromkeys(names))
     where = location(git)
+    asked = asking(git)
     questions = where_questions(git, where)
     args = [arg for name in unique for arg in ("--git-path", name)]
     # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
@@ -230,7 +233,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     found = dict(zip(unique, lines[: len(unique)], strict=True))
     # git_paths asks again for hooks, whatever is kept.
     answers.update((git_path_question(name), line) for name, line in found.items())
-    remember_where(git, where, answers)
+    remember_where(git, where, answers, asked)
     head = Head()
     if len(lines) > len(unique):
         named = os.fsdecode(lines[len(unique)])

@@ -486,6 +486,7 @@ class FakeGit(Git):
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
+        remember_for: float | None = None,
     ) -> None:
         super().__init__(
             directory,
@@ -496,6 +497,7 @@ class FakeGit(Git):
             stopping=stopping,
             object_id_length=object_id_length,
             process_groups=process_groups,
+            remember_for=remember_for,
         )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []

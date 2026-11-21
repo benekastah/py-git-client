@@ -9,7 +9,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/client.py`: `ReadOnlyGit`, which runs every git process (only commands that
   read), `Git`, which extends it to run any, and `find_git`; and `Memory`, what git told a
   client (and its `read_only()` copies) about where things are, which one `rev-parse` asks
-  while any is unknown (`where_questions`, `read_where`, `ask_where`).
+  while any is unknown (`where_questions`, `read_where`, `ask_where`), with when git told
+  it, for `remember_for` and `forget()`.
 - `src/git_client/reading.py`: which commands only read, which a ReadOnlyGit runs.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.

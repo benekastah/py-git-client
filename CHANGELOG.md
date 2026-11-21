@@ -86,7 +86,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   that cached them itself can drop its cache (and its cdup is `cdup()`'s, remembered with
   the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
   gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
-  client that keeps its directory isn't noticed; make a new client (#50).
+  client that keeps its directory isn't noticed, unless the client's `remember_for` has
+  passed or `forget()` was called (see "Added") (#50, #PR).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -151,6 +152,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `remember_for=` (seconds, from when git gave each answer; `None`, the default, keeps them
+  as long as the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a
+  client remembers of where things are (`prefix()`, `cdup()`, `object_id_length()`,
+  `git_paths`, `git_dir`, `git_common_dir`): once its time is past, or after `forget()`, the
+  next call asks git again, in one process, and what one `rev-parse` told expires together.
+  A client and its `read_only()` copies share them, `forget()` too. A long-lived tool (e.g.
+  move-forward) keeps a client per repository and gives it `remember_for=` a few seconds,
+  or calls `forget()` after each refresh, rather than make a new client. A given
+  `object_id_length=` never expires (#PR).
 - `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
   the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
