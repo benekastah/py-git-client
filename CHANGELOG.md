@@ -100,7 +100,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `is_ancestor(git, *pairs)`: for one or more (ancestor, descendant) pairs of full object
   ids, what `git merge-base --is-ancestor` says of each (any failure being no), through one
   `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
-  stack's pairs cost about the same in any history (#60).
+  stack's pairs cost about the same in any history; or through the tool's own `CatFile`
+  (`cat_file=`), starting no process (#60).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the

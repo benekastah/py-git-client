@@ -1,13 +1,14 @@
 import itertools
 import random
 import stat
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from git_client import CatFile, Git, NotARepositoryError, is_ancestor, refs
+from git_client import CatFile, Git, NotARepositoryError, git_paths_and_head, is_ancestor, refs
 from git_client import ancestry as ancestry_module
 from git_client.testing import GitCall
 
@@ -259,6 +260,52 @@ def test_a_hundred_pairs_take_as_many_processes_as_one(
     # Where the shallow and grafts files are, asked once per client; one cat-file per call.
     assert first == ["rev-parse", "cat-file"]
     assert second == ["cat-file"]
+
+
+def test_a_tools_own_cat_file_and_paths_start_no_process(
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
+) -> None:
+    git, c = shapes
+    git = Git(git.directory)
+    # What the tool asks anyway, asking for the shallow and grafts files too.
+    git_paths_and_head(git, "HEAD", "shallow", "info/grafts")
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
+        started = len(git_calls)
+
+        answers = is_ancestor(git, (c[0], c[6]), (c[6], c[0]), cat_file=cat_file)
+
+    assert answers == [True, False]
+    assert git_calls[started:] == []
+
+
+def test_threads_can_share_a_cat_file(tmp_path: Path) -> None:
+    parents, dates = random_dag(random.Random(0), 60)
+    commits = make_commits(tmp_path / "repo", parents, dates)
+    git = Git(tmp_path / "repo")
+    reach = reachable(parents)
+    pairs = [(a, d) for a in range(len(commits)) for d in range(len(commits))]
+    expected = [a in reach[d] for a, d in pairs]
+    results: list[list[bool]] = []
+    start = threading.Barrier(2)
+
+    def answer(cat_file: CatFile, order: list[tuple[int, int]]) -> None:
+        start.wait()
+        answers = is_ancestor(git, *((commits[a], commits[d]) for a, d in order), cat_file=cat_file)
+        answered = dict(zip(order, answers, strict=True))
+        results.append([answered[pair] for pair in pairs])
+
+    with CatFile(git) as cat_file:
+        threads = [
+            threading.Thread(target=answer, args=(cat_file, order))
+            for order in (pairs, pairs[::-1])
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    assert results == [expected, expected]
 
 
 def test_it_raises_outside_a_repository(tmp_path: Path) -> None:

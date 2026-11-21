@@ -31,25 +31,39 @@ class _TooFar(Exception):
     """A pair's walk took more than _WALK_LIMIT commits."""
 
 
-def is_ancestor(git: ReadOnlyGit, *pairs: tuple[str, str]) -> list[bool]:
+def is_ancestor(
+    git: ReadOnlyGit, *pairs: tuple[str, str], cat_file: CatFile | None = None
+) -> list[bool]:
     """For each (ancestor, descendant) pair of full object ids (one or more; none starts no git
-    and gives []), whether `git merge-base --is-ancestor <ancestor> <descendant>` succeeds: whether the ancestor is reachable from
-    the descendant (a commit is its own ancestor), as git sees history, through replace refs,
-    grafts and a shallow clone's cut. A tag's id stands for its commit, as git peels it. A pair
-    `merge-base` would fail on is False: an id of no object, or of one that peels to no commit
-    (a tree, say), and anything but a full object id in lower case (a name, or what would be an
-    option, is neither resolved nor passed to git). It raises only for what fails the whole
-    call: GitError if git can't read the repository (e.g. NotARepositoryError),
-    GitTimeoutError if a request takes longer than the client's `timeout`, and NotStartedError
-    once its `stopping` says so.
+    and gives []), whether `git merge-base --is-ancestor <ancestor> <descendant>` succeeds:
+    whether the ancestor is reachable from the descendant (a commit is its own ancestor), as
+    git sees history, through replace refs, grafts and a shallow clone's cut. A tag's id
+    stands for its commit, as git peels it. A pair `merge-base` would fail on is False: an id
+    of no object, or of one that peels to no commit (a tree, say), and anything but a full
+    object id of the repository's, in lower case (a name, or what would be an option, is
+    neither resolved nor passed to git). It raises only for what fails the whole call:
+    GitError if git can't read the repository (e.g. NotARepositoryError), GitTimeoutError if
+    a request takes longer than the client's `timeout`, and NotStartedError once its
+    `stopping` says so.
 
-    One `git cat-file --batch-command` reads every commit the pairs need, each once; the first
-    call on a client also asks where its shallow and grafts files are (one `rev-parse`, see
-    `git_paths`). A pair whose walk is long (see _WALK_LIMIT) or reads a commit git can't
-    (damaged or missing) is asked of `git merge-base --is-ancestor`, a process each, as is
-    every pair while the repository has a grafts file (deprecated in git), which cat-file
-    doesn't apply. FakeGit can't run it (it starts no CatFile): a tool's unit tests replace
-    it.
+    One `git cat-file --batch-command` reads every commit the pairs need, each once: the
+    tool's own `cat_file`, if it gives one (it must be for `git`'s repository, which isn't
+    checked: another repository's gives wrong answers), else one started for the call. Where
+    the shallow and grafts files are is asked of `git_paths(git, "shallow", "info/grafts")`,
+    which asks git once per client (one `rev-parse`) and remembers: a tool that has its own
+    `git_paths` or `git_paths_and_head` ask for them too, on the same client, starts no git
+    for them here. With both, a call starts no process (but the fallbacks below).
+
+    A shared `cat_file` can serve other threads at once: the walk asks it for one commit at a
+    time, each request under the CatFile's lock, so other threads' requests go between them;
+    holding it for a whole walk would save nothing worth having (an uncontended lock costs far
+    less than a request) and keep the other threads waiting. What a call learns of the
+    commits is its own, so calls in different threads don't share or race on it.
+
+    A pair whose walk is long (see _WALK_LIMIT) or reads a commit git can't (damaged or
+    missing) is asked of `git merge-base --is-ancestor`, a process each, as is every pair
+    while the repository has a grafts file (deprecated in git), which cat-file doesn't apply.
+    FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
     Each pair's walk is git's own for `merge-base` (paint_down_to_common), in Python: from
     both commits, newest committer date first, it paints commits reachable from the ancestor
@@ -80,13 +94,10 @@ def is_ancestor(git: ReadOnlyGit, *pairs: tuple[str, str]) -> list[bool]:
     shallow = frozenset[str]()
     if shallow_file.exists():
         shallow = frozenset(shallow_file.read_text(encoding="utf-8").split())
-    with CatFile(git) as cat_file:
-        walker = _Walker(git, cat_file, shallow)
-        answers: dict[tuple[str, str], bool] = {}
-        for pair in pairs:
-            if pair not in answers:
-                answers[pair] = walker.answer(*pair)
-        return [answers[pair] for pair in pairs]
+    if cat_file is not None:
+        return _Walker(git, cat_file, shallow).answer_all(pairs)
+    with CatFile(git) as own:
+        return _Walker(git, own, shallow).answer_all(pairs)
 
 
 def _merge_base_says(git: ReadOnlyGit, ancestor: str, descendant: str) -> bool:
@@ -109,6 +120,14 @@ class _Walker:
         self._commits: dict[str, tuple[int, tuple[str, ...]]] = {}
         # Each id a pair gave: the commit it is or peels to, or None.
         self._peeled: dict[str, str | None] = {}
+
+    def answer_all(self, pairs: tuple[tuple[str, str], ...]) -> list[bool]:
+        """Each pair's answer, a pair repeated answered once."""
+        answers: dict[tuple[str, str], bool] = {}
+        for pair in pairs:
+            if pair not in answers:
+                answers[pair] = self.answer(*pair)
+        return [answers[pair] for pair in pairs]
 
     def answer(self, ancestor: str, descendant: str) -> bool:
         a, d = self._peel(ancestor), self._peel(descendant)

@@ -117,6 +117,9 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 branches = refs(git, "refs/heads/")
 a, b = branches["refs/heads/a"].object, branches["refs/heads/b"].object
 a_under_b, b_under_a = is_ancestor(git, (a, b), (b, a))
+# Through a tool's own CatFile (for the same repository), with "shallow" and "info/grafts"
+# in a git_paths it asked for already: no process at all.
+[a_under_a] = is_ancestor(git, (a, a), cat_file=CatFile(git))
 # The directory with the refs, objects and config of a checkout (its top), or of a git
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).
