@@ -1,4 +1,6 @@
+import functools
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,6 +13,36 @@ from git_client.testing import RepoTemplates, real_git
 # on real_git(): first on PATH, before anything but real_git asks find_git.
 os.environ["PATH"] = os.pathsep.join([str(Path(real_git()).parent), os.environ.get("PATH", "")])
 find_git.cache_clear()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "needs_git(major, minor, patch=0, reason=...): skip the test with an older git",
+    )
+
+
+@functools.cache
+def _git_version() -> tuple[int, int, int]:
+    """The tests' git's version, e.g. (2, 56, 0): "git version 2.56.0.windows.4" too."""
+    found = re.match(r"git version (\d+)\.(\d+)\.(\d+)", Git(".").run("version"))
+    assert found, "git's version isn't one"
+    return int(found[1]), int(found[2]), int(found[3])
+
+
+@pytest.fixture
+def git_version() -> tuple[int, int, int]:
+    """The tests' git's version, e.g. (2, 56, 0)."""
+    return _git_version()
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    for mark in item.iter_markers("needs_git"):
+        needed: tuple[int, ...] = mark.args
+        if _git_version() < needed:
+            reason = mark.kwargs.get("reason", "")
+            version = ".".join(map(str, needed))
+            pytest.skip(f"needs git {version} or newer" + (f": {reason}" if reason else ""))
 
 
 Changes = Callable[[Git], None]

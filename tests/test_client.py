@@ -595,6 +595,39 @@ def test_env_is_added_to_each_commands_environment(repo: Git) -> None:
     assert client.run("log", "-2", "--format=%an") == "Command\nClient"
 
 
+def test_each_command_gets_the_environment_as_it_is_then(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The library keeps the environment it built for git till ours, or the client's, changes.
+    def author() -> str:
+        return repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0]
+
+    names = [author()]
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Ours")
+    names.append(author())
+    repo.env["GIT_AUTHOR_NAME"] = "The client's"
+    names.append(author())
+    del repo.env["GIT_AUTHOR_NAME"]
+    monkeypatch.delenv("GIT_AUTHOR_NAME")
+    names.append(author())
+
+    assert names == [names[0], "Ours", "The client's", names[0]]
+    assert names[0] not in ("Ours", "The client's")
+
+
+def test_each_command_gets_the_environment_of_an_os_environ_put_in_its_place(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As mock.patch("os.environ", {...}) does.
+    environ = {**os.environ, "GIT_AUTHOR_NAME": "First"}
+    monkeypatch.setattr(os, "environ", environ)
+    names = [repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0]]
+    environ["GIT_AUTHOR_NAME"] = "Second"
+    names.append(repo.run("var", "GIT_AUTHOR_IDENT").split(" <")[0])
+
+    assert names == ["First", "Second"]
+
+
 def test_text_reaches_git_as_utf8(repo: Git) -> None:
     repo.run(
         "commit", "--quiet", "--allow-empty", "-m", "Zoë 张", env={"GIT_AUTHOR_NAME": "Zoë 张"}
@@ -651,6 +684,22 @@ def test_passthrough_speaks_the_users_language(repo: Git, tmp_path: Path) -> Non
     assert "Auf Branch main" in (tmp_path / "out").read_text(encoding="utf-8")
 
 
+@pytest.mark.usefixtures("german")
+def test_captured_and_passthrough_commands_keep_their_languages_in_turn(
+    repo: Git, tmp_path: Path
+) -> None:
+    # The environment kept for one isn't the other's.
+    said: list[str] = []
+    for _ in range(2):
+        with (tmp_path / "out").open("wb") as out:
+            repo.passthrough("status", stdout=out)
+        said.append((tmp_path / "out").read_text(encoding="utf-8"))
+        with pytest.raises(UnknownRevisionError):
+            repo.run("rev-parse", "--verify", "no-such-branch")
+
+    assert all("Auf Branch main" in each for each in said)
+
+
 def test_what_git_runs_keeps_the_users_locale(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -665,6 +714,57 @@ def test_what_git_runs_keeps_the_users_locale(
     repo.run("commit", "--quiet", "--allow-empty", "-m", "hooked")
 
     assert seen.read_text(encoding="utf-8").strip() == "de_DE.UTF-8 fr_FR.UTF-8"
+
+
+@pytest.mark.usefixtures("german")
+def test_a_git_that_a_hook_runs_speaks_english_too(repo: Git, tmp_path: Path) -> None:
+    # Its environment is the captured git's: GIT_TEXTDOMAINDIR, which git has no other way to
+    # be given, reaches what git runs.
+    said = tmp_path / "said"
+    hook = Path(repo.directory) / ".git" / "hooks" / "pre-commit"
+    hook.write_text(
+        f'#!/bin/sh\ngit rev-parse --verify no-such-branch 2> "{said.as_posix()}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    repo.run("commit", "--quiet", "--allow-empty", "-m", "hooked")
+
+    assert "Needed a single revision" in said.read_text(encoding="utf-8")
+
+
+def test_only_passthrough_reads_the_tools_stdin(repo: Git) -> None:
+    # In a Python of its own, given stdin: on Windows, git inherits the process's standard
+    # handle, not fd 0, so the tests' process can't stand in for it.
+    script = (
+        "import sys; from git_client import Git; git = Git(sys.argv[1]);"
+        " print(git.run('hash-object', '--stdin'), flush=True);"
+        " git.passthrough('hash-object', '--stdin')"
+    )
+    printed = subprocess.run(
+        [sys.executable, "-c", script, repo.directory],
+        input=b"the tool's\n",
+        capture_output=True,
+        check=True,
+    ).stdout.split()
+
+    # The ids of an empty blob, and of the tool's stdin.
+    assert printed == [
+        b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        b"e6f364be0ca5213da8cb6a285b49e8438e386b94",
+    ]
+
+
+def test_importing_the_library_leaves_tempfile_out() -> None:
+    # In a Python of its own, as pytest has imported it here: tempfile takes a few
+    # milliseconds to import, which every tool would pay at its start.
+    script = "import sys, git_client; print('tempfile' in sys.modules)"
+
+    imported = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, check=True
+    ).stdout
+
+    assert imported.strip() == b"False"
 
 
 def test_runs_in_its_directory_wherever_we_are(

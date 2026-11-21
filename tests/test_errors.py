@@ -60,7 +60,10 @@ MISSING = "0123" * 10
         ("worktree", "add", "../worktree", "no-such-branch"),
         ("rebase", "no-such-branch"),  # invalid upstream
         ("merge", "no-such-branch"),  # not something we can merge
-        ("merge-tree", "--write-tree", "main", "no-such-branch"),
+        pytest.param(
+            ("merge-tree", "--write-tree", "main", "no-such-branch"),
+            marks=pytest.mark.needs_git(2, 38, reason="for --write-tree"),
+        ),
         ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
         ("merge-base", "HEAD", MISSING),  # Not a valid commit name
         ("merge-base", "--is-ancestor", MISSING, "HEAD"),
@@ -314,6 +317,11 @@ def unfetchable(partial_clone: Git) -> Git:
     return partial_clone
 
 
+# Before 2.45 (but for 2.39.4 to 2.44.1), git ignores GIT_NO_LAZY_FETCH, and fetches.
+NEEDS_NO_LAZY_FETCH = pytest.mark.needs_git(2, 45, reason="for GIT_NO_LAZY_FETCH")
+
+
+@NEEDS_NO_LAZY_FETCH
 @pytest.mark.parametrize(
     "args", [("log", "-p", "-1"), ("show", "HEAD"), ("diff-tree", "-p", "HEAD")]
 )
@@ -324,6 +332,8 @@ def test_an_object_a_read_only_client_doesnt_fetch(
         partial_clone.read_only().run(*args)
 
 
+# Older git says only why the fetch failed, not which object it couldn't fetch.
+@pytest.mark.needs_git(2, 39, reason="for its 'could not fetch <id> from promisor remote'")
 def test_an_object_a_partial_clone_cant_fetch(unfetchable: Git) -> None:
     blob = unfetchable.run("rev-parse", "HEAD:a")
 
@@ -338,6 +348,7 @@ def test_an_object_a_partial_clone_cant_fetch(unfetchable: Git) -> None:
             cat_file.read(blob)
 
 
+@NEEDS_NO_LAZY_FETCH
 def test_a_read_only_client_takes_a_blob_a_partial_clone_lacks_as_naming_nothing(
     partial_clone: Git,
 ) -> None:

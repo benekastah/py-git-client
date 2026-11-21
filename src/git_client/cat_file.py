@@ -9,7 +9,6 @@ import queue
 import select
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import weakref
@@ -247,6 +246,8 @@ class CatFile:
         while True:
             new = self._process is None
             if self._process is None:
+                import tempfile  # here: at the top, it slows every tool's start
+
                 # Its stderr goes to a file, for what it says of each request: why a name
                 # names nothing, or its warnings of one it resolves (e.g. a name that's both a
                 # branch and a tag). _end closes it, with the process; or here, if the process

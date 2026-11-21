@@ -575,7 +575,7 @@ def test_a_damaged_commit_is_no_ones_ancestor_or_descendant(damaged_repo: Git) -
 
 
 def test_a_commit_only_its_commit_graph_can_read_answers_as_merge_base_does(
-    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]], git_version: tuple[int, int, int]
 ) -> None:
     git, c = shapes
     git.run("commit-graph", "write", "--reachable")
@@ -593,7 +593,9 @@ def test_a_commit_only_its_commit_graph_can_read_answers_as_merge_base_does(
     answers = is_ancestor(git, (c[0], c[3]))
 
     assert ["merge-base", "--is-ancestor", c[0], c[3]] in git_calls[started:]
-    assert answers == [merge_base_says(git, c[0], c[3])] == [True]
+    # From 2.38, parse_object reads a commit from the commit-graph, so merge-base finds c3 an
+    # ancestor; older git reads its object, which it can't parse, and says no.
+    assert answers == [merge_base_says(git, c[0], c[3])] == [git_version >= (2, 38)]
 
 
 def unpack(git: Git) -> None:

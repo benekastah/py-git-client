@@ -14,7 +14,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `git.write_config(ConfigUnset(k))`: where git failed with exit 5, its result says so,
   rather than raise, as `NOT_FOUND` for a key that isn't set, and `SEVERAL_VALUES` for one
   with several values (`ConfigUnset(k, v)` removes only the value `v`, as
-  `--unset --fixed-value`). Other `git config` writes (`--add`, `--rename-section`,
+  `--unset --fixed-value`, and a key with no value whatever `v` says, as git does from
+  2.46.1, where older git crashes). Other `git config` writes (`--add`, `--rename-section`,
   `--worktree`, ...) go through `git.run("config", ...)`, which doesn't try again while the
   file is locked (#61).
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
@@ -67,6 +68,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
   from `resolve` and `CatFile`. A tool that catches `RemoteError` around a partial clone's
   commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
+  Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
+  failure raises `RemoteError` from `run`, as before (#52).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
@@ -90,6 +93,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   needs no change, and now lets these through; one that catches it to report any failure
   (e.g. at its top level) catches `(GitError, NoAnswerError)`; and one that caught
   `GitTimeoutError` or `NotStartedError` by name still does (#54).
+- A command whose output the library reads (`run`, `run_bytes`, `ok`, `succeeds`,
+  `process(capture_output=True)`) reads nothing from stdin, as from /dev/null, unless given
+  `input`: it read the tool's, so `run("shortlog", "-s")` waited on it. A tool that has git
+  read its own stdin (e.g. `cat file | tool` running `hash-object -w --stdin` or `apply`)
+  now hashes or applies nothing, and must pass it on: `input=sys.stdin.buffer.read()` to
+  `run_bytes` (or to `run`, decoded), or run git with `passthrough` (#52).
 
 ### Added
 
@@ -111,7 +120,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   whose every line ends in CRLF keeps CRLF, and a value with a carriage return is quoted. A
   `FakeGit` still runs `git config` for each change (#62).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
-  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
+  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55). It needs git
+  2.39 (and a `ReadOnlyGit` fetches nothing only from 2.45, and in 2.39.4 to 2.44.1) (#52).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
   client's own class (a subclass's `process` still runs), sharing what git told the client
   about where things are, for a tool's paths that never write (#55).
@@ -121,6 +131,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
   --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`
   (#55).
+- `Git(process_groups=False)`, and `ReadOnlyGit`'s and `FakeGit`'s: git never gets a
+  process group of its own, so a command with a timeout starts faster without a terminal,
+  but what git started isn't stopped with it (#52).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
   already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
   starts no `git rev-parse --show-object-format` (#50).
@@ -158,6 +171,24 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   for a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch in
   a partial clone, or writing what nothing reads). It now closes the process's stdout too,
   and kills it if it hasn't exited within a second (#53).
+- `patch_ids` keeps a commit that only moves a submodule, and gives a submodule's patches
+  the same ids, whatever diff.submodule says, and keeps a root commit's patch whatever
+  log.showRoot says (#52).
+- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
+  Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
+  started are killed; a timeout still kills them at once. What outlives git's own exit runs
+  on (#52).
+- A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git
+  (and its group or tree) at once, where it skipped the kill and left them running (#52).
+
+### Changed
+
+- Starting git costs less, a command with a timeout most: the environment built for git is
+  kept until os.environ, the client's `env` or the command's changes, rather than copied
+  from os.environ every time, and whether the tool has a terminal is asked once per process
+  and session (#52).
+- `import git_client` takes about 3 ms less (of about 19): `tempfile` is imported only
+  where it's used (#52).
 
 ## 0.0.2 (2026-11-17)
 

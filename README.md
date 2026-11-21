@@ -66,7 +66,9 @@ from git_client import (
 )
 
 # The git on PATH (wrappers such as git-ai included), unless $MY_TOOL_GIT names another:
-# a tool names its own variable so its users can choose, e.g. git itself, for speed.
+# a tool names its own variable so its users can choose, e.g. git itself, for speed. Only
+# PATH's absolute directories count: an empty or relative entry (e.g. ".") is skipped, on
+# purpose, so a git that a repository holds is never run from it.
 # Raises FileNotFoundError if there's neither, and, on Windows, ValueError if the variable
 # names a batch file (.bat, .cmd), which cmd.exe runs, reading &, | and % in arguments.
 git = Git("path/to/repo", env_var="MY_TOOL_GIT", timeout=120)  # seconds; None (the default): none
@@ -86,9 +88,12 @@ git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at 
 # Branch keys take no process (but git_paths' first): the file is edited as git config would,
 # all or none; anything else, or a file it can't be sure of, is git config's, one at a time,
 # tried again while locked. Other config writes (--add, ...): git.run("config", ...).
+# ConfigUnset(key, value) removes only that value, or a key with no value whatever value
+# says (as git from 2.46.1; older git crashes on it).
 git.write_config(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
-# git is stopped (see below) and GitTimeoutError raised
+# git is stopped (see below) and GitTimeoutError raised; only passthrough gives git the
+# tool's stdin: the others give it their `input`, or nothing
 
 with CatFile(git) as cat_file:  # one process for every lookup in the block
     head = cat_file.resolve("HEAD")  # an object id, or None if it names nothing
@@ -180,7 +185,8 @@ U+FFFD. Commands whose output the library reads run with `GIT_TEXTDOMAINDIR` nam
 directory, so git finds no translation and its messages are in English whatever the user's
 language, which is how the library tells its failures apart. The user's locale (`LC_ALL`,
 `LANG`, `LC_CTYPE`, ...) is left as it is, so what git runs (hooks, filters, credential
-helpers, gpg, ssh) runs in it; only a git that those start themselves speaks English too.
+helpers, gpg, ssh) runs in it; only a git that those start themselves (e.g. a hook's `git`)
+speaks English too, as git takes its language from its environment alone, which they inherit.
 git's own pattern matching (`log --grep`, `--author`, `-G`, `-i`, `git grep`) follows the
 user's `LC_CTYPE` from git 2.39, and C's before; `-P` patterns are UTF-8 on every version.
 `passthrough`, whose output is the user's, keeps the user's language for git's messages as
@@ -188,12 +194,16 @@ well.
 
 Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
 first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its
-lock files, and killed a quarter of a second later; the call then waits at most a second more
-for its output. When the tool has no terminal (CI, a service), a command with a timeout runs
-in a process group of its own on Linux and macOS, so what git started (hooks, ssh, credential
-helpers) is stopped with it. With a terminal, git stays in its foreground, as from a shell, so
-it can ask for a password or open an editor whatever its timeout, and only git is stopped. On
-Windows, git and what it started are killed, with no chance to clean up.
+lock files, and killed a quarter of a second later (at once, if the tool is interrupted again
+meanwhile); the call then waits at most a second more for its output. When the tool has no
+terminal (CI, a service), a command with a timeout runs in a process group of its own on Linux
+and macOS, so what git started (hooks, ssh, credential helpers) is stopped with it. With a
+terminal, git stays in its foreground, as from a shell, so it can ask for a password or open an
+editor whatever its timeout, and only git is stopped. On Windows, git and what it started are
+killed: past a timeout at once, with no chance to clean up, and on an interrupt once git has
+had a quarter of a second to handle the Ctrl-C that reached it too. What outlives git's own
+exit then (e.g. a hook that ignores Ctrl-C) runs on: Windows finds what git started through
+git.
 
 A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM from
 `timeout`, or a CI runner cancelling a job), and Python's default SIGTERM ends the tool without
@@ -208,6 +218,12 @@ Like Ctrl-C's `KeyboardInterrupt`, that exception is raised in the main thread a
 stops only a git the main thread runs. A git another thread runs goes on until it finishes or
 times out, and is orphaned if the tool is killed first; to have it stopped with the tool, give
 those commands no timeout, so git stays in the tool's group and gets the signal itself.
+
+`Git(..., process_groups=False)` keeps git in the tool's group whatever its timeout: past one,
+or on an interrupt, only git is stopped, and what it started runs on, as with a terminal. In
+exchange each command starts faster without a terminal: by about 50 µs on Linux, and more on
+macOS, where a group of its own keeps Python from using posix_spawn. It suits a tool that runs
+many short commands, whose git starts nothing that could outlive it.
 
 A tool that's shutting down can have its clients start no more git, whichever thread asks,
 with `stopping`, which each client asks before it starts git:
@@ -362,7 +378,7 @@ said and raises a subclass:
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
-| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. |
+| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
@@ -591,7 +607,8 @@ CI (`.github/workflows/ci.yml`) runs the static checks once, on Linux, and the t
 macOS and Windows, with the oldest and newest Python py-git-client supports, for every pull
 request into `main` and every push to it (a stacked pull request gets CI once it targets
 `main` and is pushed), along with this project's own jobs, in
-`.github/workflows/project.yml`. Each job has a time limit of at most 5 minutes: on a system
+`.github/workflows/project.yml`: the tests on Linux with git 2.36, the oldest supported, which
+it builds once and caches. Each job has a time limit of at most 5 minutes: on a system
 where the tests take longer, they run in several jobs (shards), as many as the Copier answers'
 `test_shards_linux`, `test_shards_macos` or `test_shards_windows` say (AGENTS.md says how to
 change one). It installs from `uv.lock` and fails if it's out of date. A coverage job puts the

@@ -139,7 +139,9 @@ class MissingObjectError(GitError):
     a ReadOnlyGit, which fetches none (see there), try again with a Git. From a Git, the
     promisor remote couldn't be reached, or lacks it (its `stderr` says why), so trying again
     fails the same way. It's raised where a failed fetch raised RemoteError before, so a tool
-    that catches RemoteError around a partial clone's commands should catch this too."""
+    that catches RemoteError around a partial clone's commands should catch this too. Only
+    from git 2.39, which says which object it couldn't fetch: older git says only why the
+    fetch failed, so its failure raises what that says (e.g. RemoteError)."""
 
 
 class ConfigLockedError(GitError):
