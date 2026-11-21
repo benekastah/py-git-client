@@ -444,8 +444,16 @@ TREE = "a" * 40
         (f"2\0{TREE}\0\0" * 2, 0, "merge-tree printed"),
         (f"1\0{TREE[1:]}\0\0" * 2, 0, "merge-tree printed"),
         ("1\0not a tree\0\0", 128, "merge-tree printed"),
+        (f"1\0{TREE}\0\0" * 2, 128, "merge-tree gave 2 results for 2 pairs"),
     ],
-    ids=["too few", "one unfinished", "bad status", "short tree", "failed with garbage"],
+    ids=[
+        "too few",
+        "one unfinished",
+        "bad status",
+        "short tree",
+        "failed with garbage",
+        "failed after every pair",
+    ],
 )
 def test_output_git_never_gives_raises_with_gits_status_and_stderr(
     stdout: str, returncode: int, says: str
