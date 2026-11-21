@@ -33,12 +33,15 @@ _USAGE = 129
 # names another object (e.g. a tree), and objects of its history that git couldn't read.
 _ABOUT_THE_PAIR = (UnknownRevisionError, WrongTypeError, CorruptObjectError, MissingObjectError)
 
-# What else git says of the pair it stopped at: commits that share no history, and an object it
-# couldn't read in their history (a blob, or a tree, which it says before "failure to merge").
+# What else git says of the pair it stopped at: commits that share no history, and an object
+# lost from their history: a blob it merges, a subtree, a blob it reads to find renames, and a
+# commit or a commit's tree.
 _SAYS_OF_THE_PAIR = re.compile(
     "^fatal: refusing to merge unrelated histories$"
-    r"|^fatal: unable to read \w+ object \S+$"
-    r"|^error: Could not read \S+$",
+    r"|^fatal: unable to read blob object [0-9a-f]+$"
+    r"|^fatal: unable to read tree \([0-9a-f]+\)$"
+    r"|^fatal: unable to read [0-9a-f]+$"
+    r"|^error: Could not read [0-9a-f]+$",
     re.MULTILINE,
 )
 

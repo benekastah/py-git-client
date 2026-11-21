@@ -86,7 +86,25 @@ def make_branches(git: Git) -> None:
     branches["lost-blob-2"] = commit(git, main, {b"lost": b"lost 2\n"})
     # A commit whose tree is lost.
     branches["lost-tree"] = commit(git, main, {b"t": b"lost\n"})
-    lost = [f"{branches['lost-blob-1']}:lost", f"{branches['lost-tree']}^{{tree}}"]
+    # Each adds a file to the directory `lost-dir`, so merging them reads both its trees, but
+    # one is lost.
+    branches["lost-subtree-1"] = commit(git, main, {b"lost-dir/1": b"lost subtree\n"})
+    branches["lost-subtree-2"] = commit(git, main, {b"lost-dir/2": b"lost subtree\n"})
+    # A file renamed and changed, and changed where it was: finding the rename reads the
+    # renamed file's blob, which is lost.
+    lines = b"".join(b"line %d\n" % i for i in range(50))
+    renaming = commit(git, main, {b"r": lines})
+    branches["lost-renamed"] = commit(git, renaming, {b"r": None, b"r2": b"renamed\n" + lines})
+    branches["edited"] = commit(git, renaming, {b"r": lines + b"edited\n"})
+    # A commit whose parent is lost: finding the merge base reads it.
+    branches["lost-parent"] = commit(git, commit(git, main, {b"p": b"lost parent\n"}), {})
+    lost = [
+        f"{branches['lost-blob-1']}:lost",
+        f"{branches['lost-tree']}^{{tree}}",
+        f"{branches['lost-subtree-1']}:lost-dir",
+        f"{branches['lost-renamed']}:r2",
+        f"{branches['lost-parent']}^",
+    ]
     for object_id in git.run("rev-parse", *lost).split():
         path = Path(git.directory) / ".git" / "objects" / object_id[:2] / object_id[2:]
         path.chmod(0o644)  # git makes it read-only
@@ -203,6 +221,9 @@ def test_a_pair_git_cant_merge_gets_its_error_and_the_rest_their_results(
     [
         ("lost-blob-1", "lost-blob-2", "^fatal: unable to read blob object "),
         ("main", "lost-tree", "^error: Could not read "),
+        ("lost-subtree-1", "lost-subtree-2", r"^fatal: unable to read tree \("),
+        ("lost-renamed", "edited", "^fatal: unable to read [0-9a-f]+$"),
+        ("x", "lost-parent", "^error: Could not read "),
     ],
 )
 def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
