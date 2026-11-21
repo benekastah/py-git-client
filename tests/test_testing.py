@@ -8,12 +8,14 @@ from typing import IO
 
 import pytest
 
+import git_client.testing
 from git_client import (
     CLIENT_TIMEOUT,
     Arg,
     CatFile,
     EnvValue,
     Git,
+    GitError,
     NotStartedError,
     ReadOnlyError,
     ReadOnlyGit,
@@ -550,6 +552,16 @@ def test_a_repository_git_cant_read_is_copied_as_it_is(
 
     for file in ("fake.git/config", "broken/.git/config"):
         assert (copy / file).read_bytes() == (source / file).read_bytes()
+
+
+def test_a_build_raises_where_git_fails_on_a_repository_it_reads(
+    repo_templates: RepoTemplates, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The plugin's own command gone wrong, not the repository: git can read that.
+    monkeypatch.setattr(git_client.testing, "_URL_KEYS", "(")
+
+    with pytest.raises(GitError, match="invalid key pattern"):
+        repo_templates.build("bad-pattern", make_origin_and_clone)
 
 
 def make_file_url_remotes(directory: Path) -> None:

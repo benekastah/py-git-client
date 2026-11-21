@@ -35,6 +35,7 @@ from git_client.client import (
     Timeout,
     decode,
     encode,
+    error_from,
     find_git,
     refuse_if_stopping,
 )
@@ -292,15 +293,21 @@ def _remote_urls(root: Path) -> dict[Path, dict[str, list[str]]]:
     """The remotes' URLs (`url` and `pushurl`) in the config file of each repository under
     root (see _repositories; not files it includes), by its git directory, relative to root,
     then by key, in order, as git reads them: one `git config --get-regexp` per repository.
-    One git can't read has none."""
+    One git can't read (`rev-parse --git-dir` fails too) has none; raises GitError where git
+    fails otherwise (e.g. killed, or a usage error)."""
     found: dict[Path, dict[str, list[str]]] = {}
     for git_dir in _repositories(root):
         args = (f"--git-dir={git_dir}", "config", "--local", "-z", "--get-regexp", _URL_KEYS)
-        result = Git(root, program=real_git()).process(*args, capture_output=True)
+        git = Git(root, program=real_git())
+        result = git.process(*args, capture_output=True)
+        if result.returncode == 1:
+            continue  # no URL
         if result.returncode != 0:
-            # 1: no URL. Else git can't read it (e.g. a bad config line, or no repository),
-            # so its copy can't run git either: it's left as it is, for git to say so there.
-            continue
+            if not git.succeeds(f"--git-dir={git_dir}", "rev-parse", "--git-dir"):
+                # git can't read it (e.g. a bad config line, or no repository), so its copy
+                # can't run git either: it's left as it is, for git to say so there.
+                continue
+            raise error_from(args, result)
         urls: dict[str, list[str]] = {}
         for entry in decode(result.stdout).split("\0"):
             # A key, then its value after a newline; a key with no value has no newline.
