@@ -22,6 +22,7 @@ from git_client import (
     Git,
     GitError,
     GitTimeoutError,
+    Head,
     NoAnswerError,
     NotARepositoryError,
     NotStartedError,
@@ -30,6 +31,8 @@ from git_client import (
     UnknownRevisionError,
     decode,
     find_git,
+    git_paths,
+    git_paths_and_head,
     printable,
 )
 from git_client.testing import FakeGit, GitCall, RepoTemplates
@@ -157,6 +160,23 @@ def test_prefix_tells_the_object_id_length_in_the_same_process(
     git.prefix()
     assert git.object_id_length() == 64
     assert len(git_calls) == started + 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+def test_prefix_and_cdup_take_a_path_with_a_newline(repo: Git, tmp_path: Path) -> None:
+    below = Path(repo.directory) / "a\nb"
+    below.mkdir()
+    git = Git(below)
+    assert (git.prefix(), git.cdup()) == ("a\nb/", "../")
+    assert git_paths(git, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
+
+    # A worktree whose top's path holds one, from outside it.
+    top = tmp_path / "work\ntree"
+    top.mkdir()
+    env = {"GIT_DIR": str(Path(repo.directory) / ".git"), "GIT_WORK_TREE": str(top)}
+    outside = Git(tmp_path, env=env)
+    assert git_paths_and_head(outside, "HEAD")[1] == Head(branch="refs/heads/main")
+    assert (outside.prefix(), Path(outside.cdup())) == ("", top)
 
 
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:

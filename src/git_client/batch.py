@@ -9,7 +9,9 @@ from git_client.client import (
     Arg,
     EnvValue,
     Git,
+    LinesUnfit,
     ReadOnlyGit,
+    ask_where_alone,
     decode,
     encode,
     error_from,
@@ -150,7 +152,11 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
         output = git.run_bytes("rev-parse", *questions, "--path-format=absolute", *args)
-        lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
+        try:
+            lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
+        except LinesUnfit:  # a path with a newline: ask again, without them
+            ask_where_alone(git, where, questions)
+            return git_paths(git, *names)
         for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
@@ -189,17 +195,23 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     command = ["rev-parse", *questions, "--path-format=absolute", *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
     try:
-        output = rev_parse_lines(git.run_bytes(*command))
-        # No HEAD line where git can't say (e.g. a branch named HEAD)
-        lines = learn_where(git, where, questions, output, len(unique), len(unique) + 1)
-    except GitError as error:
-        if error.returncode != 1 or error.stderr.strip():
-            raise  # not an unborn HEAD: git said why
         try:
-            output = rev_parse_lines(encode(error.stdout))
-            lines = learn_where(git, where, questions, output, len(unique))
-        except ValueError:
-            raise error from None  # it didn't print what was asked
+            output = rev_parse_lines(git.run_bytes(*command))
+            # No HEAD line where git can't say (e.g. a branch named HEAD)
+            lines = learn_where(git, where, questions, output, len(unique), len(unique) + 1)
+        except GitError as error:
+            if error.returncode != 1 or error.stderr.strip():
+                raise  # not an unborn HEAD: git said why
+            try:
+                output = rev_parse_lines(encode(error.stdout))
+                lines = learn_where(git, where, questions, output, len(unique))
+            except LinesUnfit:
+                raise
+            except ValueError:
+                raise error from None  # it didn't print what was asked
+    except LinesUnfit:  # a path with a newline: ask again, without them
+        ask_where_alone(git, where, questions)
+        return git_paths_and_head(git, *names)
     found = {
         name: Path(os.fsdecode(line))
         for name, line in zip(unique, lines[: len(unique)], strict=True)

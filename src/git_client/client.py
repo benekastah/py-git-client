@@ -520,12 +520,20 @@ its `read_only()` share theirs."""
 _lengths_lock = threading.Lock()
 
 
-# What asks for prefix() and cdup(). Outside a worktree whose top it knows (in a bare
-# repository, or a git directory), git prints no cdup at all, not even an empty line; then the
-# line after the prefix's is --is-inside-work-tree's "true" or "false", which no cdup can be
-# (it's empty, "../"s, or the top's absolute path).
+# What asks for prefix() and cdup(). Where git knows no worktree (in a bare repository, or a
+# git directory), it prints no cdup at all, not even an empty line (where it knows the top but
+# the directory is outside it, it prints the top's absolute path); then the line after the
+# prefix's is --is-inside-work-tree's "true" or "false", which no cdup can be (it's empty,
+# "../"s, or the top's absolute path).
 _TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
 _INSIDE_WORK_TREE = (b"true", b"false")
+_OBJECT_FORMATS = (b"sha1", b"sha256")
+
+
+class LinesUnfit(ValueError):
+    """rev-parse printed at least as many lines as were asked for, but they don't fit what was
+    asked: a path it printed (the prefix, the cdup) holds a newline. `ask_where_alone` asks
+    each question in a process of its own then."""
 
 
 def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
@@ -547,9 +555,12 @@ def learn_where(
     git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], *rest: int
 ) -> list[bytes]:
     """Remember git's answers to `questions` (from `where_questions`) at `where`, from the first
-    of `lines`, what `rev-parse` printed, and return the lines after them, the caller's.
-    Raises ValueError, remembering nothing, unless as many follow as one of `rest` says, so an
-    answer a line short isn't taken for another's."""
+    of `lines`, what `rev-parse` printed, and return the lines after them, the caller's, of
+    which as many follow as one of `rest` says. Remembers nothing, and raises ValueError where
+    there are too few lines (e.g. a FakeGit's answer a line short), so one isn't taken for
+    another's; and LinesUnfit where there are more than that, or an answer can't be git's,
+    which is what a path with a newline in it does (then the caller asks again, with
+    `ask_where_alone`)."""
     answers: dict[str, bytes] = {}
     used = 0
     for question in questions:
@@ -558,22 +569,57 @@ def learn_where(
             answers[question] = b""  # git printed none
             continue
         if line is None:
-            break
+            raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {questions}")
         answers[question] = line
         used += 1
-    if len(answers) < len(questions) or len(lines) - used not in rest:
-        raise ValueError(f"rev-parse printed {len(lines)} lines, too few or many for {questions}")
+    left = len(lines) - used
+    if left < min(rest):
+        raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {questions}")
+    unfit = (
+        left > max(rest)
+        or answers.get("--is-inside-work-tree", b"true") not in _INSIDE_WORK_TREE
+        or answers.get("--show-object-format", b"sha1") not in _OBJECT_FORMATS
+    )
+    if unfit:
+        if not questions:
+            raise ValueError(f"rev-parse printed {len(lines)} lines, not {rest}")
+        raise LinesUnfit(f"rev-parse printed {len(lines)} lines that don't fit {questions}")
+    _remember(git, where, answers)
+    return lines[used:]
+
+
+def ask_where_alone(
+    git: ReadOnlyGit,
+    where: Location,
+    questions: Sequence[str],
+    *,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> None:
+    """Ask each of `questions` (from `where_questions`) in a `rev-parse` of its own, and
+    remember git's answers, each its whole output but the newline that ends it: for where
+    their answers in one `rev-parse` didn't fit (LinesUnfit), as a path with a newline in it
+    makes them."""
+    answers = {
+        question: git.run_bytes("rev-parse", question, timeout=timeout).removesuffix(b"\n")
+        for question in questions
+        if question != "--is-inside-work-tree"
+    }
+    _remember(git, where, answers)
+
+
+def _remember(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -> None:
+    """Remember git's answers at `where`, by the question each answers."""
     if "--show-prefix" in answers:
         prefix, cdup = answers["--show-prefix"], answers["--show-cdup"]
         tops.setdefault(git, {})[where] = decode(prefix), decode(cdup)
     if "--show-object-format" in answers:
         _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
-    return lines[used:]
 
 
 def rev_parse_lines(output: bytes) -> list[bytes]:
     """The lines of rev-parse's output. Not splitlines(): an answer can be an empty line (e.g.
-    the prefix's at the top), and a path can't hold a line ending."""
+    the prefix's at the top), and only "\\n" ends one. A path git prints can hold a newline
+    (off Windows), which makes it two lines: `learn_where` notices."""
     return output.removesuffix(b"\n").split(b"\n") if output else []
 
 
@@ -826,7 +872,10 @@ class ReadOnlyGit:
             # Not run's, which would strip a directory's leading space.
             questions = where_questions(self, where)
             output = self.run_bytes("rev-parse", *questions, timeout=timeout)
-            learn_where(self, where, questions, rev_parse_lines(output), 0)
+            try:
+                learn_where(self, where, questions, rev_parse_lines(output), 0)
+            except LinesUnfit:
+                ask_where_alone(self, where, questions, timeout=timeout)
         return known[where]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
