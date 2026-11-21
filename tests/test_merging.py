@@ -17,7 +17,7 @@ from git_client import (
     merge_trees,
     refs,
 )
-from git_client.testing import GitCall
+from git_client.testing import FakeGit, GitCall
 
 Changes = Callable[[Git], None]
 
@@ -80,6 +80,17 @@ def make_branches(git: Git) -> None:
         "odd-1": commit(git, main, {b"new\nline": b"1\n", b"sp ace\xff": b"1\n"}),
         "odd-2": commit(git, main, {b"new\nline": b"2\n", b"sp ace\xff": b"2\n"}),
     }
+    # Each adds the file `lost` differently, but one's blob is lost (as from a damaged object
+    # store), which merging the two has to read.
+    branches["lost-blob-1"] = commit(git, main, {b"lost": b"lost 1\n"})
+    branches["lost-blob-2"] = commit(git, main, {b"lost": b"lost 2\n"})
+    # A commit whose tree is lost.
+    branches["lost-tree"] = commit(git, main, {b"t": b"lost\n"})
+    lost = [f"{branches['lost-blob-1']}:lost", f"{branches['lost-tree']}^{{tree}}"]
+    for object_id in git.run("rev-parse", *lost).split():
+        path = Path(git.directory) / ".git" / "objects" / object_id[:2] / object_id[2:]
+        path.chmod(0o644)  # git makes it read-only
+        path.unlink()
     for name, object_id in branches.items():
         git.run("update-ref", f"refs/heads/{name}", object_id)
 
@@ -183,6 +194,51 @@ def test_a_pair_git_cant_merge_gets_its_error_and_the_rest_their_results(
     assert isinstance(errors[4], WrongTypeError)
     for i in (0, 2, 4):
         assert results[i] == MergeResult(None, None, (), errors[i])
+
+
+@NEEDS_STDIN
+@pytest.mark.parametrize("where", [0, 1])
+@pytest.mark.parametrize(
+    ("ours", "theirs", "says"),
+    [
+        ("lost-blob-1", "lost-blob-2", "^fatal: unable to read blob object "),
+        ("main", "lost-tree", "^error: Could not read "),
+    ],
+)
+def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
+    merges: tuple[Git, dict[str, str]],
+    git_calls: list[GitCall],
+    where: int,
+    ours: str,
+    theirs: str,
+    says: str,
+) -> None:
+    git, ids = merges
+    good = [(ids["x"], ids["y"]), (ids["ours"], ids["theirs"])]
+    pairs = [*good]
+    pairs.insert(where, (ids[ours], ids[theirs]))
+
+    results = merge_trees(git, pairs)
+
+    # The process that stopped at it, and one for the pairs after it.
+    assert len(git_calls) == 2
+    error = results.pop(where).error
+    assert error is not None and re.search(says, error.stderr, re.MULTILINE)
+    assert results == [merged_alone(git, *pair) for pair in good]
+
+
+def test_a_failure_not_about_one_pair_is_raised_even_after_a_merge() -> None:
+    git = FakeGit()
+    stderr = (
+        "error: insufficient permission for adding an object to repository database"
+        " .git/objects\nfatal: failure to merge\n"
+    )  # what git says when it can't write the second merge's tree
+    git.respond(["merge-tree"], stdout=f"1\0{'a' * 40}\0\0", stderr=stderr, returncode=128)
+
+    with pytest.raises(GitError, match="insufficient permission"):
+        merge_trees(git, [("b" * 40, "c" * 40)] * 3)
+
+    assert len(git.calls) == 1
 
 
 def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_results(

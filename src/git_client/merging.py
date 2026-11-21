@@ -29,7 +29,18 @@ _OUTPUT = ("--name-only", "--no-messages")
 # git's exit status for a usage error: an option it doesn't know.
 _USAGE = 129
 
-_UNRELATED = re.compile("^fatal: refusing to merge unrelated histories$", re.MULTILINE)
+# The errors that are about the pair git stopped at: an id that names no commit, or one that
+# names another object (e.g. a tree), and objects of its history that git couldn't read.
+_ABOUT_THE_PAIR = (UnknownRevisionError, WrongTypeError, CorruptObjectError, MissingObjectError)
+
+# What else git says of the pair it stopped at: commits that share no history, and an object it
+# couldn't read in their history (a blob, or a tree, which it says before "failure to merge").
+_SAYS_OF_THE_PAIR = re.compile(
+    "^fatal: refusing to merge unrelated histories$"
+    r"|^fatal: unable to read \w+ object \S+$"
+    r"|^error: Could not read \S+$",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -58,10 +69,11 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
     A pair git can't merge gets a MergeResult whose `clean` is None and whose `error` says why:
     an UnknownRevisionError for an id that names no commit the repository has, a
     WrongTypeError for one that names another object (e.g. a tree), and a GitError for
-    commits that share no history (which merge-tree refuses, as `git merge` does). git
-    stops at such a pair, so the pairs after it are merged by another process: each pair
-    git can't merge costs one. What makes every merge fail (e.g. NotARepositoryError, if
-    git fails so before it has merged any pair) is raised.
+    commits that share no history (which merge-tree refuses, as `git merge` does) or whose
+    objects it can't read (e.g. a damaged object store). git stops at such a pair, so the
+    pairs after it are merged by another process: each pair git can't merge costs one. Any
+    other failure, which isn't about one pair (e.g. NotARepositoryError, or no room to write
+    objects), is raised, wherever it comes.
 
     Raises ValueError, starting no git, for a pair that isn't two full object ids: names (a
     branch, `HEAD`) aren't taken, so nothing given can be read as an option or as more than
@@ -92,7 +104,7 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
                 f"merge-tree gave {len(merged)} results for {len(rest)} pairs",
             )
         # git stopped at the next pair.
-        results.append(_failed(args, result, after_a_merge=bool(results)))
+        results.append(_failed(args, result))
     return results
 
 
@@ -116,7 +128,7 @@ def _one_at_a_time(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResu
             [merged] = _merges(args, clean + b"\0" + result.stdout + b"\0")
             results.append(merged)
         else:
-            results.append(_failed(args, result, after_a_merge=bool(results)))
+            results.append(_failed(args, result))
     return results
 
 
@@ -144,18 +156,13 @@ def _merges(args: Sequence[Arg], output: bytes) -> list[MergeResult]:
     return merges
 
 
-def _failed(
-    args: Sequence[Arg], result: subprocess.CompletedProcess[bytes], *, after_a_merge: bool
-) -> MergeResult:
+def _failed(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> MergeResult:
     """The MergeResult of a pair git stopped at, saying why. Raises git's error instead if it
-    could be anything's (e.g. not a repository) and git hasn't merged a pair yet."""
+    isn't known to be about the pair (e.g. not a repository)."""
     # Not its stdout, the earlier pairs' results.
     error = error_from(
         args, subprocess.CompletedProcess(args, result.returncode, b"", result.stderr)
     )
-    about_the_pair = isinstance(
-        error, (UnknownRevisionError, WrongTypeError, CorruptObjectError, MissingObjectError)
-    ) or bool(_UNRELATED.search(error.stderr))
-    if not about_the_pair and not after_a_merge:
+    if not isinstance(error, _ABOUT_THE_PAIR) and not _SAYS_OF_THE_PAIR.search(error.stderr):
         raise error
     return MergeResult(None, None, (), error)
