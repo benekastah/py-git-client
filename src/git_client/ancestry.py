@@ -23,10 +23,12 @@ on Linux and less than one on Windows; and far more than a stack's branches are 
 _FROM_ANCESTOR, _FROM_DESCENDANT, _STALE = 1, 2, 4
 _FROM_BOTH = _FROM_ANCESTOR | _FROM_DESCENDANT
 
-# What reading a commit can raise of that commit (missing, damaged, or not a commit), rather
-# than of the repository or git.
+# A full object id in a commit's headers (lowercased first: git reads either case). client.py
+# has the same, private to it.
 _OBJECT_ID_BYTES = re.compile(OBJECT_ID.pattern.encode())
 
+# What reading a commit can raise of that commit (missing, damaged, or not a commit), rather
+# than of the repository or git.
 _UNREADABLE = (UnknownRevisionError, CorruptObjectError, MissingObjectError, WrongTypeError)
 
 
