@@ -6,9 +6,9 @@ is done, remove it in the same change. What's wrong with what's built is in
 
 - **A typed config reader.** git-recommit makes 2–4 `git config` calls per subcommand to read
   keys as git's bool and int (git-stack and move-forward may want it too). `config()` already
-  reads every entry in one process; what's missing is git's parsing of a value as a bool
-  (`yes`, `on`, `1`, an empty value, ...) and an int (`k`, `m`, `g` suffixes), so a tool can
-  read many typed keys from that one process.
+  reads every entry in one process, as strings; what's missing is git's own reading of a
+  value as a bool or an int (`git config --type=bool` or `--type=int`, never parsed in
+  Python: see PROJECT_AGENTS.md), for many keys in as few processes as git allows.
 - **A template that stands in for an existing repository.** `RepoTemplates.copy` copies only
   what `build` made, so a test module that wants its own template on top of a `repo` already
   made (e.g. a per-module fixture) needs extra plumbing; git-recommit's tests hit this.

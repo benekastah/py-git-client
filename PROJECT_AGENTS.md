@@ -31,6 +31,13 @@ the shape of the code or a rule here changes.
 
 - **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
   library, which they could only take because it has none of its own.
+- **A git client only: never reimplement git.** The library starts git and parses what git
+  prints. It never decides in Python what git decides: no walking objects, refs or worktrees,
+  no reading or editing files in a git directory, no ported algorithms or rules (merge-base,
+  config syntax, ref names, ...). Where git does an action for many things in one process
+  (`update-ref --stdin`, `cat-file --batch-command`, `for-each-ref`, `merge-tree --stdin`,
+  `rev-parse` with many arguments, ...), use git's way; where it doesn't, run more processes:
+  that's fine. Before adding a function, ask which git command answers it.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
   README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
   or newer, the oldest supported; a block that starts `# Needs git X.Y.`, alone in a block of
