@@ -35,7 +35,8 @@ the shape of the code or a rule here changes.
   library, which they could only take because it has none of its own.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
   README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
-  or newer, the oldest supported). They depend on
+  or newer, the oldest supported; a block that starts `# Needs git X.Y.`, alone in a block of
+  its own, runs only on that git or newer). They depend on
   `git+https://github.com/benekastah/py-git-client@main` (or a tag), locked to a commit by
   their uv.lock.
 - **Versions** are 0.0.N, each released as a git tag, `v0.0.N`, and a GitHub release whose

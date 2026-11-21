@@ -22,6 +22,15 @@ README = Path(__file__).parent.parent / "README.md"
 # The oldest git py-git-client supports, as the README says: CatFile needs it.
 MINIMUM_GIT = (2, 36)
 
+# What starts a block that needs a newer git than MINIMUM_GIT.
+NEEDS_GIT = re.compile(r"# Needs git (\d+)\.(\d+)\.\n")
+
+
+def runs_on(block: str, version: tuple[int, ...]) -> bool:
+    """Whether a README block runs on that git: unless it starts by naming a newer one."""
+    needs = NEEDS_GIT.match(block)
+    return needs is None or version >= (int(needs[1]), int(needs[2]))
+
 
 def make_readme_repository(directory: Path) -> None:
     """What the README's examples name: path/to/repo, a clone of origin.git, on main with a
@@ -71,6 +80,8 @@ def test_the_readmes_python_examples_run(
     on_sigterm = signal.getsignal(signal.SIGTERM)
     try:
         for block in blocks:
+            if not runs_on(textwrap.dedent(block), found):
+                continue
             exec(textwrap.dedent(block), dict(names))  # noqa: S102 (the README's own code)
     finally:
         os.environ.clear()
@@ -79,3 +90,18 @@ def test_the_readmes_python_examples_run(
 
     # The last thing "Using it" does.
     assert Git(Path("path", "to", "repo")).resolve("refs/heads/old") is None
+
+
+@pytest.mark.parametrize(
+    ("block", "version", "runs"),
+    [
+        ("# Needs git 2.38.\ngit.run('merge-tree')\n", (2, 37), False),
+        ("# Needs git 2.38.\ngit.run('merge-tree')\n", (2, 38), True),
+        ("# Needs git 2.38.\ngit.run('merge-tree')\n", (3, 0), True),
+        ("git.run('status')\n", (2, 36), True),
+    ],
+)
+def test_a_block_marked_for_a_newer_git_is_skipped(
+    block: str, version: tuple[int, ...], runs: bool
+) -> None:
+    assert runs_on(block, version) is runs

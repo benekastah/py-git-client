@@ -26,7 +26,7 @@ what git-stack, git-recommit and move-forward share for that:
   own (`git_dir`: a linked worktree's own), read from its `.git` file or directory.
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
-`git cat-file --batch-command`).
+`git cat-file --batch-command`; 2.38 for `merge_trees`).
 
 ## Installing
 
@@ -53,7 +53,6 @@ from git_client import (
     hash_blob_at,
     hash_blobs,
     merge_file,
-    merge_trees,
     refs,
     update_refs,
 )
@@ -122,10 +121,16 @@ cleaned = hash_blob_at(git, "notes.txt", b"one\r\n", write=True)
 merged, conflicts = merge_file(
     git, ours=b"ours\n", base=b"base\n", theirs=b"theirs\n", options=["--diff3"]
 )
+```
+
+```python
+# Needs git 2.38.
+from git_client import Git, merge_trees, refs
 
 # Merges of commits, by their full ids (each pair as `git merge-tree --write-tree` merges it),
 # with one git for all of them: whether each is clean, its tree and its conflicted paths (from
-# git.directory), or, if git couldn't merge a pair (clean is None), why. Needs git 2.38.
+# git.directory), or, if git couldn't merge a pair (clean is None), why.
+git = Git("path/to/repo")
 heads = refs(git, "refs/heads/")
 a, b = heads["refs/heads/a"].object, heads["refs/heads/b"].object
 for merge in merge_trees(git, [(a, b), (b, a)]):
