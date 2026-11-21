@@ -227,6 +227,46 @@ def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
     assert results == [merged_alone(git, *pair) for pair in good]
 
 
+@pytest.mark.parametrize(
+    "batch",
+    [
+        pytest.param(True, marks=NEEDS_STDIN, id="batch"),
+        pytest.param(False, marks=NEEDS_WRITE_TREE, id="one-at-a-time"),
+    ],
+)
+@pytest.mark.parametrize("followed", [False, True])
+@pytest.mark.parametrize(
+    ("theirs", "error", "says"),
+    [
+        ("missing", UnknownRevisionError, " - not something we can merge"),
+        ("tree", WrongTypeError, "expected commit type"),
+        ("unrelated", GitError, "^fatal: refusing to merge unrelated histories$"),
+    ],
+)
+def test_a_pair_git_cant_merge_first_gets_its_error(
+    merges: tuple[Git, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    batch: bool,
+    followed: bool,
+    theirs: str,
+    error: type[GitError],
+    says: str,
+) -> None:
+    git, ids = merges
+    ids["missing"] = "1" * 40
+    ids["tree"] = git.run("rev-parse", "main^{tree}")
+    if not batch:
+        monkeypatch.setattr(git_client.merging, "_STDIN", "--no-such-option")
+    good = [(ids["x"], ids["y"])] if followed else []
+
+    first, *rest = merge_trees(git, [(ids["main"], ids[theirs]), *good])
+
+    assert first.error is not None and type(first.error) is error
+    assert re.search(says, first.error.stderr, re.MULTILINE)
+    assert first == MergeResult(None, None, (), first.error)
+    assert rest == [merged_alone(git, *pair) for pair in good]
+
+
 def test_a_failure_not_about_one_pair_is_raised_even_after_a_merge() -> None:
     git = FakeGit()
     stderr = (
