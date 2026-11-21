@@ -1070,7 +1070,8 @@ class Git(ReadOnlyGit):
             if wrong:
                 raise TypeError(
                     f"write_configs takes a ConfigSet or ConfigUnset for each change, not"
-                    f' {change!r}: the old write_config("k", "v") is write_configs(ConfigSet("k", "v")),'
+                    f' {change!r}: the old write_config("k", "v") is'
+                    f' write_configs(ConfigSet("k", "v")),'
                     ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
                 )
         if not changes:
