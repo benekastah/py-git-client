@@ -114,7 +114,8 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # For each (ancestor, descendant) pair of full commit ids, whether `merge-base --is-ancestor`
 # says yes (a commit is its own ancestor; an id of no commit, or a name: False), through one
 # process however many pairs, each walk reading the commits between its pair's two.
-a, b = (refs(git, f"refs/heads/{name}")[f"refs/heads/{name}"].object for name in "ab")
+branches = refs(git, "refs/heads/")
+a, b = branches["refs/heads/a"].object, branches["refs/heads/b"].object
 a_under_b, b_under_a = is_ancestor_many(git, [(a, b), (b, a)])
 # The directory with the refs, objects and config of a checkout (its top), or of a git
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
