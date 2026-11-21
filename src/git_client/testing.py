@@ -35,7 +35,6 @@ from git_client.client import (
     Timeout,
     decode,
     encode,
-    error_from,
     find_git,
     refuse_if_stopping,
 )
@@ -271,7 +270,7 @@ def _remove(directory: Path) -> None:
 def _repositories(root: Path) -> Iterator[Path]:
     """The git directory of each repository under root, root included, that's no submodule or
     linked worktree: each `.git` directory, and each bare repository's (a directory with
-    `HEAD`, `config` and `objects`), which git then reads as one, or fails to. A `.git` file
+    `HEAD`, `config` and `objects`), which git then reads as one, or can't. A `.git` file
     (a submodule's, or a linked worktree's) isn't followed, so a submodule's own repository
     (under `.git/modules/`) isn't listed."""
     for directory, subdirectories, files in os.walk(root):
@@ -293,15 +292,15 @@ def _remote_urls(root: Path) -> dict[Path, dict[str, list[str]]]:
     """The remotes' URLs (`url` and `pushurl`) in the config file of each repository under
     root (see _repositories; not files it includes), by its git directory, relative to root,
     then by key, in order, as git reads them: one `git config --get-regexp` per repository.
-    Raises GitError if git can't read one."""
+    One git can't read has none."""
     found: dict[Path, dict[str, list[str]]] = {}
     for git_dir in _repositories(root):
         args = (f"--git-dir={git_dir}", "config", "--local", "-z", "--get-regexp", _URL_KEYS)
         result = Git(root, program=real_git()).process(*args, capture_output=True)
-        if result.returncode == 1:
-            continue  # no URL
         if result.returncode != 0:
-            raise error_from(args, result)
+            # 1: no URL. Else git can't read it (e.g. a bad config line, or no repository),
+            # so its copy can't run git either: it's left as it is, for git to say so there.
+            continue
         urls: dict[str, list[str]] = {}
         for entry in decode(result.stdout).split("\0"):
             # A key, then its value after a newline; a key with no value has no newline.

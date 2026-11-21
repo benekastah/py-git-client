@@ -392,7 +392,8 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
   --get-regexp`); copying takes none for a repository without remotes. One with remotes
   takes a `git config` for each remote's `url` or `pushurl` that points inside the template
   (a path, or a `file://` URL), to point it at the copy's (for a key with several values,
-  one to clear it and one per value). Submodules and linked worktrees aren't repointed. A copy's
+  one to clear it and one per value). Submodules and linked worktrees aren't repointed, nor a
+  repository git can't read (e.g. a bad config line), which is copied as it is. A copy's
   index keeps the template's stat data: the first command that refreshes the index (`git
   status`, `git diff`) makes it match the copy's files, but until then plumbing that doesn't
   (`git diff-index HEAD`, `git diff-files`) reports every file as modified, so a test of a

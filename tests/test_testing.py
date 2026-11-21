@@ -531,6 +531,27 @@ def test_repoints_each_url_as_git_reads_it(repo_templates: RepoTemplates, tmp_pa
         assert Path(Git(copy / "work").run("config", key)) == copy / Path(url).relative_to(source)
 
 
+def make_unreadable_repositories(directory: Path) -> None:
+    # A directory that looks like a bare repository, but whose HEAD git can't read.
+    (directory / "fake.git" / "objects").mkdir(parents=True)
+    (directory / "fake.git" / "HEAD").write_bytes(b"garbage\n")
+    (directory / "fake.git" / "config").write_bytes(b'[remote "o"]\n\turl = x\n')
+    # A repository whose config git can't parse.
+    Git(directory).run("init", "--quiet", "broken")
+    with (directory / "broken" / ".git" / "config").open("ab") as config:
+        config.write(b'[remote "o"]\n\turl = ' + directory.as_posix().encode() + b"\n[bad\n")
+
+
+def test_a_repository_git_cant_read_is_copied_as_it_is(
+    repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    source = repo_templates.build("unreadable", make_unreadable_repositories)
+    copy = repo_templates.copy("unreadable", tmp_path / "copy")
+
+    for file in ("fake.git/config", "broken/.git/config"):
+        assert (copy / file).read_bytes() == (source / file).read_bytes()
+
+
 def make_file_url_remotes(directory: Path) -> None:
     Git(directory).run("init", "--quiet", "--bare", str(directory / "origin.git"))
     Git(directory).run("init", "--quiet", str(directory / "work"))
