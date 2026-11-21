@@ -281,6 +281,7 @@ def test_a_failure_not_about_one_pair_is_raised_even_after_a_merge() -> None:
     assert len(git.calls) == 1
 
 
+@NEEDS_WRITE_TREE
 def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_results(
     merges: tuple[Git, dict[str, str]],
     git_calls: list[GitCall],
