@@ -31,8 +31,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `config_key` in `git_stack/git.py` and looks up `stack.perfLog`, `stack.perfLogMaxBytes`
   and `core.sshCommand`, and move-forward, whose `RepoConfig.get` is given camelCase keys.
   For a key a user typed, a tool runs `git config --get <key>` (one process; `git config
-  get` from git 2.46): git takes the key however it's written, canonicalizes it itself, and
-  says what's wrong with one that isn't a key (#67).
+  get` from git 2.46): git takes the key however it's written and canonicalizes it itself.
+  It exits 1 both for a key that isn't set and for one that isn't a key (`nosection`, `a.b
+  c`), saying why only on stderr ("key does not contain a section"), so a tool that reads
+  exit 1 as "not set" reads a mistyped key as unset: one that must tell them apart checks
+  stderr (#67).
 - `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
   the length of an id git printed, which in a SHA-256 repository with
   `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
