@@ -175,6 +175,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `repo_templates` copies repoint every remote URL as git reads it, which git now reads
+  for them (`git config --get-regexp`, once per repository as the template is built), where
+  the plugin's own reading of the config file missed an entry on its section's line and
+  misread a value continued on the next line. A copy still runs only the writes (#67).
 - `hash_blob_at(..., paths_from_top=True)` from a client outside the worktree that git is
   told of (e.g. by GIT_WORK_TREE) takes the path from the worktree's top, as `cdup()` says,
   where it took it from the client's directory and so read the wrong attributes (#67).
