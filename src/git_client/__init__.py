@@ -2,11 +2,13 @@
 cat-file, and batched reads and writes."""
 
 from git_client.batch import (
+    Head,
     Ref,
     RefUpdate,
     config,
     config_key,
     git_paths,
+    git_paths_and_head,
     hash_blob_at,
     hash_blobs,
     merge_file,
@@ -59,6 +61,7 @@ __all__ = [
     "Git",
     "GitError",
     "GitTimeoutError",
+    "Head",
     "MissingObjectError",
     "NoAnswerError",
     "NotARepositoryError",
@@ -83,6 +86,7 @@ __all__ = [
     "git_common_dir",
     "git_dir",
     "git_paths",
+    "git_paths_and_head",
     "hash_blob_at",
     "hash_blobs",
     "merge_file",
