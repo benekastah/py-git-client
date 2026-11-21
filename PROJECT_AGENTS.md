@@ -15,6 +15,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
+- `src/git_client/config_file.py`: the changes `Git.write_config` makes
+  (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/snapshot.py`: `RefSnapshot`, and which commands may change refs, which
   `ReadOnlyGit` (and `FakeGit`) count as each ends.
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
