@@ -39,7 +39,6 @@ from git_client.client import (
     find_git,
     refuse_if_stopping,
 )
-from git_client.config_file import ConfigChange
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -522,11 +521,6 @@ class FakeGit(Git):
     def commands(self) -> list[list[str]]:
         """Each command's arguments, in the order they were run."""
         return [call.args for call in self.calls]
-
-    def _config_file(self, changes: Sequence[ConfigChange]) -> Path | None:
-        """None: a FakeGit's write_configs runs `git config` for each change, for a test to
-        check, rather than edit a file."""
-        return None
 
     def respond(
         self,

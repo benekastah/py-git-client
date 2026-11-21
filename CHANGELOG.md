@@ -101,14 +101,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
-- `Git.write_configs` starts no git process (but `git_paths`' first, to find the file) where
-  every change is a `branch.<name>.<key>`: it edits the config file itself, as `git config`
-  would, under git's `config.lock`, all or none. It leaves to `git config` what it can't be
-  sure of (other keys, a file git can't read or that's read-only, a header written
-  `[branch.<name>]` or sharing its line, $GIT_CONFIG), and a write that fails (e.g. a full
-  disk), so its errors are git's. On two points the file isn't byte for byte git's: a file
-  whose every line ends in CRLF keeps CRLF, and a value with a carriage return is quoted. A
-  `FakeGit` still runs `git config` for each change (#62).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55). It needs git
   2.39 (and a `ReadOnlyGit` fetches nothing only from 2.45, and in 2.39.4 to 2.44.1) (#52).

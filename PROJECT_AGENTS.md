@@ -17,8 +17,7 @@ the shape of the code or a rule here changes.
   process.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
-  (`ConfigSet`, `ConfigUnset`), what each did (`ConfigResult`), and a port of git's reader and
-  writer of config files, to make them as `git config` does, where it can be sure to.
+  (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
   git config and isolation, the real git, repository templates, fixtures (`git_calls`,
   `fresh_find_git`, `outside_any_repository`), and `FakeGit`. It may import pytest; nothing
