@@ -123,7 +123,7 @@ class _Walker:
 
     def _peel(self, object_id: str) -> str | None:
         """The commit `object_id` is, or a tag of it points to; None if it's not a full
-        object id, or of no object that peels to a commit."""
+        object id of the repository's length, or of no object that peels to a commit."""
         if object_id not in self._peeled:
             found = None
             if OBJECT_ID.fullmatch(object_id):
@@ -131,6 +131,10 @@ class _Walker:
                     found = self._cat_file.info(f"{object_id}^{{commit}}")
                 except _UNREADABLE:
                     found = None
+            # An id shorter than the repository's (40 hex digits in a SHA-256 one) is an
+            # abbreviation, which cat-file resolves: the commit's id has the full length.
+            if found is not None and len(found.id) != len(object_id):
+                found = None
             self._peeled[object_id] = None if found is None else found.id
         return self._peeled[object_id]
 

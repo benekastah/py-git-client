@@ -204,6 +204,16 @@ def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]
     assert merge_base_says(git, c[0], odd)
 
 
+def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> None:
+    # 40 hex digits: an abbreviation there, which cat-file would resolve.
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "repo")
+    git = Git(tmp_path / "repo")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+    commit = git.run("rev-parse", "HEAD")
+
+    assert is_ancestor_many(git, [(commit[:40], commit), (commit, commit)]) == [False, True]
+
+
 def test_a_tag_is_its_commit_and_a_tree_no_commit(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
     git.run("tag", "-a", "-m", "tag", "t", c[1])
