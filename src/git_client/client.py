@@ -615,19 +615,19 @@ class ReadOnlyGit:
     not checked (that would start the process it saves): a wrong one makes what reads ids by
     it (e.g. `patch_ids`) fail.
 
-    Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git
-    is first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a
-    quarter of a second later, or at once if the tool is interrupted again meanwhile; the call
-    then waits at most a second more for its output. On
-    Linux and macOS it's asked with SIGINT, as Ctrl-C asks it. When the tool has no
-    controlling terminal (as in CI, or a service), a command with a timeout runs in a process
-    group of its own, so what git started (hooks, ssh, credential helpers) is stopped with
-    it. With a terminal, git stays in its foreground, as from a shell, so it can ask for a
-    password and open an editor, and Ctrl-C reaches it; only git is stopped then. On
-    Windows, git and what it started are killed (taskkill /T): past a timeout at once, with no
-    chance to clean up, and on an interrupt once git has had a quarter of a second to handle
-    the Ctrl-C that reached it too, from the tool's console. taskkill finds what git started
-    through git, so what outlives git's own exit (e.g. a hook that ignores Ctrl-C) runs on.
+    Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
+    first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
+    of a second later, or at once if the tool is interrupted again meanwhile; the call then
+    waits at most a second more for its output. On Linux and macOS it's asked with SIGINT, as
+    Ctrl-C asks it. When the tool has no controlling terminal (as in CI, or a service), a
+    command with a timeout runs in a process group of its own, so what git started (hooks, ssh,
+    credential helpers) is stopped with it. With a terminal, git stays in its foreground, as
+    from a shell, so it can ask for a password and open an editor, and Ctrl-C reaches it; only
+    git is stopped then. On Windows, git and what it started are killed (taskkill /T): past a
+    timeout at once, with no chance to clean up, and on an interrupt once git has had a quarter
+    of a second to handle the Ctrl-C that reached it too, from the tool's console. taskkill
+    finds what git started through git, so what outlives git's own exit (e.g. a hook that
+    ignores Ctrl-C) runs on.
 
     A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
     from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
