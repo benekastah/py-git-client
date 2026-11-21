@@ -205,7 +205,12 @@ def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]
         f"parent {c[9]}\ncommitter {who}\n\nodd\n"
     )
     odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
-    pairs = [(c[9], odd), (c[0], odd)]
+    # With no author, the committer gives no date: it still has its parent.
+    authorless = f"tree {tree}\nparent {odd}\ncommitter {who}\n\nno author\n"
+    on_odd = git.run(
+        "hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=authorless
+    )
+    pairs = [(c[9], odd), (c[0], odd), (c[0], on_odd)]
 
     assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
     assert merge_base_says(git, c[0], odd)
