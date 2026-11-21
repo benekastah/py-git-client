@@ -483,6 +483,18 @@ def test_write_config_keeps_the_files_permissions(repo: Git) -> None:
     assert stat.S_IMODE(config_file(repo).stat().st_mode) == mode
 
 
+def test_write_config_leaves_a_read_only_config_to_git(repo: Git, git_calls: list[GitCall]) -> None:
+    # Windows won't replace a read-only file, nor remove a read-only lock; git for Windows
+    # clears the flag first.
+    config_file(repo).chmod(0o444)
+
+    repo.write_config(ConfigSet("branch.a.x", "1"))
+
+    assert repo.run("config", "branch.a.x") == "1"
+    assert git_calls[-2][:2] == ["config", "branch.a.x"]
+    assert not config_file(repo).with_name("config.lock").exists()
+
+
 def test_write_config_writes_nothing_once_the_tool_is_stopping(repo: Git) -> None:
     git_paths(repo, "config")
     before = config_file(repo).read_bytes()

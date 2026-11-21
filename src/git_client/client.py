@@ -949,8 +949,8 @@ class Git(ReadOnlyGit):
         ConfigLockedError.
 
         Otherwise, or where it can't be sure of making a change as git would (see
-        config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link
-        or can't be read, it runs `git config` for each change, as a FakeGit does: anything else
+        config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link,
+        read-only or can't be read, it runs `git config` for each change, as a FakeGit does: anything else
         git rejects (e.g. a set of a key with several values, or a key that isn't valid) then
         raises GitError, the changes before it made, one at a time, not all or nothing. While
         another process has the file locked, each change is tried again, starting no try after

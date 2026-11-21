@@ -265,8 +265,8 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
     config` and any other writer waits for it), written whole to the lock, flushed to disk,
     then renamed over the file, keeping its permissions. None, having changed nothing, where
     it's git's to make them: where `edit` says, for a file that's a symbolic link (git writes
-    the file it names), one it can't read, or a lock it can't make other than for being held
-    (git says why). Raises ConfigLockedError if another process holds the lock past `wait`
+    the file it names), one it can't read or that's read-only, or a lock it can't make other
+    than for being held (git says why). Raises ConfigLockedError if another process holds the lock past `wait`
     seconds, and the OSError of a rename that still fails after trying `wait` seconds more
     (Windows refuses one while another process has the file open without sharing its
     deletion)."""
@@ -283,6 +283,9 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
         except FileNotFoundError:
             contents, mode = None, None
         except OSError:
+            return None
+        # Windows won't replace a read-only file (git for Windows clears its flag first).
+        if mode is not None and not mode & stat.S_IWRITE:
             return None
         edited = edit(contents, changes)
         if edited is None:
