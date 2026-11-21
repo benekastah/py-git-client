@@ -25,9 +25,10 @@ what git-stack, git-recommit and move-forward share for that:
   merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
   why git couldn't merge that pair.
 - **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
-  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory, or to
-  write many branch keys (`Git.write_config`: the config file edited as `git config`
-  would, under its lock, all or none).
+  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory; and
+  none but the first call's `git_paths` lookup to write many branch keys
+  (`Git.write_config`: the config file edited as `git config` would, under its lock, all or
+  none).
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`; 2.38 for `merge_trees`).
