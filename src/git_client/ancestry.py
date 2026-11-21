@@ -77,11 +77,14 @@ def is_ancestor(
     less than a request) and keep the other threads waiting. What a call learns of the
     commits is its own, so calls in different threads don't share or race on it.
 
-    A pair whose walk is long (see _WALK_LIMIT) or reads a commit git can't (damaged or
-    missing, or with a parent line git can't follow), or with the full id of a tag or commit
-    cat-file can't peel to a commit (which takes damage), is asked of `git merge-base
-    --is-ancestor`, a process each (a missing object, a tree or a blob is False with none), as is every pair while the repository has a grafts file (deprecated in git), which
-    cat-file doesn't apply, or while git's environment sets GIT_SHALLOW_FILE.
+    These pairs are asked of `git merge-base --is-ancestor`, a process each: one whose walk is
+    long (see _WALK_LIMIT) or reads a commit git can't (damaged, missing, or with a line git
+    can't parse); one with the full id of a commit cat-file can't peel (which takes damage,
+    but a commit-graph can still answer for it) or of a tag it can't peel (a tag of a tree or
+    of a missing object, where that process only fails); and every pair while the repository
+    has a grafts file (deprecated in git), which cat-file doesn't apply, or while git's
+    environment sets GIT_SHALLOW_FILE. A pair with a missing object, a tree or a blob is False
+    with no process.
     FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
     In a damaged repository, it can say True where merge-base fails: an object is read only

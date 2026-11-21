@@ -2,6 +2,7 @@ import itertools
 import random
 import stat
 import threading
+import zlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -247,8 +248,9 @@ def test_an_odd_parent_line_answers_as_merge_base_does(
         "tree {short_tree}\nparent {c0}\n{people}\nodd\n",
         "parent {c1}\nparent {c0}\n{people}\nodd\n",
         "tree {tree}\nparent {c0}\n",
+        "{tree}\nparent {c0}\n{people}\nodd\n",
     ],
-    ids=["bad-tree", "no-tree", "ends-after-parent"],
+    ids=["bad-tree", "no-tree", "ends-after-parent", "bare-tree-id"],
 )
 def test_a_commit_git_cant_parse_reached_as_a_parent_answers_as_merge_base_does(
     shapes: tuple[Git, list[str]], content: str
@@ -570,6 +572,28 @@ def test_a_damaged_commit_is_no_ones_ancestor_or_descendant(damaged_repo: Git) -
 
     assert is_ancestor(damaged_repo, (head, head)) == [False]
     assert not merge_base_says(damaged_repo, head, head)
+
+
+def test_a_commit_only_its_commit_graph_can_read_answers_as_merge_base_does(
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
+) -> None:
+    git, c = shapes
+    git.run("commit-graph", "write", "--reachable")
+    # c3's object damaged into a commit git can't parse, under c3's id: cat-file can't peel
+    # it, but says it's a commit, and merge-base reads c3 from the commit-graph.
+    unpack(git)
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    who = "T <t@example.com> 1000000000 +0000"
+    body = f"tree {tree[:39]}\nparent {c[2]}\nauthor {who}\ncommitter {who}\n\nodd\n".encode()
+    path = Path(git.directory) / ".git" / "objects" / c[3][:2] / c[3][2:]
+    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+    path.write_bytes(zlib.compress(b"commit %d\0" % len(body) + body))
+    started = len(git_calls)
+
+    answers = is_ancestor(git, (c[0], c[3]))
+
+    assert ["merge-base", "--is-ancestor", c[0], c[3]] in git_calls[started:]
+    assert answers == [merge_base_says(git, c[0], c[3])] == [True]
 
 
 def unpack(git: Git) -> None:
