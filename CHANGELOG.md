@@ -11,14 +11,14 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `patch_ids` takes a `Git`, not a `ReadOnlyGit`: it runs whatever commands it's given, which
   a function that takes a read-only client mustn't. Given a read-only client (a `ReadOnlyGit`,
   or a `Git`'s `read_only()`), it raises `TypeError`, running nothing. A tool that passed one
-  passes its `Git` (#TBD).
+  passes its `Git` (#68).
 - `patch_ids` runs each command as it's given (with its pinned options), as 0.0.2 did: a
   `diff` of two revisions runs as `git diff`, no longer as `git diff-tree -p`, which failed
   for what `git diff` takes and `diff-tree` doesn't (two blobs' ids, or two paths without
   `--`). A tool that ran such a diff through a `ReadOnlyGit` (which refuses `diff`), or whose
   `FakeGit` answers `diff-tree` for it, passes `["diff-tree", "-p", a, b]` itself: of two
   trees, it gives the same ids as `["diff", a, b]`, renames, mode changes, binary files and a
-  merge against its parents too (#TBD).
+  merge against its parents too (#68).
 - `git_common_dir(directory)` takes a client (`Git` or `ReadOnlyGit`), not a directory, and
   runs git, where it read the repository's files: `git_common_dir("path/to/repo")` becomes
   `git_common_dir(git)`, from one `git rev-parse --path-format=absolute --git-dir
