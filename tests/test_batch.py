@@ -604,6 +604,22 @@ def test_hash_blob_at_takes_a_path_from_the_top_if_asked(repo: Git) -> None:
     assert hash_blob_at(repo, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
 
 
+def test_hash_blob_at_takes_a_path_from_the_top_outside_the_worktree(
+    repo: Git, tmp_path: Path
+) -> None:
+    top = Path(repo.directory)
+    (top / "sub").mkdir()
+    (top / "sub" / ".gitattributes").write_bytes(b"*.txt text\n")
+    # A client outside the worktree, which GIT_WORK_TREE names.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    env = {"GIT_DIR": str(top / ".git"), "GIT_WORK_TREE": str(top)}
+    client = Git(outside, env=env)
+
+    found = hash_blob_at(client, "sub/notes.txt", b"one\r\n", paths_from_top=True)
+    assert found == blob_id(repo, b"one\n")
+
+
 def test_hash_blob_at_writes_the_blob_only_if_asked(repo: Git) -> None:
     (Path(repo.directory) / ".gitattributes").write_bytes(b"*.txt text\n")
 
@@ -715,6 +731,7 @@ def test_git_paths_learns_the_prefix_in_the_same_process(
     git = Git(Path(repo.directory) / where)
     git_paths(git, "HEAD")
     assert git.prefix() == prefix
+    assert git.cdup() == "../" * prefix.count("/")
     assert len(git_calls) == 1
 
 
@@ -751,7 +768,7 @@ def test_git_paths_refuses_an_answer_a_line_short() -> None:
 
 def test_git_paths_refuses_an_empty_answer() -> None:
     git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse", "--show-prefix"], stdout="\n")
+    git.respond(["rev-parse", "--show-prefix"], stdout="\n\ntrue\n")
     git.prefix()
     git.respond(["rev-parse", "--path-format=absolute"])  # nothing
     with pytest.raises(ValueError):
@@ -845,7 +862,7 @@ def test_git_paths_and_head_without_names_still_gives_the_head(repo: Git) -> Non
 )
 def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> None:
     git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse"], stdout=f"\n{stdout}")  # the prefix's line first
+    git.respond(["rev-parse"], stdout=f"\n\ntrue\n{stdout}")  # prefix, cdup, inside first
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], head)
     assert git.prefix() == ""
@@ -892,7 +909,7 @@ def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo:
 
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
     git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse"], stdout="\n/g/HEAD\n")  # one path too few for two names
+    git.respond(["rev-parse"], stdout="\n\ntrue\n/g/HEAD\n")  # one path too few for two names
 
     with pytest.raises(ValueError):
         git_paths_and_head(git, "HEAD", "index")
@@ -900,7 +917,7 @@ def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
 
 def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
     git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse"], stdout="\n/g/HEAD\n", returncode=1)
+    git.respond(["rev-parse"], stdout="\n\ntrue\n/g/HEAD\n", returncode=1)
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
 
@@ -908,10 +925,10 @@ def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_he
 @pytest.mark.parametrize(
     ("stderr", "returncode", "stdout"),
     [
-        ("", 2, "\n/g/HEAD\n"),  # another exit status
-        ("fatal: it said why\n", 1, "\n/g/HEAD\n"),  # git said something
-        ("", 1, "\n/g/HEAD\nextra\n"),  # more than the paths
-        ("", 1, "\n"),  # fewer than the paths
+        ("", 2, "\n\ntrue\n/g/HEAD\n"),  # another exit status
+        ("fatal: it said why\n", 1, "\n\ntrue\n/g/HEAD\n"),  # git said something
+        ("", 1, "\n\ntrue\n/g/HEAD\nextra\n"),  # more than the paths
+        ("", 1, "\n\ntrue\n"),  # fewer than the paths
     ],
 )
 def test_git_paths_and_head_raises_for_a_failure_that_is_not_an_unborn_head(

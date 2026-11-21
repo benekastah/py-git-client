@@ -33,9 +33,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   the length of an id git printed, which in a SHA-256 repository with
   `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
   `git_paths` and `git_paths_and_head` asks it too while it isn't known, so it usually costs
-  no process: their command is `rev-parse --show-prefix --show-object-format ...` then, and a
-  `FakeGit` answering it gives `sha1` (or `sha256`) after the prefix's line, or is made with
-  `object_id_length=40`, which asks none (#67).
+  no process: a `FakeGit` answering them gives the lines the `cdup()` entry below lists, or
+  is made with `object_id_length=40`, which asks no format (#67).
+- `ReadOnlyGit.cdup()` gives the path up to the top of the worktree, as `git rev-parse
+  --show-cdup` prints it, where a tool built it from the prefix (`"../" *
+  prefix().count("/")`, which outside a worktree git knows the top of is wrong). It's asked
+  with `prefix()`. The `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head`
+  run starts with what isn't known yet: `--show-prefix --show-cdup --is-inside-work-tree`
+  while the prefix isn't, then `--show-object-format` while the object id length isn't. A
+  `FakeGit` answering it gives, in this order: the prefix's line (empty at the top), the
+  cdup's (none at all where git knows no worktree: a bare repository, a git directory),
+  `true` or `false`, then `sha1` or `sha256`; then the paths and HEAD (#67).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -48,12 +56,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   try again while the file is locked (#61).
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
-  that cached them itself can drop its cache (and its `cdup` is
-  `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process: its
-  command starts `rev-parse --show-prefix` while the prefix isn't known, so a `FakeGit`
-  answering it gives the prefix's line first (and the object format's after it: see #67's
-  entry above). A repository moved or replaced under a client that keeps its directory isn't
-  noticed; make a new client (#50).
+  that cached them itself can drop its cache (and its cdup is `cdup()`'s, remembered with
+  the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
+  gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
+  client that keeps its directory isn't noticed; make a new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -122,6 +128,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
+  the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
@@ -167,6 +175,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `hash_blob_at(..., paths_from_top=True)` from a client outside the worktree that git is
+  told of (e.g. by GIT_WORK_TREE) takes the path from the worktree's top, as `cdup()` says,
+  where it took it from the client's directory and so read the wrong attributes (#67).
 - A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
   answer unread, to answer the next request: `resolve("HEAD")` could give another name's
   id. The next request now kills that process, and starts another (#53).

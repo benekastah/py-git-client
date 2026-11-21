@@ -96,6 +96,57 @@ def test_prefix_is_asked_of_git_once_per_directory_and_environment(
     assert len(git_calls) == 3
 
 
+def add_places(repo: Git) -> None:
+    """Changes for repo_from: a deep subdirectory, a linked worktree (`linked`, beside the
+    repository) and a submodule (`mod`) with a subdirectory, and a bare clone beside it
+    (`bare.git`)."""
+    top = Path(repo.directory)
+    (top / "sub" / "deep" / "er").mkdir(parents=True)
+    repo.run("worktree", "add", "--quiet", str(top.parent / "linked"))
+    (top.parent / "linked" / "sub").mkdir()
+    repo.run("-c", "protocol.file.allow=always", "submodule", "--quiet", "add", "./", "mod")
+    (top / "mod" / "sub").mkdir()
+    Git(top.parent).run("clone", "--quiet", "--bare", "repo", "bare.git")
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "repo",
+        "repo/sub",
+        "repo/sub/deep/er",
+        "linked",
+        "linked/sub",
+        "repo/mod/sub",
+        "bare.git",
+        "repo/.git",
+        "repo/.git/objects",
+    ],
+)
+def test_cdup_and_prefix_are_what_git_prints_wherever_the_client_is(
+    where: str, repo_from: Callable[[str, Callable[[Git], None]], Git], git_calls: list[list[str]]
+) -> None:
+    copy = Path(repo_from("places", add_places).directory).parent
+    # Outside a worktree whose top it knows, git prints no cdup at all, not an empty line.
+    cdup = Git(copy / where).run_bytes("rev-parse", "--show-cdup").removesuffix(b"\n")
+    prefix = Git(copy / where).run_bytes("rev-parse", "--show-prefix").removesuffix(b"\n")
+    git = Git(copy / where)
+    started = len(git_calls)
+
+    assert (git.cdup(), git.prefix()) == (decode(cdup), decode(prefix))
+    assert len(git_calls) == started + 1
+
+
+def test_cdup_outside_the_worktree_is_its_top(repo: Git, tmp_path: Path) -> None:
+    git = Git(
+        tmp_path,
+        env={"GIT_DIR": str(Path(repo.directory) / ".git"), "GIT_WORK_TREE": repo.directory},
+    )
+
+    assert Path(git.cdup()) == Path(repo.directory)
+    assert git.prefix() == ""
+
+
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
     git = Git(tmp_path / "later")
     (tmp_path / "later").mkdir()

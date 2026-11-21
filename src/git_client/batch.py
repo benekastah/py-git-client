@@ -133,8 +133,8 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()` and `object_id_length()`, if they aren't known
-    yet."""
+    process tells the client's `prefix()` and `cdup()`, and `object_id_length()`, if they
+    aren't known yet."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -171,8 +171,8 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
     (so a tool that wants both pays for one process). The paths are as `git_paths` gives
     them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept),
-    `git.prefix()` and `git.object_id_length()`; HEAD is read afresh each time, since it
-    moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
+    `git.prefix()`, `git.cdup()` and `git.object_id_length()`; HEAD is read afresh each
+    time, since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
@@ -362,10 +362,10 @@ def hash_blob_at(
     `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
     `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
     (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
-    top (`git.prefix()`'s, asked of git once per client) and down to the path, taking it as it
-    is, with no magic."""
+    top (`git.cdup()`, asked of git once per client) and down to the path, taking it as it is,
+    with no magic."""
     if paths_from_top:
-        path = b"../" * git.prefix().count("/") + os.fsencode(path)
+        path = os.path.join(encode(git.cdup()), os.fsencode(path))
     output = git.run_bytes(
         "hash-object", *(["-w"] if write else []), "--path", path, "--stdin", input=content
     )

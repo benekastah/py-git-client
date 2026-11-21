@@ -495,10 +495,12 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
-prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
-"""Each client's `prefix()`, per location: kept here rather than on the client, so that
-`git_paths` can ask for it in the `rev-parse` it runs anyway (see `where_questions`). A client and its `read_only()`
-share theirs."""
+tops: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[str, str]]] = (
+    weakref.WeakKeyDictionary()
+)
+"""Each client's `prefix()` and `cdup()`, per location: kept here rather than on the client,
+so that `git_paths` can ask for them in the `rev-parse` it runs anyway (see
+`where_questions`). A client and its `read_only()` share theirs."""
 
 known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str], Path]] = (
     weakref.WeakKeyDictionary()
@@ -518,13 +520,21 @@ its `read_only()` share theirs."""
 _lengths_lock = threading.Lock()
 
 
+# What asks for prefix() and cdup(). Outside a worktree whose top it knows (in a bare
+# repository, or a git directory), git prints no cdup at all, not even an empty line; then the
+# line after the prefix's is --is-inside-work-tree's "true" or "false", which no cdup can be
+# (it's empty, "../"s, or the top's absolute path).
+_TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
+_INSIDE_WORK_TREE = (b"true", b"false")
+
+
 def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
     """The `rev-parse` options that ask git what the client doesn't know yet at `where` (its
-    `location`): `--show-prefix` for `prefix()`, and `--show-object-format` for
-    `object_id_length()` (unless the client was given it). A function that runs `rev-parse`
-    anyway puts them first, so they cost no process of their own, then gives the lines git
-    printed to `learn_where`."""
-    questions = [] if where in prefixes.setdefault(git, {}) else ["--show-prefix"]
+    `location`): `--show-prefix` and `--show-cdup` (with `--is-inside-work-tree`) for
+    `prefix()` and `cdup()`, and `--show-object-format` for `object_id_length()` (unless the
+    client was given it). A function that runs `rev-parse` anyway puts them first, so they
+    cost no process of their own, then gives the lines git printed to `learn_where`."""
+    questions: list[str] = [] if where in tops.setdefault(git, {}) else [*_TOP_QUESTIONS]
     if git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
         with _lengths_lock:
             known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
@@ -540,14 +550,25 @@ def learn_where(
     of `lines`, what `rev-parse` printed, and return the lines after them, the caller's.
     Raises ValueError, remembering nothing, unless as many follow as one of `rest` says, so an
     answer a line short isn't taken for another's."""
-    if len(lines) - len(questions) not in rest:
-        raise ValueError(f"rev-parse printed {len(lines)} lines, not {len(questions)} + {rest}")
-    answers = dict(zip(questions, lines, strict=False))
+    answers: dict[str, bytes] = {}
+    used = 0
+    for question in questions:
+        line = lines[used] if used < len(lines) else None
+        if question == "--show-cdup" and line in _INSIDE_WORK_TREE:
+            answers[question] = b""  # git printed none
+            continue
+        if line is None:
+            break
+        answers[question] = line
+        used += 1
+    if len(answers) < len(questions) or len(lines) - used not in rest:
+        raise ValueError(f"rev-parse printed {len(lines)} lines, too few or many for {questions}")
     if "--show-prefix" in answers:
-        prefixes.setdefault(git, {})[where] = decode(answers["--show-prefix"])
+        prefix, cdup = answers["--show-prefix"], answers["--show-cdup"]
+        tops.setdefault(git, {})[where] = decode(prefix), decode(cdup)
     if "--show-object-format" in answers:
         _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
-    return lines[len(questions) :]
+    return lines[used:]
 
 
 def rev_parse_lines(output: bytes) -> list[bytes]:
@@ -721,7 +742,7 @@ class ReadOnlyGit:
         `timeout`, `stopping`, `process_groups` and `env`, as they are now. It's of the
         client's own class, so a subclass's methods (e.g. its own `process`) and attributes
         are kept (an attribute that holds the client itself still writes through it); and it
-        shares what git told the client about where things are (`prefix()`,
+        shares what git told the client about where things are (`prefix()`, `cdup()`,
         `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
         asked, nor the client one it asked. A new copy each call; a read-only client gives
         itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
@@ -731,7 +752,7 @@ class ReadOnlyGit:
         reader = copy.copy(self)
         reader.env = dict(self.env)
         reader._read_only = True
-        prefixes[reader] = prefixes.setdefault(self, {})
+        tops[reader] = tops.setdefault(self, {})
         known_git_paths[reader] = known_git_paths.setdefault(self, {})
         known_git_dirs[reader] = known_git_dirs.setdefault(self, {})
         return reader
@@ -782,9 +803,24 @@ class ReadOnlyGit:
 
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
-        its directory isn't noticed. The same process tells `object_id_length()`, if it isn't
-        known yet."""
-        known = prefixes.setdefault(self, {})
+        its directory isn't noticed. The same process tells `cdup()`, and
+        `object_id_length()` if it isn't known yet."""
+        return self._top(timeout)[0]
+
+    def cdup(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
+        """The path from the client's directory up to the top of the worktree, as `git
+        rev-parse --show-cdup` gives it: "../" for each directory of `prefix()` ("" at the
+        top), or the top's absolute path where the directory is outside a worktree whose top
+        git knows (e.g. GIT_WORK_TREE names it); "" where git knows none (in a bare
+        repository, or a git directory), and prints nothing. Put it before a path from the top
+        to name that path from the directory. Raises GitError if git fails (e.g.
+        NotARepositoryError). Asked of git with `prefix()`, in the same one process, and
+        remembered as it is."""
+        return self._top(timeout)[1]
+
+    def _top(self, timeout: Timeout) -> tuple[str, str]:
+        """`prefix()` and `cdup()`."""
+        known = tops.setdefault(self, {})
         where = location(self)
         if where not in known:
             # Not run's, which would strip a directory's leading space.

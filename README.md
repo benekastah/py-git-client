@@ -74,6 +74,7 @@ git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
 # asked of git once per client (and directory), as are git_paths and object_id_length()
+git.cdup()  # "../" there: the way up to the top, as git prints it, asked with prefix()
 # git config, tried again while locked, for each change; what each did: an unset that removes
 # nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
 # remove), not an error. Other config writes (--add, ...): git.run("config", ...).
@@ -247,9 +248,9 @@ except ReadOnlyError:
 A tool with a `Git` for the commands that write gives the paths that only read its
 `read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
 It's of the client's own class, so a subclass's own `process` and other methods still run, and
-it shares what git told the client about where things are (`prefix()`, `object_id_length()`,
-`git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError` if the client's `env`
-holds a variable a `ReadOnlyGit` doesn't take.
+it shares what git told the client about where things are (`prefix()`, `cdup()`,
+`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError`
+if the client's `env` holds a variable a `ReadOnlyGit` doesn't take.
 
 ```python
 git = Git("path/to/repo")
