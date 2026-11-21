@@ -1033,7 +1033,7 @@ class Git(ReadOnlyGit):
 
     _read_only = False
 
-    def write_config(self, *changes: ConfigChange, wait: float = 5.0) -> list[ConfigResult]:
+    def write_configs(self, *changes: ConfigChange, wait: float = 5.0) -> list[ConfigResult]:
         """Make each change (a ConfigSet or ConfigUnset) to the config file `git config`
         writes, in order, as `git config` makes it, and say what each did. An unset that
         removes nothing doesn't fail: it's NOT_FOUND, or SEVERAL_VALUES for a key with several
@@ -1064,13 +1064,13 @@ class Git(ReadOnlyGit):
         much past `wait`. Older git fails at once, so without this, any write racing another
         process's (e.g. an editor's git) would fail."""
         for change in changes:
-            # Before any is made: a call of the old form, with git config's own arguments,
-            # comes here too.
+            # Before any is made: git config's own arguments (what the old `write_config`
+            # took) come here too.
             wrong = not isinstance(change, (ConfigSet, ConfigUnset))  # pyright: ignore[reportUnnecessaryIsInstance]
             if wrong:
                 raise TypeError(
-                    f"write_config takes a ConfigSet or ConfigUnset for each change, not"
-                    f' {change!r}: write_config("k", "v") is write_config(ConfigSet("k", "v")),'
+                    f"write_configs takes a ConfigSet or ConfigUnset for each change, not"
+                    f' {change!r}: the old write_config("k", "v") is write_configs(ConfigSet("k", "v")),'
                     ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
                 )
         if not changes:
@@ -1084,7 +1084,7 @@ class Git(ReadOnlyGit):
 
     def _config_write(self, *args: Arg, wait: float) -> None:
         """Run `git config <args>`, a write, trying it again while the file is locked (see
-        write_config)."""
+        write_configs)."""
         deadline = time.monotonic() + wait
         delay = 0.01
         while True:
@@ -1099,7 +1099,7 @@ class Git(ReadOnlyGit):
                 delay = min(delay * 2, 0.5)
 
     def _config_file(self, changes: Sequence[ConfigChange]) -> Path | None:
-        """The file write_config edits itself for `changes`, or None for git to make them:
+        """The file write_configs edits itself for `changes`, or None for git to make them:
         changes `config_file.edit` can't make, or $GIT_CONFIG naming another file for `git
         config` to write."""
         if not config_file.editable(changes) or "GIT_CONFIG" in self.environment():

@@ -1,4 +1,4 @@
-"""The changes `Git.write_config` makes to a repository's config, what each did, and
+"""The changes `Git.write_configs` makes to a repository's config, what each did, and
 how to make them as `git config` does, so that a batch takes no git process: a port of git's
 own reader and writer of config files (config.c, the same from git 2.36 to 2.56 but where
 said). It edits only keys of `[branch "<name>"]` sections, and leaves to git (`edit` gives
@@ -27,7 +27,7 @@ from git_client.errors import ConfigLockedError, NotStartedError
 
 @dataclass(frozen=True)
 class ConfigSet:
-    """For `Git.write_config`: set `key` to `value`, as `git config <key> <value>`."""
+    """For `Git.write_configs`: set `key` to `value`, as `git config <key> <value>`."""
 
     key: str
     value: str
@@ -35,7 +35,7 @@ class ConfigSet:
 
 @dataclass(frozen=True)
 class ConfigUnset:
-    """For `Git.write_config`: remove `key`, as `git config --unset <key>`; with a
+    """For `Git.write_configs`: remove `key`, as `git config --unset <key>`; with a
     `value`, only that value of it, as `git config --unset --fixed-value <key> <value>` (for
     a key with several values). A key with no value (a line holding only its name) is
     removed whatever `value` says, as git does from 2.46.1 (older git crashes on it)."""
@@ -48,7 +48,7 @@ type ConfigChange = ConfigSet | ConfigUnset
 
 
 class ConfigResult(enum.Enum):
-    """What one change of `Git.write_config` did."""
+    """What one change of `Git.write_configs` did."""
 
     CHANGED = "changed"
     """It was made. A set always is, even to the value the key had, which git writes again."""

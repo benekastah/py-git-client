@@ -1,4 +1,4 @@
-"""Git.write_config, and the config file editor behind it, checked against `git
+"""Git.write_configs, and the config file editor behind it, checked against `git
 config`'s own edits of a copy of the same file."""
 
 import errno
@@ -256,7 +256,7 @@ def config_file(repo: Git) -> Path:
     return Path(repo.directory) / ".git" / "config"
 
 
-def test_write_config_makes_a_batch_as_git_config_would_with_no_process(
+def test_write_configs_makes_a_batch_as_git_config_would_with_no_process(
     repo: Git, tmp_path: Path, git_calls: list[GitCall]
 ) -> None:
     changes: list[ConfigChange] = [
@@ -266,8 +266,8 @@ def test_write_config_makes_a_batch_as_git_config_would_with_no_process(
     ]
     before = config_file(repo).read_bytes()
 
-    results = repo.write_config(*changes)
-    repo.write_config(*changes[-2:])
+    results = repo.write_configs(*changes)
+    repo.write_configs(*changes[-2:])
 
     assert [call[0] for call in git_calls] == ["rev-parse"]  # git_paths, then remembered
     assert (config_file(repo).read_bytes(), results) == git_edits(tmp_path, before, changes)
@@ -284,14 +284,14 @@ UNSETS: list[tuple[ConfigChange, ConfigResult]] = [
 
 
 @pytest.mark.parametrize("by_git", [False, True], ids=["itself", "falling back to git"])
-def test_write_config_tells_unsets_apart_as_git_does(
+def test_write_configs_tells_unsets_apart_as_git_does(
     repo: Git, git_calls: list[GitCall], by_git: bool
 ) -> None:
     config_file(repo).write_bytes(TWO + b"\ty = 1\n")
     # A key not a branch's is git's to set.
     first: list[ConfigChange] = [ConfigSet("core.forced", "1")] if by_git else []
 
-    results = repo.write_config(*first, *(change for change, _ in UNSETS))
+    results = repo.write_configs(*first, *(change for change, _ in UNSETS))
 
     assert results[len(first) :] == [result for _, result in UNSETS]
     assert any(call[0] == "config" for call in git_calls) == by_git
@@ -325,13 +325,13 @@ def legacy_header(repo: Git, tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("fall_back", [set_git_config, symlinked_once_known, legacy_header])
-def test_write_config_falls_back_to_git(
+def test_write_configs_falls_back_to_git(
     repo: Git, tmp_path: Path, git_calls: list[GitCall], fall_back: Callable[[Git, Path], None]
 ) -> None:
     fall_back(repo, tmp_path)
     started = len(git_calls)
 
-    results = repo.write_config(ConfigSet("branch.x.y", "1"), ConfigUnset("branch.x.z"))
+    results = repo.write_configs(ConfigSet("branch.x.y", "1"), ConfigUnset("branch.x.z"))
 
     assert results == [ConfigResult.CHANGED, ConfigResult.NOT_FOUND]
     assert [call[:3] for call in git_calls[started:] if call[0] == "config"] == [
@@ -342,33 +342,33 @@ def test_write_config_falls_back_to_git(
     assert config_file(repo).is_symlink() == (fall_back is symlinked_once_known)
 
 
-def test_write_config_writes_the_file_a_symbolic_link_names_as_git_does(
+def test_write_configs_writes_the_file_a_symbolic_link_names_as_git_does(
     repo: Git, tmp_path: Path
 ) -> None:
     target = symlink_config(repo, tmp_path)
 
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert config_file(repo).is_symlink()
     assert b'[branch "a"]' in target.read_bytes()
 
 
-def test_write_config_leaves_a_config_it_cant_read_to_git(repo: Git) -> None:
+def test_write_configs_leaves_a_config_it_cant_read_to_git(repo: Git) -> None:
     git_paths(repo, "config")
     config_file(repo).rename(config_file(repo).with_name("elsewhere"))
     config_file(repo).mkdir()
 
     with pytest.raises(GitError):  # git's, not an OSError of ours
-        repo.write_config(ConfigSet("branch.a.x", "1"))
+        repo.write_configs(ConfigSet("branch.a.x", "1"))
 
 
-def test_write_config_falling_back_keeps_the_changes_before_one_git_rejects(
+def test_write_configs_falling_back_keeps_the_changes_before_one_git_rejects(
     repo: Git,
 ) -> None:
     config_file(repo).write_bytes(TWO)
 
     with pytest.raises(GitError) as raised:
-        repo.write_config(ConfigSet("branch.m.y", "1"), ConfigSet("branch.m.x", "3"))
+        repo.write_configs(ConfigSet("branch.m.y", "1"), ConfigSet("branch.m.x", "3"))
 
     assert raised.value.returncode == 5
     assert repo.run("config", "branch.m.y") == "1"
@@ -381,12 +381,12 @@ def lock(repo: Git) -> Path:
     return held
 
 
-def test_write_config_waits_while_the_config_is_locked(repo: Git) -> None:
+def test_write_configs_waits_while_the_config_is_locked(repo: Git) -> None:
     timer = threading.Timer(0.2, lock(repo).unlink)
     start = time.monotonic()
     timer.start()
     try:
-        repo.write_config(ConfigSet("branch.a.x", "1"))
+        repo.write_configs(ConfigSet("branch.a.x", "1"))
     finally:
         timer.join()
 
@@ -395,13 +395,13 @@ def test_write_config_waits_while_the_config_is_locked(repo: Git) -> None:
 
 
 @pytest.mark.parametrize("key", ["branch.a.x", "core.x"], ids=["itself", "falling back to git"])
-def test_write_config_gives_up_once_its_wait_is_over(repo: Git, key: str) -> None:
+def test_write_configs_gives_up_once_its_wait_is_over(repo: Git, key: str) -> None:
     repo.run("config", "core.configLockTimeout", "0")  # git fails at once, as before 2.56
     before = config_file(repo).read_bytes()
     held = lock(repo)
 
     with pytest.raises(ConfigLockedError) as raised:
-        repo.write_config(ConfigSet(key, "1"), wait=0.2)
+        repo.write_configs(ConfigSet(key, "1"), wait=0.2)
 
     # git's own error, or the same.
     assert (raised.value.command, raised.value.returncode) == (["config", key, "1"], 255)
@@ -409,12 +409,12 @@ def test_write_config_gives_up_once_its_wait_is_over(repo: Git, key: str) -> Non
     assert config_file(repo).read_bytes() == before
 
 
-def test_write_config_and_git_config_writing_at_once_lose_nothing(repo: Git) -> None:
+def test_write_configs_and_git_config_writing_at_once_lose_nothing(repo: Git) -> None:
     def ours(i: int) -> None:
-        repo.write_config(ConfigSet(f"branch.ours{i}.x", "1"), ConfigSet(f"branch.ours{i}.y", "2"))
+        repo.write_configs(ConfigSet(f"branch.ours{i}.x", "1"), ConfigSet(f"branch.ours{i}.y", "2"))
 
     def gits(i: int) -> None:
-        repo.write_config(ConfigSet(f"gits.n{i}.x", "1"))  # not a branch's: git config's
+        repo.write_configs(ConfigSet(f"gits.n{i}.x", "1"))  # not a branch's: git config's
 
     with ThreadPoolExecutor(8) as pool:
         for future in [pool.submit(ours if i % 2 else gits, i) for i in range(16)]:
@@ -433,7 +433,7 @@ def test_write_config_and_git_config_writing_at_once_lose_nothing(repo: Git) -> 
         ("replace", PermissionError()),
     ],
 )
-def test_write_config_leaves_a_write_that_fails_midway_to_git(
+def test_write_configs_leaves_a_write_that_fails_midway_to_git(
     repo: Git,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -448,7 +448,7 @@ def test_write_config_leaves_a_write_that_fails_midway_to_git(
         raise error
 
     monkeypatch.setattr(os, call, fail)
-    repo.write_config(ConfigSet("branch.a.x", "1"), wait=0.1)
+    repo.write_configs(ConfigSet("branch.a.x", "1"), wait=0.1)
 
     # Nothing of ours kept, and git's own write (or its error) instead.
     assert [call for call in git_calls[started:] if call[0] == "config"] == [
@@ -471,19 +471,19 @@ def fail_one_close(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "close", close_then_fail)
 
 
-def test_write_config_whose_close_fails_leaves_no_lock_and_falls_back(
+def test_write_configs_whose_close_fails_leaves_no_lock_and_falls_back(
     repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
 ) -> None:
     git_paths(repo, "config")
     fail_one_close(monkeypatch)
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert [call[:2] for call in git_calls[1:]] == [["config", "branch.a.x"]]
     assert not config_file(repo).with_name("config.lock").exists()
     assert repo.run("config", "branch.a.x") == "1"
 
 
-def test_write_config_once_written_doesnt_look_for_its_lock(
+def test_write_configs_once_written_doesnt_look_for_its_lock(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Where inode numbers don't tell files apart (0 on some filesystems, or one reused at
@@ -496,10 +496,10 @@ def test_write_config_once_written_doesnt_look_for_its_lock(
 
     monkeypatch.setattr(os, "lstat", no_lock)
 
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
 
-def test_write_config_whose_write_and_close_both_fail_falls_back(
+def test_write_configs_whose_write_and_close_both_fail_falls_back(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     git_paths(repo, "config")
@@ -509,23 +509,23 @@ def test_write_config_whose_write_and_close_both_fail_falls_back(
 
     monkeypatch.setattr(os, "write", fail)
     fail_one_close(monkeypatch)
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert repo.run("config", "branch.a.x") == "1"
     assert not config_file(repo).with_name("config.lock").exists()
 
 
-def test_write_config_whose_close_fails_with_nothing_to_change_says_so(
+def test_write_configs_whose_close_fails_with_nothing_to_change_says_so(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     git_paths(repo, "config")
     fail_one_close(monkeypatch)
 
-    assert repo.write_config(ConfigUnset("branch.a.x")) == [ConfigResult.NOT_FOUND]
+    assert repo.write_configs(ConfigUnset("branch.a.x")) == [ConfigResult.NOT_FOUND]
     assert not config_file(repo).with_name("config.lock").exists()
 
 
-def test_write_config_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: Git) -> None:
+def test_write_configs_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: Git) -> None:
     git_paths(repo, "config")
     before = config_file(repo).read_bytes()
     held = lock(repo)
@@ -537,7 +537,7 @@ def test_write_config_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: G
     timer.start()
     try:
         with pytest.raises(NotStartedError):
-            repo.write_config(ConfigSet("branch.a.x", "1"), wait=5)
+            repo.write_configs(ConfigSet("branch.a.x", "1"), wait=5)
     finally:
         timer.join()
 
@@ -546,7 +546,7 @@ def test_write_config_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: G
     assert config_file(repo).read_bytes() == before
 
 
-def test_write_config_interrupted_once_written_leaves_anothers_lock(
+def test_write_configs_interrupted_once_written_leaves_anothers_lock(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replace = os.replace
@@ -558,13 +558,13 @@ def test_write_config_interrupted_once_written_leaves_anothers_lock(
 
     monkeypatch.setattr(os, "replace", replace_then_interrupt)
     with pytest.raises(KeyboardInterrupt):
-        repo.write_config(ConfigSet("branch.a.x", "1"))
+        repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert config_file(repo).with_name("config.lock").exists()
     assert b'[branch "a"]' in config_file(repo).read_bytes()
 
 
-def test_write_config_tries_a_rename_windows_refuses_again(
+def test_write_configs_tries_a_rename_windows_refuses_again(
     repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
 ) -> None:
     refusals = [PermissionError("in use")]  # as Windows refuses while the file is open
@@ -576,14 +576,14 @@ def test_write_config_tries_a_rename_windows_refuses_again(
         replace(source, destination)
 
     monkeypatch.setattr(os, "replace", refuse_once)
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert repo.run("config", "branch.a.x") == "1"
     # Only Windows' refusal passes: elsewhere, git writes it.
     assert any(call[0] == "config" for call in git_calls[:-1]) == (sys.platform != "win32")
 
 
-def test_write_config_leaves_a_lock_it_cant_make_to_git(
+def test_write_configs_leaves_a_lock_it_cant_make_to_git(
     repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
 ) -> None:
     open_file = os.open
@@ -594,12 +594,12 @@ def test_write_config_leaves_a_lock_it_cant_make_to_git(
         return open_file(path, flags, mode)
 
     monkeypatch.setattr(os, "open", refuse_the_lock)
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert git_calls[-1][:2] == ["config", "branch.a.x"]
 
 
-def test_write_config_waits_for_a_reader_that_keeps_windows_from_replacing_the_file(
+def test_write_configs_waits_for_a_reader_that_keeps_windows_from_replacing_the_file(
     repo: Git,
 ) -> None:
     # Windows won't replace a file another process has open without sharing its deletion,
@@ -608,75 +608,77 @@ def test_write_config_waits_for_a_reader_that_keeps_windows_from_replacing_the_f
     timer = threading.Timer(0.2, reader.close)
     timer.start()
     try:
-        repo.write_config(ConfigSet("branch.a.x", "1"))
+        repo.write_configs(ConfigSet("branch.a.x", "1"))
     finally:
         timer.join()
 
     assert repo.run("config", "branch.a.x") == "1"
 
 
-def test_write_config_keeps_the_files_permissions(repo: Git) -> None:
+def test_write_configs_keeps_the_files_permissions(repo: Git) -> None:
     config_file(repo).chmod(0o640)  # Windows keeps only whether it's read-only
     mode = stat.S_IMODE(config_file(repo).stat().st_mode)
 
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert stat.S_IMODE(config_file(repo).stat().st_mode) == mode
 
 
-def test_write_config_leaves_a_read_only_config_to_git(repo: Git, git_calls: list[GitCall]) -> None:
+def test_write_configs_leaves_a_read_only_config_to_git(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
     # Windows won't replace a read-only file, nor remove a read-only lock; git for Windows
     # clears the flag first.
     config_file(repo).chmod(0o444)
 
-    repo.write_config(ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert repo.run("config", "branch.a.x") == "1"
     assert git_calls[-2][:2] == ["config", "branch.a.x"]
     assert not config_file(repo).with_name("config.lock").exists()
 
 
-def test_write_config_writes_no_file_when_nothing_changes(repo: Git) -> None:
+def test_write_configs_writes_no_file_when_nothing_changes(repo: Git) -> None:
     before = config_file(repo).stat().st_mtime_ns
     time.sleep(0.01)
 
-    results = repo.write_config(ConfigUnset("branch.a.x"), ConfigUnset("branch.b.y", "1"))
+    results = repo.write_configs(ConfigUnset("branch.a.x"), ConfigUnset("branch.b.y", "1"))
 
     assert results == [ConfigResult.NOT_FOUND, ConfigResult.NOT_FOUND]
     assert config_file(repo).stat().st_mtime_ns == before
     assert not config_file(repo).with_name("config.lock").exists()
 
 
-def test_write_config_makes_a_config_file_where_there_is_none(
+def test_write_configs_makes_a_config_file_where_there_is_none(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
     git_paths(repo, "config")
     config_file(repo).unlink()
 
-    repo.write_config(ConfigUnset("branch.a.y"), ConfigSet("branch.a.x", "1"))
+    repo.write_configs(ConfigUnset("branch.a.y"), ConfigSet("branch.a.x", "1"))
 
     assert config_file(repo).read_bytes() == b'[branch "a"]\n\tx = 1\n'  # as git makes it
     assert [call[0] for call in git_calls] == ["rev-parse"]
 
 
-def test_write_config_writes_nothing_once_the_tool_is_stopping(repo: Git) -> None:
+def test_write_configs_writes_nothing_once_the_tool_is_stopping(repo: Git) -> None:
     git_paths(repo, "config")
     before = config_file(repo).read_bytes()
     repo.stopping = lambda: True
 
     with pytest.raises(NotStartedError):
-        repo.write_config(ConfigSet("branch.a.x", "1"))
+        repo.write_configs(ConfigSet("branch.a.x", "1"))
 
     assert config_file(repo).read_bytes() == before
 
 
-def test_write_config_writes_the_common_config_from_a_linked_worktree(
+def test_write_configs_writes_the_common_config_from_a_linked_worktree(
     repo: Git, tmp_path: Path
 ) -> None:
     repo.run("worktree", "add", "--quiet", str(tmp_path / "linked"))
     repo.run("config", "extensions.worktreeConfig", "true")
 
-    Git(tmp_path / "linked").write_config(ConfigSet("branch.a.x", "1"))
+    Git(tmp_path / "linked").write_configs(ConfigSet("branch.a.x", "1"))
 
     assert b'[branch "a"]' in config_file(repo).read_bytes()
 
@@ -685,6 +687,6 @@ def test_fake_git_runs_git_config_for_each_change() -> None:
     git = FakeGit()
     git.respond(["config"])
 
-    git.write_config(ConfigSet("branch.a.x", "1"), ConfigUnset("branch.a.y"))
+    git.write_configs(ConfigSet("branch.a.x", "1"), ConfigUnset("branch.a.y"))
 
     assert git.commands == [["config", "branch.a.x", "1"], ["config", "--unset", "branch.a.y"]]

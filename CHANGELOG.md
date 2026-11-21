@@ -8,12 +8,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
-- `Git.write_config` takes changes, not `git config`'s arguments, and returns what each did
-  (a list of `ConfigResult`), not git's output: `git.write_config("k", "v")` becomes
-  `git.write_config(ConfigSet("k", "v"))`, and `git.write_config("--unset", k)` becomes
-  `git.write_config(ConfigUnset(k))`: where git failed with exit 5, its result says so,
-  rather than raise, as `NOT_FOUND` for a key that isn't set, and `SEVERAL_VALUES` for one
-  with several values (`ConfigUnset(k, v)` removes only the value `v`, as
+- `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
+  arguments, and returns what each did (a list of `ConfigResult`), not git's output:
+  `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
+  `git.write_config("--unset", k)` becomes `git.write_configs(ConfigUnset(k))`: where git
+  failed with exit 5, its result says so, rather than raise, as `NOT_FOUND` for a key that
+  isn't set, and `SEVERAL_VALUES` for one with several values (`ConfigUnset(k, v)` removes only the value `v`, as
   `--unset --fixed-value`, and a key with no value whatever `v` says, as git does from
   2.46.1, where older git crashes). Other `git config` writes (`--add`, `--rename-section`,
   `--worktree`, ...) go through `git.run("config", ...)`, which doesn't try again while the
@@ -102,7 +102,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
-- Many config changes in one `Git.write_config` call, each a `ConfigSet` or `ConfigUnset`
+- Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
@@ -111,7 +111,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
   stack's pairs cost about the same in any history; or through the tool's own `CatFile`
   (`cat_file=`), starting no process (#60).
-- `Git.write_config` starts no git process (but `git_paths`' first, to find the file) where
+- `Git.write_configs` starts no git process (but `git_paths`' first, to find the file) where
   every change is a `branch.<name>.<key>`: it edits the config file itself, as `git config`
   would, under git's `config.lock`, all or none. It leaves to `git config` what it can't be
   sure of (other keys, a file git can't read or that's read-only, a header written
