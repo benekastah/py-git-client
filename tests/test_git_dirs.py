@@ -56,6 +56,13 @@ def test_a_read_only_client_runs_the_command_itself(repo: Git, tmp_path: Path) -
     assert_as_git_says(ReadOnlyGit(tmp_path / "linked"))
 
 
+def test_git_dir_in_the_clients_env_wins_as_for_git(repo: Git, tmp_path: Path) -> None:
+    other = Git(tmp_path, env={"GIT_DIR": str(Path(repo.directory) / ".git")})
+
+    assert_as_git_says(other)
+    assert git_dir(other) == git_dir(repo)
+
+
 def test_a_bare_repository(repo: Git, tmp_path: Path) -> None:
     bare = tmp_path / "bare.git"
     repo.run("clone", "--quiet", "--bare", repo.directory, str(bare))

@@ -8,14 +8,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
-- `git_common_dir(directory)` and `git_dir(directory)` take a client (`Git` or
-  `ReadOnlyGit`), not a directory, and run git, where they read the repository's files:
-  `git_common_dir("path/to/repo")` becomes `git_common_dir(git)`, the answer of `git
-  rev-parse --path-format=absolute --git-common-dir` (one process answers both, remembered
-  per client and location, as `git_paths` and `prefix()` are). They raise
-  `NotARepositoryError` where they returned None, and look at no directory without a client.
-  From a subdirectory of a checkout they give its repository's, as git does, where they gave
-  None (#65).
+- `git_common_dir(directory)` takes a client (`Git` or `ReadOnlyGit`), not a directory, and
+  runs git, where it read the repository's files: `git_common_dir("path/to/repo")` becomes
+  `git_common_dir(git)`, from one `git rev-parse --path-format=absolute --git-dir
+  --git-common-dir` (a `FakeGit` answering it gives two lines: the git directory, then the
+  common one), remembered per client and location, as `git_paths` and `prefix()` are. It raises `NotARepositoryError` where it
+  returned None, and gives a subdirectory's repository, as git does, where it gave None. As
+  git does, it follows `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`, from the client's
+  `env` and the process's environment, which it ignored: a tool run from a git hook (where
+  git sets `GIT_DIR`) that asks of another repository removes them from `os.environ` first
+  (a client's `env` can set a variable, not remove one), or gets the hook's repository
+  (#65).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
