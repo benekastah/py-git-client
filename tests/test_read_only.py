@@ -304,14 +304,13 @@ def test_a_client_and_its_read_only_one_share_what_git_told_them(
     repo: Git, git_calls: list[list[str]]
 ) -> None:
     git = Git(repo.directory)
-    git.prefix()
-    git.object_id_length()
+    git.prefix()  # and the cdup and object id length, in the same process
     reader = git.read_only()
-    git_paths(reader, "HEAD")
     started = len(git_calls)
 
-    assert reader.prefix() == ""
-    assert reader.object_id_length() == 40
+    assert (reader.prefix(), reader.cdup(), reader.object_id_length()) == ("", "", 40)
+    git_paths(reader, "HEAD")
+    started += 1  # the reader's question, which the client then needn't ask
     git_paths(git, "HEAD")
 
     assert len(git_calls) == started
