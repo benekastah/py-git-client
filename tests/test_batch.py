@@ -283,33 +283,12 @@ def test_patch_ids_gives_the_same_ids_whatever_the_config_says(
     assert [len(patches) for patches in expected] == [3, 1]
 
 
-def test_patch_ids_reads_a_diff_of_two_revisions_with_diff_tree(
-    repo_from: RepoFrom, git_calls: list[GitCall]
-) -> None:
-    repo = topic_changing(repo_from, "b")
-    (Path(repo.directory) / "b").write_bytes(b"in the worktree\n")
-
-    # Which a ReadOnlyGit runs, and which doesn't write the index.
-    log, diff = patch_ids(repo.read_only(), *TOPIC)
-    started = len(git_calls)
-    [worktree] = patch_ids(repo, ["diff", "topic"])
-
-    assert diff == [(log[0][0], "0" * 40)]
-    assert [call[0] for call in git_calls[:started]] == [
-        "rev-parse",
-        "log",
-        "diff-tree",
-        "patch-id",
-    ]
-    assert git_calls[started][0] == "diff"
-    assert worktree and worktree[0][0] != log[0][0]
-
-
-@pytest.mark.parametrize("command", [["diff", "-S", "b", "main"], ["diff", "main"]])
-def test_patch_ids_runs_any_other_diff_as_diff(
+@pytest.mark.parametrize(
+    "command", [["diff", "main", "topic"], ["diff", "-S", "b", "main"], ["diff", "main"]]
+)
+def test_patch_ids_runs_a_diff_as_diff(
     repo_from: RepoFrom, git_calls: list[GitCall], command: list[str]
 ) -> None:
-    # Each compares the worktree: the value of an option isn't a second revision.
     repo = topic_changing(repo_from, "b")
 
     patch_ids(repo, command)
@@ -357,17 +336,15 @@ def test_patch_ids_gives_a_diff_and_a_log_the_same_ids_whatever_the_config_says(
     assert diff == (log[0], "0" * 40)
 
 
-def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(
-    repo_from: RepoFrom, git_calls: list[GitCall]
-) -> None:
-    # diff-tree takes only trees and commits.
+def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(repo_from: RepoFrom) -> None:
+    # Blobs' ids, which `git diff` takes, but `git diff-tree -p` doesn't. (The patch names
+    # each file by its id, so its id isn't the commit's.)
     repo = topic_changing(repo_from, "b")
-    blobs = ["diff", "main:b", "topic:b"]
+    blobs = ["diff", repo.run("rev-parse", "main:b"), repo.run("rev-parse", "topic:b")]
 
-    [[(patch_id, _)]] = patch_ids(repo, blobs)
+    [[(_, commit)]] = patch_ids(repo, blobs)
 
-    assert git_calls[-2][0] == "diff"
-    assert patch_id == patch_ids(repo, TOPIC[0])[0][0][0]
+    assert commit == "0" * 40
     with pytest.raises(ReadOnlyError):
         patch_ids(repo.read_only(), blobs)
 
