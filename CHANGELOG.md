@@ -54,8 +54,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a diff and a log give a change the same id whatever `diff.renames`, `diff.context`,
   `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones
   git gives by default (#55).
-- `RefSnapshot` keeps what it read past `remote -v`, and past the `git config` reads a
-  `ReadOnlyGit` now runs (#55).
 - A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to run
   from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose driver
   has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own diff;
@@ -70,9 +68,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
   Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
   failure raises `RemoteError` from `run`, as before (#52).
-- A `Git` subclass that overrides `process` calls `super().process` to start git: one that
-  starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
-  changed (#50).
 
 - `object_id_length()` learns the length from the first full id `refs`, `Git.resolve` or a
   `CatFile` reads at the client's location, and then starts no `git rev-parse
@@ -152,10 +147,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   couldn't merge that pair. It takes a `Git`, as merge-tree writes objects (#59).
 - `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
   worktree's own, not the main one), read from its files without starting git (#50).
-- `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
-  until a command that may change a ref or a branch's upstream runs through any `Git` (or
-  `FakeGit`) in the process. git-stack's own snapshot of refs, and its list of the commands
-  that change them, can go (#50).
 - `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
   refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
 - `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it

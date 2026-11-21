@@ -1,5 +1,4 @@
-"""Which git commands only read: what a ReadOnlyGit runs, and RefSnapshot takes as keeping
-refs."""
+"""Which git commands only read: what a ReadOnlyGit runs."""
 
 from collections.abc import Sequence
 
