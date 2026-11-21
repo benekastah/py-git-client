@@ -425,6 +425,24 @@ def test_write_config_changes_nothing_if_it_fails_midway(
     assert not config_file(repo).with_name("config.lock").exists()
 
 
+def test_write_config_interrupted_once_written_leaves_anothers_lock(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replace = os.replace
+
+    def replace_then_interrupt(source: Path, destination: Path) -> None:
+        replace(source, destination)
+        lock(repo)  # another process's, as soon as ours is gone
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "replace", replace_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        repo.write_config(ConfigSet("branch.a.x", "1"))
+
+    assert config_file(repo).with_name("config.lock").exists()
+    assert b'[branch "a"]' in config_file(repo).read_bytes()
+
+
 def test_write_config_tries_a_refused_rename_again(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:

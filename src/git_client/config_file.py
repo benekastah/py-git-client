@@ -271,11 +271,12 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
     (Windows refuses one while another process has the file open without sharing its
     deletion)."""
     lock = path.with_name(path.name + ".lock")
-    fd = _lock(lock, path, wait)
-    if fd is None:
-        return None
-    renamed = False
+    fd: int | None = None
+    ours: os.stat_result | None = None  # the lock's, once closed
     try:
+        fd = _lock(lock, path, wait)
+        if fd is None:
+            return None
         try:
             if path.is_symlink():
                 return None
@@ -299,16 +300,29 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
         while view:
             view = view[os.write(fd, view) :]
         os.fsync(fd)
+        ours = os.fstat(fd)
         os.close(fd)
         fd = None
         _retry(PermissionError, wait, lambda: os.replace(lock, path))
-        renamed = True
         return results
     finally:
+        # Whatever stops it (e.g. KeyboardInterrupt), but only our lock: once renamed, the
+        # lock may be another process's.
         if fd is not None:
+            ours = os.fstat(fd)
             os.close(fd)
-        if not renamed:
-            lock.unlink(missing_ok=True)
+        if ours is not None:
+            _remove_if_ours(lock, ours)
+
+
+def _remove_if_ours(lock: Path, ours: os.stat_result) -> None:
+    """Remove `lock` if it's still the file `ours` describes."""
+    try:
+        now = os.lstat(lock)
+    except FileNotFoundError:
+        return
+    if (now.st_dev, now.st_ino) == (ours.st_dev, ours.st_ino):
+        lock.unlink(missing_ok=True)
 
 
 def _lock(lock: Path, path: Path, wait: float) -> int | None:
