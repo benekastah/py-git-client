@@ -18,32 +18,31 @@ find_git.cache_clear()
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "needs_git(major, minor, reason=...): skip the test with a git older than major.minor",
+        "needs_git(major, minor, patch=0, reason=...): skip the test with an older git",
     )
 
 
 @functools.cache
-def _git_version() -> tuple[int, int]:
-    """The tests' git's version, e.g. (2, 56): "git version 2.56.0.windows.4" too."""
-    found = re.match(r"git version (\d+)\.(\d+)", Git(".").run("version"))
+def _git_version() -> tuple[int, int, int]:
+    """The tests' git's version, e.g. (2, 56, 0): "git version 2.56.0.windows.4" too."""
+    found = re.match(r"git version (\d+)\.(\d+)\.(\d+)", Git(".").run("version"))
     assert found, "git's version isn't one"
-    return int(found[1]), int(found[2])
+    return int(found[1]), int(found[2]), int(found[3])
 
 
 @pytest.fixture
-def git_version() -> tuple[int, int]:
-    """The tests' git's version, e.g. (2, 56)."""
+def git_version() -> tuple[int, int, int]:
+    """The tests' git's version, e.g. (2, 56, 0)."""
     return _git_version()
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
     for mark in item.iter_markers("needs_git"):
-        needed: tuple[int, int] = mark.args
+        needed: tuple[int, ...] = mark.args
         if _git_version() < needed:
             reason = mark.kwargs.get("reason", "")
-            pytest.skip(
-                f"needs git {needed[0]}.{needed[1]} or newer" + (f": {reason}" if reason else "")
-            )
+            version = ".".join(map(str, needed))
+            pytest.skip(f"needs git {version} or newer" + (f": {reason}" if reason else ""))
 
 
 Changes = Callable[[Git], None]

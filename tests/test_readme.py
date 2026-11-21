@@ -55,7 +55,7 @@ def test_the_readmes_python_examples_run(
     repo_templates: RepoTemplates,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    git_version: tuple[int, int],
+    git_version: tuple[int, int, int],
 ) -> None:
     repo_templates.build("readme", make_readme_repository)
     monkeypatch.chdir(repo_templates.copy("readme", tmp_path / "copy"))

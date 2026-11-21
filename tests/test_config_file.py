@@ -177,9 +177,11 @@ def git_edits(
     return (path.read_bytes() if path.exists() else None), results
 
 
-# What older git can't do: before 2.47, `git config --unset --fixed-value` of a key with no
+# What older git can't do: before 2.46.1, `git config --unset --fixed-value` of a key with no
 # value crashes (config.c's matches() compares the value it lacks).
-CASES_NEED_GIT = {"a key with no value": pytest.mark.needs_git(2, 47, reason="git crashes before")}
+CASES_NEED_GIT = {
+    "a key with no value": pytest.mark.needs_git(2, 46, 1, reason="git crashes before")
+}
 
 
 @pytest.mark.parametrize(

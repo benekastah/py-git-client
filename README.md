@@ -88,6 +88,8 @@ git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at 
 # Branch keys take no process (but git_paths' first): the file is edited as git config would,
 # all or none; anything else, or a file it can't be sure of, is git config's, one at a time,
 # tried again while locked. Other config writes (--add, ...): git.run("config", ...).
+# ConfigUnset(key, value) removes only that value, or a key with no value whatever value
+# says (as git from 2.46.1; older git crashes on it).
 git.write_config(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised; only passthrough gives git the

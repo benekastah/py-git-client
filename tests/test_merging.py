@@ -382,7 +382,7 @@ def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_re
 def test_without_write_tree_it_says_which_git_it_needs(
     merges: tuple[Git, dict[str, str]],
     monkeypatch: pytest.MonkeyPatch,
-    git_version: tuple[int, int],
+    git_version: tuple[int, int, int],
 ) -> None:
     git, ids = merges
     if git_version >= (2, 38):

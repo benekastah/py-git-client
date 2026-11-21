@@ -575,7 +575,7 @@ def test_a_damaged_commit_is_no_ones_ancestor_or_descendant(damaged_repo: Git) -
 
 
 def test_a_commit_only_its_commit_graph_can_read_answers_as_merge_base_does(
-    git_calls: list[GitCall], shapes: tuple[Git, list[str]], git_version: tuple[int, int]
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]], git_version: tuple[int, int, int]
 ) -> None:
     git, c = shapes
     git.run("commit-graph", "write", "--reachable")

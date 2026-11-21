@@ -7,7 +7,9 @@ None) what it can't be sure it edits as git would.
 On two points, deliberately, the file isn't byte for byte what `git config` would write: in
 a file whose every line ends in CRLF, the lines written end in CRLF too (git writes LF); and
 a value with a carriage return is quoted, as git quotes it only from 2.51 (older git can't
-read back the value it writes)."""
+read back the value it writes). And an unset of one value (`ConfigUnset(key, value)`) of a
+key with no value (`[branch "a"]` then a line `flag`) removes it, as git does from 2.46.1:
+older git crashes on it."""
 
 import contextlib
 import enum
@@ -35,7 +37,8 @@ class ConfigSet:
 class ConfigUnset:
     """For `Git.write_config`: remove `key`, as `git config --unset <key>`; with a
     `value`, only that value of it, as `git config --unset --fixed-value <key> <value>` (for
-    a key with several values)."""
+    a key with several values). A key with no value (a line holding only its name) is
+    removed whatever `value` says, as git does from 2.46.1 (older git crashes on it)."""
 
     key: str
     value: str | None = None
