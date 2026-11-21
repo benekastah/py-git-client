@@ -8,6 +8,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `git_common_dir(directory)` takes a client (`Git` or `ReadOnlyGit`), not a directory, and
+  runs git, where it read the repository's files: `git_common_dir("path/to/repo")` becomes
+  `git_common_dir(git)`, from one `git rev-parse --path-format=absolute --git-dir
+  --git-common-dir` (a `FakeGit` answering it gives two lines: the git directory, then the
+  common one), remembered per client and location, as `git_paths` and `prefix()` are. It
+  raises `NotARepositoryError` where it returned None, and gives a subdirectory's repository,
+  as git does, where it gave None. As git does, it follows `GIT_DIR`, `GIT_COMMON_DIR` and
+  `GIT_WORK_TREE`, from the client's `env` and the process's environment, which it ignored:
+  a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
+  removes them from `os.environ` first (a client's `env` can set a variable, not remove
+  one), or gets the hook's repository (#65).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -101,19 +112,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
-- `is_ancestor(git, *pairs)`: for one or more (ancestor, descendant) pairs of full object
-  ids, what `git merge-base --is-ancestor` says of each (any failure being no), through one
-  `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
-  stack's pairs cost about the same in any history; or through the tool's own `CatFile`
-  (`cat_file=`), starting no process (#60).
-- `Git.write_configs` starts no git process (but `git_paths`' first, to find the file) where
-  every change is a `branch.<name>.<key>`: it edits the config file itself, as `git config`
-  would, under git's `config.lock`, all or none. It leaves to `git config` what it can't be
-  sure of (other keys, a file git can't read or that's read-only, a header written
-  `[branch.<name>]` or sharing its line, $GIT_CONFIG), and a write that fails (e.g. a full
-  disk), so its errors are git's. On two points the file isn't byte for byte git's: a file
-  whose every line ends in CRLF keeps CRLF, and a value with a carriage return is quoted. A
-  `FakeGit` still runs `git config` for each change (#62).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55). It needs git
   2.39 (and a `ReadOnlyGit` fetches nothing only from 2.45, and in 2.39.4 to 2.44.1) (#52).
@@ -145,8 +143,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   --write-tree` merges each, with one `git merge-tree --stdin` (git 2.39; on 2.38, one
   process each): whether each is clean, its tree and its conflicted paths, or why git
   couldn't merge that pair. It takes a `Git`, as merge-tree writes objects (#59).
-- `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
-  worktree's own, not the main one), read from its files without starting git (#50).
+- `git_dir`, `git_common_dir`'s counterpart: the client's own git directory (a linked
+  worktree's own, not the main one) (#50, #65).
 - `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
   refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
 - `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it

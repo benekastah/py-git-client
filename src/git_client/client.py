@@ -17,7 +17,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Final, Literal
 
-from git_client import config_file
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
     CORRUPT_OBJECT,
@@ -507,6 +506,12 @@ known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str
 """Where git keeps each name, per client, location and name (see `git_paths`). A client and its
 `read_only()` share theirs."""
 
+known_git_dirs: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[Path, Path]]] = (
+    weakref.WeakKeyDictionary()
+)
+"""Each client's own and common git directories, per location (see `git_dir`). A client and
+its `read_only()` share theirs."""
+
 
 # Guards each client's object id lengths: held only to read or change them, never while git
 # runs.
@@ -685,9 +690,9 @@ class ReadOnlyGit:
         client's own class, so a subclass's methods (e.g. its own `process`) and attributes
         are kept (an attribute that holds the client itself still writes through it); and it
         shares what git told the client about where things are (`prefix()`,
-        `object_id_length()`, `git_paths`), so it asks no question the client asked, nor the
-        client one it asked. A new copy each call; a read-only client gives itself. Raises
-        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
+        asked, nor the client one it asked. A new copy each call; a read-only client gives
+        itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
@@ -696,6 +701,7 @@ class ReadOnlyGit:
         reader._read_only = True
         prefixes[reader] = prefixes.setdefault(self, {})
         known_git_paths[reader] = known_git_paths.setdefault(self, {})
+        known_git_dirs[reader] = known_git_dirs.setdefault(self, {})
         return reader
 
     def object_id_length(self) -> int:
@@ -1026,34 +1032,23 @@ class Git(ReadOnlyGit):
 
     def write_configs(self, *changes: ConfigChange, wait: float = 5.0) -> list[ConfigResult]:
         """Make each change (a ConfigSet or ConfigUnset) to the config file `git config`
-        writes, in order, as `git config` makes it, and say what each did. An unset that
+        writes, in order, with one `git config` each, and say what each did. An unset that
         removes nothing doesn't fail: it's NOT_FOUND, or SEVERAL_VALUES for a key with several
-        values unset without the one to remove (git config's exit status 5). Called with no
-        changes, it starts no process. Raises TypeError, making no change, if an argument
-        isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
+        values unset without the one to remove (git config's exit status 5). Anything else git
+        rejects (e.g. a set of a key with several values, or a key that isn't valid) raises
+        GitError, the changes before it made: they're made one at a time, not all or nothing.
+        Called with no changes, it starts no process. Raises TypeError, making no change, if
+        an argument isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
         `--rename-section`, `--worktree`) go through `run("config", ...)`, which doesn't try
-        again while locked. Raises NotStartedError, writing nothing, once `stopping` says so.
+        again while locked.
 
-        Where every change is of a `branch.<name>.<key>`, it starts no git process but the one
-        `git_paths` asks where the file is (none once known): it edits the file itself, as git
-        would (see config_file for the two points where it doesn't write git's bytes), all or
-        none, under git's lock, which it waits up to `wait` seconds for before raising
-        ConfigLockedError as `git config` of the first change would. If writing the file
-        fails (e.g. a full disk), it has changed nothing, and the changes are git's to make
-        (or to say why not), as below: its errors are git's.
-
-        Otherwise, or where it can't be sure of making a change as git would (see
-        config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link,
-        read-only or can't be read, it runs `git config` for each change, as a FakeGit does:
-        anything else git rejects (e.g. a set of a key with several values, or a key that isn't
-        valid) then raises GitError, the changes before it made, one at a time, not all or
-        nothing. While another process has the file locked, each change is tried again, starting
-        no try after `wait` seconds, then raises ConfigLockedError (a write is made whole or not
-        at all, so trying again is safe). Each try can take as long as git's own wait for the
-        lock and the client's timeout allow: git 2.56 and newer wait core.configLockTimeout (a
-        second by default; -1: for as long as it's locked) on each try, so a change can run that
-        much past `wait`. Older git fails at once, so without this, any write racing another
-        process's (e.g. an editor's git) would fail."""
+        While another process has the config file locked, each change is tried again,
+        starting no try after `wait` seconds, then raises ConfigLockedError (a write is made
+        whole or not at all, so trying again is safe). Each try can take as long as git's own
+        wait for the lock and the client's timeout allow: git 2.56 and newer wait
+        core.configLockTimeout (a second by default; -1: for as long as it's locked) on each
+        try, so a change can run that much past `wait`. Older git fails at once, so without
+        this, any write racing another process's (e.g. an editor's git) would fail."""
         for change in changes:
             # Before any is made: git config's own arguments come here too.
             wrong = not isinstance(change, (ConfigSet, ConfigUnset))  # pyright: ignore[reportUnnecessaryIsInstance]
@@ -1063,13 +1058,6 @@ class Git(ReadOnlyGit):
                     f' {change!r}: write_configs(ConfigSet("k", "v")) sets a key,'
                     ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
                 )
-        if not changes:
-            return []
-        refuse_if_stopping(self, ("config",))
-        path = self._config_file(changes)
-        made = None if path is None else config_file.write(path, changes, wait, self.stopping)
-        if made is not None:
-            return made
         return [self._write_config_change(change, wait) for change in changes]
 
     def _config_write(self, *args: Arg, wait: float) -> None:
@@ -1088,22 +1076,18 @@ class Git(ReadOnlyGit):
                 time.sleep(min(delay, remaining))
                 delay = min(delay * 2, 0.5)
 
-    def _config_file(self, changes: Sequence[ConfigChange]) -> Path | None:
-        """The file write_configs edits itself for `changes`, or None for git to make them:
-        changes `config_file.edit` can't make, or $GIT_CONFIG naming another file for `git
-        config` to write."""
-        if not config_file.editable(changes) or "GIT_CONFIG" in self.environment():
-            return None
-        from git_client.batch import git_paths  # here: batch imports this module
-
-        return git_paths(self, "config")[0]
-
     def _write_config_change(self, change: ConfigChange, wait: float) -> ConfigResult:
+        if isinstance(change, ConfigSet):
+            self._config_write(change.key, change.value, wait=wait)
+            return ConfigResult.CHANGED
+        if change.value is None:
+            args = ["--unset", change.key]
+        else:
+            args = ["--unset", "--fixed-value", change.key, change.value]
         try:
-            self._config_write(*config_file.config_args(change), wait=wait)
+            self._config_write(*args, wait=wait)
         except GitError as error:
-            # Exit status 5 is a failure of a set (e.g. of a key with several values).
-            if isinstance(change, ConfigSet) or error.returncode != _NOTHING_SET:
+            if error.returncode != _NOTHING_SET:
                 raise
             if _SEVERAL_VALUES.search(error.stderr):
                 return ConfigResult.SEVERAL_VALUES

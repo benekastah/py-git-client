@@ -13,22 +13,16 @@ what git-stack, git-recommit and move-forward share for that:
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
-- **Ancestry for many pairs of commits** through one `git cat-file` (`is_ancestor`), as
-  `git merge-base --is-ancestor` answers each, reading only the commits between each pair's two.
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  where git keeps many files in the git directory (`git_paths`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  where git keeps many files in the git directory (`git_paths`), the git directory and the
+  common one (`git_dir`, `git_common_dir`), blobs as they are (`hash_blobs`), and ref updates
+  in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
   merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
   why git couldn't merge that pair.
-- **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
-  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory; and
-  none but the first call's `git_paths` lookup to write many branch keys
-  (`Git.write_configs`: the config file edited as `git config` would, under its lock, all or
-  none).
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`; 2.38 for `merge_trees`).
@@ -59,7 +53,6 @@ from git_client import (
     git_paths_and_head,
     hash_blob_at,
     hash_blobs,
-    is_ancestor,
     merge_file,
     refs,
     update_refs,
@@ -83,11 +76,9 @@ git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
 # asked of git once per client (and directory), as are git_paths and object_id_length()
 # (which an id read by refs, resolve or CatFile also tells)
-# Config changes, and what each did: an unset that removes nothing is NOT_FOUND, or
-# SEVERAL_VALUES (for a key with several values: give the one to remove), not an error.
-# Branch keys take no process (but git_paths' first): the file is edited as git config would,
-# all or none; anything else, or a file it can't be sure of, is git config's, one at a time,
-# tried again while locked. Other config writes (--add, ...): git.run("config", ...).
+# git config, tried again while locked, for each change; what each did: an unset that removes
+# nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
+# remove), not an error. Other config writes (--add, ...): git.run("config", ...).
 # ConfigUnset(key, value) removes only that value, or a key with no value whatever value
 # says (as git from 2.46.1; older git crashes on it).
 git.write_configs(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
@@ -121,21 +112,10 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # The same, and what HEAD points at, from the same one git: Head(branch="refs/heads/main"),
 # Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
-# For each (ancestor, descendant) pair of full commit ids, whether `merge-base --is-ancestor`
-# says yes (a commit is its own ancestor; an id of no commit, or a name: False), through one
-# process however many pairs, each walk reading the commits between its pair's two.
-branches = refs(git, "refs/heads/")
-a, b = branches["refs/heads/a"].object, branches["refs/heads/b"].object
-a_under_b, b_under_a = is_ancestor(git, (a, b), (b, a))
-with CatFile(git) as cat_file:  # the tool's own, for its other reads too
-    # Through it, the call starts no cat-file of its own; with "shallow" and "info/grafts" in
-    # a git_paths the tool asked for already, no process at all.
-    [a_under_a] = is_ancestor(git, (a, a), cat_file=cat_file)
-# The directory with the refs, objects and config of a checkout (its top), or of a git
-# directory, without running git: a linked worktree's or a submodule's too. None if it's
-# neither (a subdirectory of a checkout included).
-common = git_common_dir("path/to/repo")
-own = git_dir("path/to/repo")  # its own: a linked worktree's HEAD, index and rebase state
+# The client's git directory (in a linked worktree, its own: its HEAD, index and rebase state),
+# and the common one, with the refs, objects and config, from one git, remembered per client.
+# NotARepositoryError if there's no repository.
+own, common = git_dir(git), git_common_dir(git)
 
 # Blobs: as they are (no filters or line-ending conversion), written, with one process...
 [raw] = hash_blobs(git, [b"one\r\n"])
@@ -266,8 +246,8 @@ A tool with a `Git` for the commands that write gives the paths that only read i
 `read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
 It's of the client's own class, so a subclass's own `process` and other methods still run, and
 it shares what git told the client about where things are (`prefix()`, `object_id_length()`,
-`git_paths`). It raises `ReadOnlyError` if the client's `env` holds a variable a `ReadOnlyGit`
-doesn't take.
+`git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError` if the client's `env`
+holds a variable a `ReadOnlyGit` doesn't take.
 
 ```python
 git = Git("path/to/repo")
