@@ -5,46 +5,56 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, git_common_dir, git_dir
+from git_client import Git, NotARepositoryError, ReadOnlyGit, git_common_dir, git_dir
+from git_client.testing import GitCall
 
 # The repo_from fixture's type (see conftest.py).
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
 
 
-def common_dir_git_says(git: Git) -> Path:
-    """The common git directory, as git itself finds it."""
-    output = git.run_bytes("rev-parse", "--path-format=absolute", "--git-common-dir")
+def git_says(git: Git, option: str) -> Path:
+    """What git prints for one rev-parse option, asked on its own, as a path."""
+    output = git.run_bytes("rev-parse", "--path-format=absolute", option)
     # Not run's, which would strip a trailing space from the path.
-    return Path(os.fsdecode(output.removesuffix(b"\n"))).resolve()
+    return Path(os.fsdecode(output.removesuffix(b"\n")))
 
 
-def test_git_common_dir_of_a_checkout_is_its_git_directory(repo: Git) -> None:
-    top = Path(repo.directory)
-
-    assert git_common_dir(top) == (top / ".git").resolve() == common_dir_git_says(repo)
-
-
-def test_git_common_dir_of_a_git_directory_is_itself(repo: Git) -> None:
-    dot_git = Path(repo.directory) / ".git"
-
-    assert git_common_dir(dot_git) == dot_git.resolve()
+def assert_as_git_says(git: Git) -> None:
+    """git_dir and git_common_dir give what git gives, each asked on its own."""
+    assert git_dir(git) == git_says(git, "--absolute-git-dir")
+    assert git_common_dir(git) == git_says(git, "--git-common-dir")
 
 
-def test_git_common_dir_of_a_linked_worktree_is_the_main_ones(repo: Git, tmp_path: Path) -> None:
-    linked = tmp_path / "linked"
-    repo.run("worktree", "add", "--quiet", str(linked))
-    own = Path(Git(linked).run("rev-parse", "--path-format=absolute", "--git-dir"))
-
-    expected = (Path(repo.directory) / ".git").resolve()
-    assert git_common_dir(linked) == expected == common_dir_git_says(Git(linked))
-    assert git_common_dir(own) == expected
+def test_a_checkout(repo: Git) -> None:
+    assert_as_git_says(repo)
+    assert git_dir(repo) == git_common_dir(repo)
 
 
-def test_git_common_dir_of_a_bare_repository_is_itself(repo: Git, tmp_path: Path) -> None:
+def test_a_git_directory(repo: Git) -> None:
+    assert_as_git_says(Git(Path(repo.directory) / ".git"))
+
+
+def test_a_subdirectory_of_a_checkout(repo: Git) -> None:
+    (Path(repo.directory) / "sub").mkdir()
+    sub = Git(Path(repo.directory) / "sub")
+
+    assert_as_git_says(sub)
+    assert git_dir(sub) == git_dir(repo)
+
+
+def test_a_linked_worktree_has_its_own_and_the_main_ones(repo: Git, tmp_path: Path) -> None:
+    repo.run("worktree", "add", "--quiet", str(tmp_path / "linked"))
+    linked = Git(tmp_path / "linked")
+
+    assert_as_git_says(linked)
+    assert git_dir(linked) != git_common_dir(linked) == git_common_dir(repo)
+
+
+def test_a_bare_repository(repo: Git, tmp_path: Path) -> None:
     bare = tmp_path / "bare.git"
     repo.run("clone", "--quiet", "--bare", repo.directory, str(bare))
 
-    assert git_common_dir(bare) == bare.resolve() == common_dir_git_says(Git(bare))
+    assert_as_git_says(Git(bare))
 
 
 def add_submodule(repo: Git) -> None:
@@ -55,128 +65,65 @@ def add_submodule(repo: Git) -> None:
     repo.run("commit", "--quiet", "-m", "add mod")
 
 
-def test_git_common_dir_of_a_submodule_is_its_own_git_directory(
-    repo_from: RepoFrom,
+def test_a_submodule(repo_from: RepoFrom) -> None:
+    assert_as_git_says(Git(Path(repo_from("submodule", add_submodule).directory) / "mod"))
+
+
+# With a trailing space, which the path git prints keeps, where the system allows one.
+SEPARATE = "separate" if sys.platform == "win32" else "separate "
+
+
+def test_a_checkout_with_a_separate_git_directory(repo: Git, tmp_path: Path) -> None:
+    checkout = Git(tmp_path / "checkout")
+    repo.run("init", "--quiet", "--separate-git-dir", str(tmp_path / SEPARATE), checkout.directory)
+
+    assert_as_git_says(checkout)
+    assert git_dir(checkout).name == SEPARATE
+
+
+def test_a_checkout_reached_through_a_symbolic_link(repo: Git, tmp_path: Path) -> None:
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(repo.directory, target_is_directory=True)
+    except OSError:  # Windows without the privilege
+        pytest.skip("this system can't make a symbolic link")
+
+    assert_as_git_says(Git(link))
+
+
+@pytest.mark.usefixtures("outside_any_repository")
+def test_a_directory_that_isnt_a_repository_raises_gits_error(tmp_path: Path) -> None:
+    with pytest.raises(NotARepositoryError):
+        git_dir(Git(tmp_path))
+    with pytest.raises(NotARepositoryError):
+        git_common_dir(Git(tmp_path))
+
+
+@pytest.mark.parametrize("first", [git_dir, git_common_dir])
+def test_one_process_answers_both_once(
+    repo: Git, git_calls: list[GitCall], first: Callable[[ReadOnlyGit], Path]
 ) -> None:
-    repo = repo_from("submodule", add_submodule)
-    mod = Path(repo.directory) / "mod"
+    first(repo)
+    git_dir(repo)
+    git_common_dir(repo)
 
-    expected = (Path(repo.directory) / ".git" / "modules" / "mod").resolve()
-    assert git_common_dir(mod) == expected == common_dir_git_says(Git(mod))
-
-
-def test_git_common_dir_is_none_where_there_is_no_repository(tmp_path: Path) -> None:
-    assert git_common_dir(tmp_path) is None
-    assert git_common_dir(tmp_path / "no-such-directory") is None
+    assert len(git_calls) == 1
 
 
-def test_git_common_dir_is_none_below_the_top_of_a_checkout(repo: Git) -> None:
-    sub = Path(repo.directory) / "sub"
-    sub.mkdir()
-
-    assert git_common_dir(sub) is None
-
-
-def test_git_common_dir_is_none_for_a_git_file_naming_no_repository(tmp_path: Path) -> None:
-    (tmp_path / ".git").write_bytes(b"not a gitdir line\n")
-    assert git_common_dir(tmp_path) is None
-
-    (tmp_path / ".git").write_bytes(b"gitdir: no-such-directory\n")
-    assert git_common_dir(tmp_path) is None
-
-
-@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b""])
-def test_git_common_dir_reads_a_git_file_with_any_line_ending(
-    repo: Git, tmp_path: Path, ending: bytes
+def test_a_client_asks_again_once_it_points_elsewhere(
+    repo: Git, tmp_path: Path, git_calls: list[GitCall]
 ) -> None:
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    dot_git = Path(repo.directory) / ".git"
-    (checkout / ".git").write_bytes(b"gitdir: " + os.fsencode(dot_git) + ending)
+    repo.run("worktree", "add", "--quiet", str(tmp_path / "linked"))
+    main = git_dir(repo)
+    git_calls.clear()
+    repo.directory = str(tmp_path / "linked")
 
-    assert git_common_dir(checkout) == dot_git.resolve()
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="Windows can't name a directory with a trailing space"
-)
-def test_git_common_dir_keeps_a_trailing_space_in_the_paths_it_reads(
-    repo: Git, tmp_path: Path
-) -> None:
-    # git writes the .git file's gitdir, and reads it and commondir up to a line ending alone.
-    separate = tmp_path / "separate "
-    checkout = tmp_path / "checkout"
-    repo.run("init", "--quiet", "--separate-git-dir", str(separate), str(checkout))
-    linked_dir = separate / "worktrees" / "linked"
-    linked_dir.mkdir(parents=True)
-    (linked_dir / "HEAD").write_bytes((separate / "HEAD").read_bytes())
-    (linked_dir / "commondir").write_bytes(os.fsencode(separate) + b"\n")
-    linked = tmp_path / "linked"
-    linked.mkdir()
-    (linked / ".git").write_bytes(b"gitdir: " + os.fsencode(linked_dir) + b"\n")
-
-    assert git_common_dir(checkout) == separate.resolve() == common_dir_git_says(Git(checkout))
-    assert git_common_dir(linked) == separate.resolve()
+    assert git_dir(repo) != main
+    assert len(git_calls) == 1
 
 
-def test_git_common_dir_is_none_for_a_linked_worktree_whose_head_is_gone(
-    repo: Git, tmp_path: Path
-) -> None:
-    linked = tmp_path / "linked"
-    repo.run("worktree", "add", "--quiet", str(linked))
-    own = Path(Git(linked).run("rev-parse", "--path-format=absolute", "--git-dir"))
-    (own / "HEAD").unlink()
+def test_a_read_only_copy_shares_the_answers(repo: Git, git_calls: list[GitCall]) -> None:
+    common = git_common_dir(repo)
 
-    # As git, which says the .git file doesn't point to a valid repository.
-    assert git_common_dir(linked) is None
-
-
-def git_dir_git_says(git: Git) -> Path:
-    """The client's own git directory, as git itself finds it."""
-    output = git.run_bytes("rev-parse", "--absolute-git-dir")
-    return Path(os.fsdecode(output.removesuffix(b"\n"))).resolve()
-
-
-def test_git_dir_of_a_checkout_and_a_git_directory(repo: Git, tmp_path: Path) -> None:
-    top = Path(repo.directory)
-    bare = tmp_path / "bare.git"
-    repo.run("clone", "--quiet", "--bare", repo.directory, str(bare))
-
-    assert git_dir(top) == (top / ".git").resolve() == git_dir_git_says(repo)
-    assert git_dir(top / ".git") == (top / ".git").resolve()
-    assert git_dir(bare) == bare.resolve() == git_dir_git_says(Git(bare))
-
-
-def test_git_dir_of_a_linked_worktree_is_its_own(repo: Git, tmp_path: Path) -> None:
-    linked = tmp_path / "linked"
-    repo.run("worktree", "add", "--quiet", str(linked))
-
-    own = git_dir_git_says(Git(linked))
-    assert own != git_common_dir(linked)
-    assert git_dir(linked) == own
-    assert git_dir(own) == own
-
-
-def test_git_dir_of_a_submodule(repo_from: RepoFrom) -> None:
-    repo = repo_from("submodule", add_submodule)
-    mod = Path(repo.directory) / "mod"
-
-    assert git_dir(mod) == git_dir_git_says(Git(mod))
-
-
-def test_git_dir_is_none_where_git_common_dir_is(repo: Git, tmp_path: Path) -> None:
-    sub = Path(repo.directory) / "sub"
-    sub.mkdir()
-    (tmp_path / ".git").write_bytes(b"gitdir: no-such-directory\n")
-
-    assert git_dir(sub) is None
-    assert git_dir(tmp_path) is None
-    assert git_dir(tmp_path / "no-such-directory") is None
-
-
-def test_git_dir_of_a_checkout_with_a_separate_git_directory(repo: Git, tmp_path: Path) -> None:
-    checkout = tmp_path / "checkout"
-    separate = tmp_path / "separate"
-    repo.run("init", "--quiet", "--separate-git-dir", str(separate), str(checkout))
-
-    assert git_dir(checkout) == separate.resolve() == git_dir_git_says(Git(checkout))
+    assert git_common_dir(repo.read_only()) == common
+    assert len(git_calls) == 1

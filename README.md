@@ -15,15 +15,14 @@ what git-stack, git-recommit and move-forward share for that:
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  where git keeps many files in the git directory (`git_paths`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  where git keeps many files in the git directory (`git_paths`), the git directory and the
+  common one (`git_dir`, `git_common_dir`), blobs as they are (`hash_blobs`), and ref updates
+  in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
   merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
   why git couldn't merge that pair.
-- **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
-  own (`git_dir`: a linked worktree's own), read from its `.git` file or directory.
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
 `git cat-file --batch-command`; 2.38 for `merge_trees`).
@@ -113,11 +112,10 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # The same, and what HEAD points at, from the same one git: Head(branch="refs/heads/main"),
 # Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
-# The directory with the refs, objects and config of a checkout (its top), or of a git
-# directory, without running git: a linked worktree's or a submodule's too. None if it's
-# neither (a subdirectory of a checkout included).
-common = git_common_dir("path/to/repo")
-own = git_dir("path/to/repo")  # its own: a linked worktree's HEAD, index and rebase state
+# The client's git directory (in a linked worktree, its own: its HEAD, index and rebase state),
+# and the common one, with the refs, objects and config, from one git, remembered per client.
+# NotARepositoryError if there's no repository.
+own, common = git_dir(git), git_common_dir(git)
 
 # Blobs: as they are (no filters or line-ending conversion), written, with one process...
 [raw] = hash_blobs(git, [b"one\r\n"])

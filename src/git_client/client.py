@@ -506,6 +506,12 @@ known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str
 """Where git keeps each name, per client, location and name (see `git_paths`). A client and its
 `read_only()` share theirs."""
 
+known_git_dirs: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[Path, Path]]] = (
+    weakref.WeakKeyDictionary()
+)
+"""Each client's own and common git directories, per location (see `git_dir`). A client and
+its `read_only()` share theirs."""
+
 
 # Guards each client's object id lengths: held only to read or change them, never while git
 # runs.
@@ -684,9 +690,9 @@ class ReadOnlyGit:
         client's own class, so a subclass's methods (e.g. its own `process`) and attributes
         are kept (an attribute that holds the client itself still writes through it); and it
         shares what git told the client about where things are (`prefix()`,
-        `object_id_length()`, `git_paths`), so it asks no question the client asked, nor the
-        client one it asked. A new copy each call; a read-only client gives itself. Raises
-        ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
+        asked, nor the client one it asked. A new copy each call; a read-only client gives
+        itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
@@ -695,6 +701,7 @@ class ReadOnlyGit:
         reader._read_only = True
         prefixes[reader] = prefixes.setdefault(self, {})
         known_git_paths[reader] = known_git_paths.setdefault(self, {})
+        known_git_dirs[reader] = known_git_dirs.setdefault(self, {})
         return reader
 
     def object_id_length(self) -> int:

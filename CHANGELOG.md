@@ -8,6 +8,14 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `git_common_dir(directory)` and `git_dir(directory)` take a client (`Git` or
+  `ReadOnlyGit`), not a directory, and run git, where they read the repository's files:
+  `git_common_dir("path/to/repo")` becomes `git_common_dir(git)`, the answer of `git
+  rev-parse --path-format=absolute --git-common-dir` (one process answers both, remembered
+  per client and location, as `git_paths` and `prefix()` are). They raise
+  `NotARepositoryError` where they returned None, and look at no directory without a client.
+  From a subdirectory of a checkout they give its repository's, as git does, where they gave
+  None (#65).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -132,8 +140,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   --write-tree` merges each, with one `git merge-tree --stdin` (git 2.39; on 2.38, one
   process each): whether each is clean, its tree and its conflicted paths, or why git
   couldn't merge that pair. It takes a `Git`, as merge-tree writes objects (#59).
-- `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
-  worktree's own, not the main one), read from its files without starting git (#50).
+- `git_dir`, `git_common_dir`'s counterpart: the client's own git directory (a linked
+  worktree's own, not the main one) (#50, #65).
 - `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
   refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
 - `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it

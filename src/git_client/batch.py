@@ -13,6 +13,7 @@ from git_client.client import (
     decode,
     encode,
     error_from,
+    known_git_dirs,
     known_git_paths,
     learn_object_id_length,
     location,
@@ -219,6 +220,39 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
         named = os.fsdecode(lines[len(unique)])
         head = Head(detached=True) if named == "HEAD" else Head(branch=named)
     return [found[name] for name in names], head
+
+
+def git_dir(git: ReadOnlyGit) -> Path:
+    """The client's own git directory, as `git rev-parse --path-format=absolute --git-dir`
+    prints it: a checkout's (from any directory in it), a git directory itself, or, for a
+    linked worktree, its own (its HEAD, index and rebase state), not the main repository's
+    (see `git_common_dir`). Raises GitError if git fails (e.g. NotARepositoryError for a
+    directory in no repository).
+
+    One `git rev-parse` answers both this and `git_common_dir`, asked of git once per client
+    and location (its directory and `env`) and remembered."""
+    return _git_dirs(git)[0]
+
+
+def git_common_dir(git: ReadOnlyGit) -> Path:
+    """The directory with the client's repository's refs, objects and config, as `git
+    rev-parse --path-format=absolute --git-common-dir` prints it: `git_dir`'s, but for a
+    linked worktree, whose common directory is the main repository's. Raises what `git_dir`
+    does, and is asked of git with it, in the same one process."""
+    return _git_dirs(git)[1]
+
+
+def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
+    """The client's own and common git directories (see git_dir)."""
+    known = known_git_dirs.setdefault(git, {})
+    where = location(git)
+    if where not in known:
+        output = git.run_bytes(
+            "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"
+        )
+        own, common = (Path(os.fsdecode(line)) for line in _lines(output))
+        known[where] = own, common
+    return known[where]
 
 
 def _lines(output: bytes) -> list[bytes]:

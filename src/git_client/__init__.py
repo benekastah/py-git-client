@@ -7,6 +7,8 @@ from git_client.batch import (
     RefUpdate,
     config,
     config_key,
+    git_common_dir,
+    git_dir,
     git_paths,
     git_paths_and_head,
     hash_blob_at,
@@ -48,7 +50,6 @@ from git_client.errors import (
     WrongTypeError,
 )
 from git_client.merging import MergeResult, merge_trees
-from git_client.paths import git_common_dir, git_dir
 
 __all__ = [
     "CLIENT_TIMEOUT",
