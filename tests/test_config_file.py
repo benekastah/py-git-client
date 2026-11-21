@@ -28,7 +28,7 @@ TWO = b'[branch "m"]\n\tx = 1\n\tx = 2\n'
 # Files git can't read.
 UNREADABLE = [
     *(b"[branch", b"[a/b]", b'[branch\n"a"]', b"[branch a]", b'[branch "a\n"]', b'[branch "a"x'),
-    *(b'[branch "a\\\n"]', b'[branch "a"\n', b'[branch "a"]\n\tx y\n', b"!"),
+    *(b'[branch "a\\\n"]', b'[branch "a"\n', b'[branch "a"]\n\tx y\n', b"!", b"# c\n [] # c\n"),
 ]
 CASES: dict[str, Case] = {
     "a new key": (MAIN, [ConfigSet("branch.main.base", "x")]),
@@ -127,6 +127,7 @@ CASES: dict[str, Case] = {
         b'[branch "a"]\r\n\tx = 1\r\n\r\n\ty = 2\n',
         [ConfigSet("branch.a.z", "3"), ConfigUnset("branch.a.y")],
     ),
+    "headers git reads, oddly": (b'[ "x"]\n[.]\n[branch.]\n', [ConfigSet("branch.a.x", "1")]),
     "an include": (b"[include]\n\tpath = other\n", [ConfigSet("branch.i.x", "1")]),
     "a byte order mark": (
         b'\xef\xbb\xbf[branch "b"]\n\tx = 1\n',

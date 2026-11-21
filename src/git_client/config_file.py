@@ -171,7 +171,7 @@ def _header(reader: _Reader) -> tuple[bytes, bool] | None:
         if reader.eof:
             return None
         if c == ord("]"):
-            return bytes(base).lower(), True
+            return (bytes(base).lower(), True) if base else None  # git refuses `[]`
         if c in _SPACE:
             break
         if c not in _KEYCHAR and c != ord("."):
