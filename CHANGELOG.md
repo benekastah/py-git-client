@@ -106,7 +106,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `CorruptObjectError`, a `GitError` for an object git found damaged as it read it (#50).
 - `ObjectType`, the types `CatFile.read` takes, exported from `git_client` (#50).
 - `git_paths_and_head`: `git_paths`, and what HEAD points at (`Head`: a branch's full name,
-  detached, or unknown for an unborn branch), from the same one `git rev-parse` (#PR).
+  detached, or unknown for an unborn branch), from the same one `git rev-parse` (#58).
 - `git_dir`, `git_common_dir`'s counterpart: a checkout's own git directory (a linked
   worktree's own, not the main one), read from its files without starting git (#50).
 - `RefSnapshot`: what a function reads about refs (e.g. `refs(git, "refs/heads/")`), kept
