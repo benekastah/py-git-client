@@ -32,9 +32,9 @@ permissions:
 jobs:
   # The tests with the oldest git supported (the README's 2.36, e.g. for CatFile's
   # --batch-command), as CI's other jobs run the newest: the suite as a whole, but for the
-  # tests of what 2.36 lacks (merge-tree's --write-tree, GIT_NO_LAZY_FETCH), which skip, and
-  # the German ones, which skip as this git has no translations. Built once, then cached:
-  # about a minute uncached, seconds after.
+  # tests marked needs_git (of what 2.36 lacks, or does otherwise), which skip saying which
+  # git they need, and the German ones, which skip as this git has no translations. Built
+  # once, then cached: about a minute uncached, seconds after.
   oldest-git:
     if: fromJSON(inputs.context).code
     runs-on: ubuntu-latest
