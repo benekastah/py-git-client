@@ -481,6 +481,27 @@ def test_write_config_once_written_doesnt_look_for_its_lock(
     repo.write_config(ConfigSet("branch.a.x", "1"))
 
 
+def test_write_config_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: Git) -> None:
+    git_paths(repo, "config")
+    before = config_file(repo).read_bytes()
+    held = lock(repo)
+    stopping = threading.Event()
+    repo.stopping = stopping.is_set
+    timer = threading.Timer(0.1, stopping.set)
+    start = time.monotonic()
+
+    timer.start()
+    try:
+        with pytest.raises(NotStartedError):
+            repo.write_config(ConfigSet("branch.a.x", "1"), wait=5)
+    finally:
+        timer.join()
+
+    assert time.monotonic() - start < 2
+    assert held.exists()
+    assert config_file(repo).read_bytes() == before
+
+
 def test_write_config_interrupted_once_written_leaves_anothers_lock(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:

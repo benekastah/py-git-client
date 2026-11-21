@@ -976,7 +976,7 @@ class Git(ReadOnlyGit):
             return []
         refuse_if_stopping(self, ("config",))
         path = self._config_file(changes)
-        made = None if path is None else config_file.write(path, changes, wait)
+        made = None if path is None else config_file.write(path, changes, wait, self.stopping)
         if made is not None:
             return made
         return [self._write_config_change(change, wait) for change in changes]

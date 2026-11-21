@@ -19,7 +19,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from git_client.errors import ConfigLockedError
+from git_client.errors import ConfigLockedError, NotStartedError
 
 
 @dataclass(frozen=True)
@@ -273,7 +273,12 @@ def editable(changes: Sequence[ConfigChange]) -> bool:
     )
 
 
-def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[ConfigResult] | None:
+def write(
+    path: Path,
+    changes: Sequence[ConfigChange],
+    wait: float,
+    stopping: Callable[[], bool] | None = None,
+) -> list[ConfigResult] | None:
     """Make `changes` to the config file at `path` as `edit` makes them, and say what each
     did: all or none, under git's own lock (`<path>.lock`, made as git makes it, so `git
     config` and any other writer waits for it), written whole to the lock, flushed to disk,
@@ -282,12 +287,13 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
     symbolic link (git writes the file it names), read-only, or that can't be read; for a
     lock that can't be made other than for being held; and if writing, flushing or renaming
     fails (e.g. a full disk). Raises ConfigLockedError, as `git config` for the first change
-    would, if another process holds the lock past `wait` seconds."""
+    would, if another process holds the lock past `wait` seconds, and NotStartedError,
+    having written nothing, once `stopping` says so while it waits."""
     lock = path.with_name(path.name + ".lock")
     fd: int | None = None
     ours: os.stat_result | None = None  # the lock's, once closed
     try:
-        fd = _lock(lock, path, wait, config_args(changes[0]))
+        fd = _lock(lock, path, wait, config_args(changes[0]), stopping)
         if fd is None:
             return None
         try:
@@ -351,12 +357,16 @@ def _remove_if_ours(lock: Path, ours: os.stat_result) -> None:
         lock.unlink(missing_ok=True)
 
 
-def _lock(lock: Path, path: Path, wait: float, command: list[str]) -> int | None:
+def _lock(
+    lock: Path, path: Path, wait: float, command: list[str], stopping: Callable[[], bool] | None
+) -> int | None:
     """Make `lock`, as git does, trying again while it's held, for up to `wait` seconds, then
-    raising ConfigLockedError as `git config <command>` would; None if it can't be made for
-    another reason."""
+    raising ConfigLockedError as `git config <command>` would, or NotStartedError once
+    `stopping` says so; None if it can't be made for another reason."""
 
     def make() -> int:
+        if stopping is not None and stopping():
+            raise NotStartedError(["config", *command], None, "the tool is stopping")
         # O_BINARY: Windows would write each LF as CRLF.
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         return os.open(lock, flags, 0o666)
