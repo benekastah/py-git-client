@@ -6,6 +6,7 @@ import pytest
 
 import git_client.merging
 from git_client import (
+    CorruptObjectError,
     Git,
     GitError,
     MergeResult,
@@ -106,10 +107,17 @@ def make_branches(git: Git) -> None:
         f"{branches['lost-renamed']}:r2",
         f"{branches['lost-parent']}^",
     ]
-    for object_id in git.run("rev-parse", *lost).split():
+    # Each adds the file `corrupt` differently, but one's blob is damaged.
+    branches["corrupt-1"] = commit(git, main, {b"corrupt": b"corrupt 1\n"})
+    branches["corrupt-2"] = commit(git, main, {b"corrupt": b"corrupt 2\n"})
+    damaged = git.run("rev-parse", f"{branches['corrupt-1']}:corrupt")
+    for object_id in [*git.run("rev-parse", *lost).split(), damaged]:
         path = Path(git.directory) / ".git" / "objects" / object_id[:2] / object_id[2:]
         path.chmod(0o644)  # git makes it read-only
-        path.unlink()
+        if object_id == damaged:
+            path.write_bytes(b"garbage")
+        else:
+            path.unlink()
     for name, object_id in branches.items():
         git.run("update-ref", f"refs/heads/{name}", object_id)
 
@@ -218,13 +226,14 @@ def test_a_pair_git_cant_merge_gets_its_error_and_the_rest_their_results(
 @NEEDS_STDIN
 @pytest.mark.parametrize("where", [0, 1])
 @pytest.mark.parametrize(
-    ("ours", "theirs", "says"),
+    ("ours", "theirs", "error", "says"),
     [
-        ("lost-blob-1", "lost-blob-2", "^fatal: unable to read blob object "),
-        ("main", "lost-tree", "^error: Could not read "),
-        ("lost-subtree-1", "lost-subtree-2", r"^fatal: unable to read tree \("),
-        ("lost-renamed", "edited", "^fatal: unable to read [0-9a-f]+$"),
-        ("x", "lost-parent", "^error: Could not read "),
+        ("lost-blob-1", "lost-blob-2", GitError, "^fatal: unable to read blob object "),
+        ("main", "lost-tree", GitError, "^error: Could not read "),
+        ("lost-subtree-1", "lost-subtree-2", GitError, r"^fatal: unable to read tree \("),
+        ("lost-renamed", "edited", GitError, "^fatal: unable to read [0-9a-f]+$"),
+        ("x", "lost-parent", GitError, "^error: Could not read "),
+        ("corrupt-1", "corrupt-2", CorruptObjectError, r"^fatal: loose object \S+ .* is corrupt$"),
     ],
 )
 def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
@@ -233,6 +242,7 @@ def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
     where: int,
     ours: str,
     theirs: str,
+    error: type[GitError],
     says: str,
 ) -> None:
     git, ids = merges
@@ -244,8 +254,9 @@ def test_a_pair_whose_objects_git_cant_read_gets_its_error_wherever_it_is(
 
     # The process that stopped at it, and one for the pairs after it.
     assert len(git_calls) == 2
-    error = results.pop(where).error
-    assert error is not None and re.search(says, error.stderr, re.MULTILINE)
+    failed = results.pop(where).error
+    assert failed is not None and type(failed) is error
+    assert re.search(says, failed.stderr, re.MULTILINE)
     assert results == [merged_alone(git, *pair) for pair in good]
 
 
