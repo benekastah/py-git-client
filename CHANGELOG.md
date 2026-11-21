@@ -68,6 +68,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
   from `resolve` and `CatFile`. A tool that catches `RemoteError` around a partial clone's
   commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
+  Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
+  failure raises `RemoteError` from `run`, as before (#52).
 - A `Git` subclass that overrides `process` calls `super().process` to start git: one that
   starts git itself goes uncounted by `RefSnapshot`, which then keeps what its commands
   changed (#50).
@@ -118,7 +120,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   whose every line ends in CRLF keeps CRLF, and a value with a carriage return is quoted. A
   `FakeGit` still runs `git config` for each change (#62).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
-  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
+  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55). It needs git
+  2.39 (and a `ReadOnlyGit` fetches nothing only from 2.45, and in 2.39.4 to 2.44.1) (#52).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
   client's own class (a subclass's `process` still runs), sharing what git told the client
   about where things are, for a tool's paths that never write (#55).
