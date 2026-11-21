@@ -41,6 +41,8 @@ or `pip install git+https://github.com/benekastah/py-git-client`.
 ```python
 from git_client import (
     CatFile,
+    ConfigSet,
+    ConfigUnset,
     Git,
     ObjectType,
     RefUpdate,
@@ -73,7 +75,10 @@ git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
 # asked of git once per client (and directory), as are git_paths and object_id_length()
 # (which an id read by refs, resolve or CatFile also tells)
-git.write_config("branch.a.description", "x")  # git config, tried again while locked
+# git config, tried again while locked, for each change; what each did: an unset that removes
+# nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
+# remove), not an error. Other config writes (--add, ...): git.run("config", ...).
+git.write_config(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised
 
@@ -211,13 +216,13 @@ A tool that asks about the same few refs over and over can read them once with a
 again when next asked:
 
 ```python
-from git_client import Git, RefSnapshot, refs
+from git_client import ConfigSet, Git, RefSnapshot, refs
 
 git = Git("path/to/repo")
 branches = RefSnapshot(lambda: refs(git, "refs/heads/"))
 branches.get()["refs/heads/main"].upstream  # one git for-each-ref...
 branches.get()["refs/heads/a"].object  # ...for both
-git.write_config("branch.a.myToolParent", "main")  # a branch's own setting: kept
+git.write_config(ConfigSet("branch.a.myToolParent", "main"))  # a branch's own setting: kept
 git.run("branch", "c")  # may change refs: read again when next asked
 reflogs = RefSnapshot(dict[str, list[str]])  # answers found one at a time, forgotten together
 known = reflogs.get()

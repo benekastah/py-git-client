@@ -31,6 +31,7 @@ from git_client.client import (
     find_git,
     printable,
 )
+from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
     ConfigLockedError,
     ConflictError,
@@ -55,7 +56,11 @@ __all__ = [
     "CLOSE_FDS",
     "Arg",
     "CatFile",
+    "ConfigChange",
     "ConfigLockedError",
+    "ConfigResult",
+    "ConfigSet",
+    "ConfigUnset",
     "ConflictError",
     "CorruptObjectError",
     "EnvValue",

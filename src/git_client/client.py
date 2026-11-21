@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Final, Literal
 
+from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
     CORRUPT_OBJECT,
     MISSING_OBJECT,
@@ -51,6 +52,10 @@ filesystem (bytes, in its encoding)."""
 
 # git's exit status for a failure it explains ("fatal: ..."), unlike 129 for a usage error.
 FATAL = 128
+# git config's exit status for an unset that removes nothing, and what it says first when
+# that's because the key has several values.
+_NOTHING_SET = 5
+_SEVERAL_VALUES = re.compile(r"^warning: .* has multiple values$", re.MULTILINE)
 
 # What a git whose messages the library reads gets: as the directory of its translations, a
 # path that's no directory, so git (and its shell and Perl scripts) finds none and speaks
@@ -926,25 +931,67 @@ class Git(ReadOnlyGit):
 
     _read_only = False
 
-    def write_config(self, *args: Arg, wait: float = 5.0) -> str:
-        """Run `git config <args>`, a write (e.g. `"branch.topic.base", "main"`, or
-        `"--unset", "branch.topic.base"`), and return what it printed. While another process
-        has the config file locked, try it again, starting no try after `wait` seconds, then
-        raise ConfigLockedError. A write is made whole or not at all, so trying again is safe.
+    def write_config(self, *changes: ConfigChange, wait: float = 5.0) -> list[ConfigResult]:
+        """Make each change (a ConfigSet or ConfigUnset) to the config file `git config`
+        writes, in order, as `git config` makes it, and say what each did. An unset that
+        removes nothing doesn't fail: it's NOT_FOUND, or SEVERAL_VALUES for a key with several
+        values unset without the one to remove (git config's exit status 5). Anything else git
+        rejects (e.g. a set of a key with several values, or a key that isn't valid) raises
+        GitError, the changes before it made: they're made one at a time, not all or nothing.
+        Called with no changes, it starts no process. Raises TypeError, making no change, if
+        an argument isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
+        `--rename-section`, `--worktree`) go through `run("config", ...)`, which doesn't try
+        again while locked.
 
-        Each try can take as long as git's own wait for the lock and the client's timeout
-        allow: git 2.56 and newer wait core.configLockTimeout (a second by default; -1: for
-        as long as it's locked) on each try, so the call can run that much past `wait`.
-        Older git fails at once, so without this, any write racing another process's (e.g.
-        an editor's git) would fail."""
+        While another process has the config file locked, each change is tried again,
+        starting no try after `wait` seconds, then raises ConfigLockedError (a write is made
+        whole or not at all, so trying again is safe). Each try can take as long as git's own
+        wait for the lock and the client's timeout allow: git 2.56 and newer wait
+        core.configLockTimeout (a second by default; -1: for as long as it's locked) on each
+        try, so a change can run that much past `wait`. Older git fails at once, so without
+        this, any write racing another process's (e.g. an editor's git) would fail."""
+        for change in changes:
+            # Before any is made: a call of the old form, with git config's own arguments,
+            # comes here too.
+            wrong = not isinstance(change, (ConfigSet, ConfigUnset))  # pyright: ignore[reportUnnecessaryIsInstance]
+            if wrong:
+                raise TypeError(
+                    f"write_config takes a ConfigSet or ConfigUnset for each change, not"
+                    f' {change!r}: write_config("k", "v") is write_config(ConfigSet("k", "v")),'
+                    ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
+                )
+        return [self._write_config_change(change, wait) for change in changes]
+
+    def _config_write(self, *args: Arg, wait: float) -> None:
+        """Run `git config <args>`, a write, trying it again while the file is locked (see
+        write_config)."""
         deadline = time.monotonic() + wait
         delay = 0.01
         while True:
             try:
-                return self.run("config", *args)
+                self.run("config", *args)
+                return
             except ConfigLockedError:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise
                 time.sleep(min(delay, remaining))
                 delay = min(delay * 2, 0.5)
+
+    def _write_config_change(self, change: ConfigChange, wait: float) -> ConfigResult:
+        if isinstance(change, ConfigSet):
+            self._config_write(change.key, change.value, wait=wait)
+            return ConfigResult.CHANGED
+        if change.value is None:
+            args = ["--unset", change.key]
+        else:
+            args = ["--unset", "--fixed-value", change.key, change.value]
+        try:
+            self._config_write(*args, wait=wait)
+        except GitError as error:
+            if error.returncode != _NOTHING_SET:
+                raise
+            if _SEVERAL_VALUES.search(error.stderr):
+                return ConfigResult.SEVERAL_VALUES
+            return ConfigResult.NOT_FOUND
+        return ConfigResult.CHANGED
