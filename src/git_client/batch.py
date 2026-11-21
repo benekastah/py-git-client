@@ -59,11 +59,15 @@ _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\
 
 def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
-    included files), from one `git config --list`: each key, as git prints it (section and
-    name in lower case, a subsection as written), with its values in the order git reads
-    them. A key with no value at all (`[core]` then `bare`, which git reads as true) has None,
-    unlike one set to nothing (`bare =`, which git reads as false), which has "". Look a key
-    up by `config_key(key)`, which names it as git prints it."""
+    included files), from one `git config --list -z`, with each key's values in the order git
+    reads them. A key with no value at all (`[core]` then `bare`, which git reads as true) has
+    None, unlike one set to nothing (`bare =`, which git reads as false), which has "".
+
+    The keys are exactly what git prints: section and name in lower case, the subsection as
+    written. So a lookup uses that form: `config(git).get("init.defaultbranch")`, not
+    `"init.defaultBranch"`, which finds nothing, with no error; `branch.Topic.pushremote`
+    keeps `Topic`. For a key a user typed, a tool runs `git config get <key>` (one process),
+    so git reads it and says what's wrong with it."""
     entries: dict[str, list[str | None]] = {}
     for entry in decode(git.run_bytes("config", "--list", "-z")).split("\0"):
         if entry:
@@ -71,14 +75,6 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
             key, newline, value = entry.partition("\n")
             entries.setdefault(key, []).append(value if newline else None)
     return entries
-
-
-def config_key(key: str) -> str:
-    """A config key as `config` gives it, and as git reads it: its section and name in lower
-    case, and a subsection (what's between them, e.g. a branch's name) as written."""
-    section, dot, rest = key.partition(".")
-    subsection, dot2, name = rest.rpartition(".")
-    return f"{section.lower()}{dot}{subsection}{dot2}{name.lower()}"
 
 
 @dataclass(frozen=True)

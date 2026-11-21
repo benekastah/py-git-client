@@ -11,7 +11,6 @@ from git_client import (
     ReadOnlyError,
     RefUpdate,
     config,
-    config_key,
     git_paths,
     git_paths_and_head,
     hash_blob_at,
@@ -61,15 +60,11 @@ def test_config_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) 
     assert printable(name) == "caf\ufffd"
 
 
-def test_config_key_names_a_key_as_config_does(repo: Git) -> None:
-    repo.run("config", "branch.Topic.pushRemote", "origin")
-    repo.run("config", "url.https://Example.org/.insteadOf", "ex:")
+def test_config_gives_keys_as_git_prints_them(repo: Git) -> None:
+    repo.run("config", "Branch.Topic.pushRemote", "origin")
 
-    entries = config(repo)
-
-    assert entries[config_key("branch.Topic.pushRemote")] == ["origin"]
-    assert entries[config_key("URL.https://Example.org/.insteadOf")] == ["ex:"]
-    assert entries[config_key("User.Name")] == ["Test"]
+    # The section and name in lower case, the subsection as written.
+    assert config(repo)["branch.Topic.pushremote"] == ["origin"]
 
 
 def test_patch_ids_in_a_sha256_repository(tmp_path: Path) -> None:

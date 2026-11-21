@@ -19,6 +19,16 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
   removes them from `os.environ` first (a client's `env` can set a variable, not remove
   one), or gets the hook's repository (#65).
+- `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
+  one back unchanged, so a lookup found nothing where git says "key does not contain a
+  section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
+  name in lower case, the subsection as written. A lookup must use that form: one written
+  in camelCase, as `config(git).get("init.defaultBranch")`, now finds nothing, with no
+  error; write `"init.defaultbranch"` (`branch.Topic.pushremote` keeps `Topic`). A tool
+  writes its keys that way itself (they're constants in its code, e.g.
+  `f"branch.{name}.pushremote"`): move-forward's `RepoConfig.get`, which is given camelCase
+  keys, must lower-case their section and name. For a key a user typed, a tool runs `git
+  config get <key>` (one process), whose errors are git's (#67).
 - `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
   the length of an id git printed, which in a SHA-256 repository with
   `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,

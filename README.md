@@ -46,7 +46,6 @@ from git_client import (
     ObjectType,
     RefUpdate,
     config,
-    config_key,
     git_common_dir,
     git_dir,
     git_paths,
@@ -96,7 +95,11 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
     _, tree = cat_file.read(upstream, wanted)  # its tree; WrongTypeError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
-push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
+# Keys exactly as `git config --list -z` prints them: section and name in lower case, the
+# subsection as written. config(git).get("init.defaultBranch") finds nothing, with no error.
+# For a key a user typed, run `git config get <key>` (one process).
+default_branch = config(git).get("init.defaultbranch")
+push_remote = config(git).get("branch.Topic.pushremote")
 for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
     print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
 
