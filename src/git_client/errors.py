@@ -147,7 +147,7 @@ class MissingObjectError(GitError):
 class ConfigLockedError(GitError):
     """Another process has the config file locked, and kept it so for as long as git
     retries (core.configLockTimeout, a second by default, since git 2.56); a write can be
-    tried again, as `Git.write_config` does. Only for `git config`'s writes of keys:
+    tried again, as `Git.write_configs` does. Only for `git config`'s writes of keys:
     renaming or removing a section (e.g. `git branch -m`) doesn't say why it couldn't lock
     the file, so it's a plain GitError."""
 

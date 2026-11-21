@@ -27,7 +27,7 @@ what git-stack, git-recommit and move-forward share for that:
 - **No process at all** to find a checkout's common git directory (`git_common_dir`), or its
   own (`git_dir`: a linked worktree's own), read from its `.git` file or directory; and
   none but the first call's `git_paths` lookup to write many branch keys
-  (`Git.write_config`: the config file edited as `git config` would, under its lock, all or
+  (`Git.write_configs`: the config file edited as `git config` would, under its lock, all or
   none).
 
 It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
@@ -90,7 +90,7 @@ git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at 
 # tried again while locked. Other config writes (--add, ...): git.run("config", ...).
 # ConfigUnset(key, value) removes only that value, or a key with no value whatever value
 # says (as git from 2.46.1; older git crashes on it).
-git.write_config(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
+git.write_configs(ConfigSet("branch.a.base", "main"), ConfigUnset("branch.a.old"))
 git.passthrough("rebase", "-i", "main", timeout=None)  # a command's own timeout; past one,
 # git is stopped (see below) and GitTimeoutError raised; only passthrough gives git the
 # tool's stdin: the others give it their `input`, or nothing
@@ -256,7 +256,7 @@ git = Git("path/to/repo")
 branches = RefSnapshot(lambda: refs(git, "refs/heads/"))
 branches.get()["refs/heads/main"].upstream  # one git for-each-ref...
 branches.get()["refs/heads/a"].object  # ...for both
-git.write_config(ConfigSet("branch.a.myToolParent", "main"))  # a branch's own setting: kept
+git.write_configs(ConfigSet("branch.a.myToolParent", "main"))  # a branch's own setting: kept
 git.run("branch", "c")  # may change refs: read again when next asked
 reflogs = RefSnapshot(dict[str, list[str]])  # answers found one at a time, forgotten together
 known = reflogs.get()
@@ -377,7 +377,7 @@ said and raises a subclass:
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing (from `CatFile`, its `reason` is git's, or "" if it gave none). |
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
-| `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
+| `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_configs` does). |
 | `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |

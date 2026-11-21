@@ -525,7 +525,7 @@ class FakeGit(Git):
         return [call.args for call in self.calls]
 
     def _config_file(self, changes: Sequence[ConfigChange]) -> Path | None:
-        """None: a FakeGit's write_config runs `git config` for each change, for a test to
+        """None: a FakeGit's write_configs runs `git config` for each change, for a test to
         check, rather than edit a file."""
         return None
 
