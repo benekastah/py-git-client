@@ -246,7 +246,10 @@ git.forget()  # every answer, so the next call asks git again (one process)
 
 What one `rev-parse` told expires together, and is asked again together. An
 `object_id_length=` given to the client never expires. Threads may share a client: each gets
-git's answer, and threads that ask at once what isn't known may each start a process.
+git's answer, and threads that ask at once what isn't known may each start a process. A
+shallow copy of a client (`copy.copy`) shares its answers and `forget()`, as `read_only()`
+does; a deep copy, or a pickled client (e.g. sent to a process pool), starts remembering
+nothing, with the same `remember_for`.
 
 ### Reading only
 

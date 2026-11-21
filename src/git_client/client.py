@@ -502,7 +502,8 @@ class Memory:
     """What git told a client about where things are (the answers of the `rev-parse` options
     `where_questions` lists, and `--git-path`'s), by location and option, as git printed
     each, but the newline that ends it, with when git gave it. A client and its `read_only()`
-    copies share one, so forget() on any forgets for all."""
+    copies (or any shallow copy) share one, so forget() on any forgets for all; a deep copy
+    or a pickled one is empty."""
 
     def __init__(self) -> None:
         # Held only to read or change what's here, never while git runs.
@@ -513,6 +514,15 @@ class Memory:
         # Per location: an Event that a thread asking git for object_id_length() alone sets
         # once it has its answer (or has failed), for the threads waiting for it.
         self.asking_format: dict[Location, threading.Event] = {}
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Memory:
+        """An empty Memory: a deep copy of a client remembers nothing, and forgets alone."""
+        return Memory()
+
+    def __reduce__(self) -> tuple[type[Memory], tuple[()]]:
+        """An empty Memory, as a pickled client (e.g. sent to a process pool) gets: its
+        lock can't be pickled, and its answers needn't be."""
+        return Memory, ()
 
     def recall_locked(
         self, where: Location, questions: Sequence[str], remember_for: float | None
@@ -801,8 +811,9 @@ class ReadOnlyGit:
 
     What git tells a client about where things are (`prefix()`, `cdup()`,
     `object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`) is remembered, per
-    `location` (the directory and `env`), and shared with its `read_only()` copies.
-    `remember_for`, if given, is how many seconds an answer is kept, from when git gave it
+    `location` (the directory and `env`), and shared with its `read_only()` copies, as with
+    any shallow copy (`copy.copy`); a deep copy or a pickled client starts remembering
+    nothing, keeping its `remember_for`. `remember_for`, if given, is how many seconds an answer is kept, from when git gave it
     (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything else
     the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
     together. With None, the default, an answer is kept as long as the client, so a
@@ -881,14 +892,13 @@ class ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
         (see there), and otherwise runs as the client does, with the same `program`,
         `timeout`, `stopping`, `process_groups`, `remember_for` and `env`, as they are now.
-        It's of the
-        client's own class, so a subclass's methods (e.g. its own `process`) and attributes
-        are kept (an attribute that holds the client itself still writes through it); and it
-        shares what git told the client about where things are (`prefix()`, `cdup()`,
-        `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
-        asked, nor the client one it asked, and `forget()` on either forgets for both. A new
-        copy each call; a read-only client gives
-        itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        It's of the client's own class, so a subclass's methods (e.g. its own `process`) and
+        attributes are kept (an attribute that holds the client itself still writes through
+        it); and, as a shallow copy (`copy.copy`) does, it shares what git told the client
+        about where things are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
+        `git_dir`, `git_common_dir`), so it asks no question the client asked, nor the client
+        one it asked, and `forget()` on either forgets for both. A new copy each call; a
+        read-only client gives itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)

@@ -157,10 +157,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   client remembers of where things are (`prefix()`, `cdup()`, `object_id_length()`,
   `git_paths`, `git_dir`, `git_common_dir`): once its time is past, or after `forget()`, the
   next call asks git again, in one process, and what one `rev-parse` told expires together.
-  A client and its `read_only()` copies share them, `forget()` too. A long-lived tool (e.g.
-  move-forward) keeps a client per repository and gives it `remember_for=` a few seconds,
-  or calls `forget()` after each refresh, rather than make a new client. A given
-  `object_id_length=` never expires (#69).
+  A client and its `read_only()` copies share them, `forget()` too, as any shallow copy
+  (`copy.copy`) of a client does; a deep copy or a pickled client starts with none. A
+  long-lived tool (e.g. move-forward) keeps a client per repository and gives it
+  `remember_for=` a few seconds, or calls `forget()` after each refresh, rather than make a
+  new client. A given `object_id_length=` never expires (#69).
 - `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
   the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`

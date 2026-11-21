@@ -1,5 +1,7 @@
+import copy
+import pickle
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -187,3 +189,42 @@ def test_a_fake_remembers_for_remember_for(clock: list[float]) -> None:
 
     git.prefix()
     assert len(git.calls) == 2
+
+
+def test_a_deep_copy_remembers_nothing_and_forgets_alone(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    git = Git(repo.directory, remember_for=10)
+    git.prefix()
+    twin = copy.deepcopy(git)
+
+    assert twin.remember_for == 10
+    twin.prefix()  # its own question
+    twin.forget()
+    git.prefix()  # still the client's answer
+    assert len(git_calls) == 2
+
+
+def test_a_pickled_client_comes_back_remembering_nothing(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    git = Git(repo.directory, remember_for=10)
+    git_paths(git, "HEAD")
+    back = pickle.loads(pickle.dumps(git))
+
+    assert back.remember_for == 10
+    assert back.prefix() == ""
+    assert len(git_calls) == 2
+
+
+def prefix_of(git: Git) -> str:
+    """For a process pool, which pickles what it's given."""
+    return git.prefix()
+
+
+def test_a_client_with_answers_goes_to_a_process_pool(repo: Git) -> None:
+    git = Git(repo.directory)
+    git.prefix()
+
+    with ProcessPoolExecutor(1) as pool:
+        assert pool.submit(prefix_of, git).result() == ""
