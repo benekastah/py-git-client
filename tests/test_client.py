@@ -537,16 +537,23 @@ def test_write_config_tries_an_unset_again_while_locked(repo: Git) -> None:
         timer.join()
 
 
+GOOD = (ConfigSet("branch.m.x", "1"), ConfigUnset("branch.m.y"))
+
+
 @pytest.mark.parametrize(
-    "wrong",
-    [[ConfigSet("branch.m.x", "1")], "--unset", ("branch.m.x", "1")],
-    ids=["a list", "the old form", "a tuple"],
+    "changes",
+    [
+        ("--unset", "branch.m.x"),
+        (*GOOD, [ConfigSet("branch.m.x", "1")]),
+        (*GOOD, "a str"),
+        (*GOOD, ("branch.m.x", "1")),
+    ],
+    ids=["the old form", "a list after changes", "a str after changes", "a tuple after changes"],
 )
 def test_write_config_refuses_what_isnt_a_change_before_making_any(
-    repo: Git, git_calls: list[list[str]], wrong: object
+    repo: Git, git_calls: list[list[str]], changes: tuple[object, ...]
 ) -> None:
     with pytest.raises(TypeError, match="ConfigSet or ConfigUnset"):
-        changes = [ConfigSet("branch.m.x", "1"), ConfigUnset("branch.m.y"), wrong]
         repo.write_config(*changes)  # pyright: ignore[reportArgumentType]
 
     assert git_calls == []
