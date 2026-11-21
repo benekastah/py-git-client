@@ -52,14 +52,16 @@ def is_ancestor(
     neither resolved nor passed to git). It raises only for what fails the whole call:
     GitError if git can't read the repository (e.g. NotARepositoryError), GitTimeoutError if
     a request takes longer than the client's `timeout`, and NotStartedError once its
-    `stopping` says so.
+    `stopping` says so. With `cat_file`, its requests run under its own client,
+    `cat_file.git`, whose `timeout` and `stopping` count for them; `git`'s count for the
+    rest (`git_paths`, and the `merge-base` fallbacks below).
 
     One `git cat-file --batch-command` reads every commit the pairs need, each once: the
     tool's own `cat_file`, if it gives one (it must be for `git`'s repository, which isn't
     checked: another repository's gives wrong answers), else one started for the call. Where
     the shallow and grafts files are is asked of `git_paths(git, "shallow", "info/grafts")`,
     which asks git once per client (one `rev-parse`) and remembers: a tool that has its own
-    `git_paths` or `git_paths_and_head` ask for them too, on the same client, starts no git
+    `git_paths` or `git_paths_and_head` asks for them too, on the same client, starts no git
     for them here. With both, a call starts no process (but the fallbacks below).
 
     A shared `cat_file` applies replace refs as they were when its process started (see
