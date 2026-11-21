@@ -162,21 +162,52 @@ def test_prefix_tells_the_object_id_length_in_the_same_process(
     assert len(git_calls) == started + 1
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
-def test_prefix_and_cdup_take_a_path_with_a_newline(repo: Git, tmp_path: Path) -> None:
-    below = Path(repo.directory) / "a\nb"
+NO_NEWLINES_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows' file names can't hold a newline"
+)
+
+
+@NO_NEWLINES_ON_WINDOWS
+@pytest.mark.parametrize("ask", [Git.prefix, git_paths, git_paths_and_head])
+def test_where_answers_take_a_path_with_a_newline(
+    ask: Callable[[Git, str], object], repo: Git
+) -> None:
+    # With a leading space too, which stripping git's answer would lose.
+    below = Path(repo.directory) / " a\nb"
     below.mkdir()
     git = Git(below)
-    assert (git.prefix(), git.cdup()) == ("a\nb/", "../")
+    ask(git, "HEAD") if ask is not Git.prefix else git.prefix()
+
+    assert (git.prefix(), git.cdup()) == (" a\nb/", "../")
     assert git_paths(git, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
 
-    # A worktree whose top's path holds one, from outside it.
-    top = tmp_path / "work\ntree"
+
+@NO_NEWLINES_ON_WINDOWS
+def test_git_paths_and_head_takes_a_path_with_a_newline_on_an_unborn_branch(
+    tmp_path: Path,
+) -> None:
+    Git(tmp_path).run("init", "--quiet", " a\nb")
+    git = Git(tmp_path / " a\nb")
+
+    assert git_paths_and_head(git, "HEAD") == ([tmp_path / " a\nb" / ".git" / "HEAD"], Head())
+    assert (git.prefix(), git.cdup()) == ("", "")
+
+
+@NO_NEWLINES_ON_WINDOWS
+def test_a_top_whose_path_ends_in_a_line_of_true_isnt_taken_for_the_marker(
+    repo: Git, tmp_path: Path
+) -> None:
+    repo.run("update-ref", "refs/heads/HEAD", "HEAD")  # so git prints no HEAD line
+    top = tmp_path / "w\ntrue"
     top.mkdir()
     env = {"GIT_DIR": str(Path(repo.directory) / ".git"), "GIT_WORK_TREE": str(top)}
-    outside = Git(tmp_path, env=env)
-    assert git_paths_and_head(outside, "HEAD")[1] == Head(branch="refs/heads/main")
-    assert (outside.prefix(), Path(outside.cdup())) == ("", top)
+    git = Git(tmp_path, env=env, object_id_length=40)
+
+    paths, head = git_paths_and_head(git, "HEAD", "config")
+
+    assert paths == [Path(repo.directory) / ".git" / name for name in ("HEAD", "config")]
+    assert head == Head()
+    assert (git.prefix(), Path(git.cdup())) == ("", top)
 
 
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:

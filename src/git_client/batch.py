@@ -1,6 +1,7 @@
 """Reads and writes that answer many questions, or make many changes, with one git process."""
 
 import os
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,7 +137,8 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
     process tells the client's `prefix()` and `cdup()`, and `object_id_length()`, if they
-    aren't known yet."""
+    aren't known yet. Where a path git prints holds a newline, which makes its answers'
+    lines impossible to tell apart, each is asked in a process of its own."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -154,9 +156,9 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         output = git.run_bytes("rev-parse", *questions, "--path-format=absolute", *args)
         try:
             lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
-        except LinesUnfit:  # a path with a newline: ask again, without them
+        except LinesUnfit:  # a path with a newline: each in a process of its own
             ask_where_alone(git, where, questions)
-            return git_paths(git, *names)
+            lines = [_git_path_alone(git, name) for name in new]
         for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
@@ -194,24 +196,27 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     # taken for a path and printed as "HEAD", which a detached HEAD prints too.
     command = ["rev-parse", *questions, "--path-format=absolute", *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
+    result = git.process(*command, capture_output=True)
+    stderr = decode(result.stderr)
+    if result.returncode == 0:
+        # No HEAD line where git can't say which ref "HEAD" is (a branch named HEAD).
+        head_lines = 0 if _AMBIGUOUS_HEAD.search(stderr) else 1
+    elif result.returncode == 1 and not stderr.strip():
+        head_lines = 0  # unborn
+    else:
+        raise error_from(command, result)  # git said why
     try:
-        try:
-            output = rev_parse_lines(git.run_bytes(*command))
-            # No HEAD line where git can't say (e.g. a branch named HEAD)
-            lines = learn_where(git, where, questions, output, len(unique), len(unique) + 1)
-        except GitError as error:
-            if error.returncode != 1 or error.stderr.strip():
-                raise  # not an unborn HEAD: git said why
-            try:
-                output = rev_parse_lines(encode(error.stdout))
-                lines = learn_where(git, where, questions, output, len(unique))
-            except LinesUnfit:
-                raise
-            except ValueError:
-                raise error from None  # it didn't print what was asked
-    except LinesUnfit:  # a path with a newline: ask again, without them
+        lines = learn_where(
+            git, where, questions, rev_parse_lines(result.stdout), len(unique) + head_lines
+        )
+    except LinesUnfit:  # a path with a newline: each in a process of its own
         ask_where_alone(git, where, questions)
-        return git_paths_and_head(git, *names)
+        lines = [_git_path_alone(git, name) for name in unique]
+        lines += _head_alone(git)
+    except ValueError:
+        if result.returncode == 0:
+            raise
+        raise error_from(command, result) from None  # it didn't print what was asked
     found = {
         name: Path(os.fsdecode(line))
         for name, line in zip(unique, lines[: len(unique)], strict=True)
@@ -257,6 +262,29 @@ def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
         own, common = (Path(os.fsdecode(line)) for line in rev_parse_lines(output))
         known[where] = own, common
     return known[where]
+
+
+# What git says (on stderr, with exit 0) where it prints no HEAD line: a ref named HEAD (e.g.
+# refs/heads/HEAD) makes the name ambiguous.
+_AMBIGUOUS_HEAD = re.compile(r"refname 'HEAD' is ambiguous")
+
+
+def _git_path_alone(git: ReadOnlyGit, name: str) -> bytes:
+    """Where git keeps `name`, from a `rev-parse` of its own: its whole output but the newline
+    that ends it, for a path with a newline in it."""
+    output = git.run_bytes("rev-parse", "--path-format=absolute", "--git-path", name)
+    return output.removesuffix(b"\n")
+
+
+def _head_alone(git: ReadOnlyGit) -> list[bytes]:
+    """The full name of what HEAD points at, from a `rev-parse` of its own, as one line; none
+    where git can't say (an unborn branch, a branch named HEAD). A ref's name holds no
+    newline."""
+    args = ("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "HEAD")
+    result = git.process(*args, capture_output=True)
+    if result.returncode not in (0, 1) or result.returncode == 1 and result.stderr.strip():
+        raise error_from(args, result)
+    return rev_parse_lines(result.stdout)
 
 
 def _moved_by_config(name: str) -> bool:

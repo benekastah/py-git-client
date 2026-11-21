@@ -522,18 +522,16 @@ _lengths_lock = threading.Lock()
 
 # What asks for prefix() and cdup(). Where git knows no worktree (in a bare repository, or a
 # git directory), it prints no cdup at all, not even an empty line (where it knows the top but
-# the directory is outside it, it prints the top's absolute path); then the line after the
-# prefix's is --is-inside-work-tree's "true" or "false", which no cdup can be (it's empty,
-# "../"s, or the top's absolute path).
+# the directory is outside it, it prints the top's absolute path). --is-inside-work-tree's
+# "true" or "false" after it tells the two apart (see learn_where).
 _TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
 _INSIDE_WORK_TREE = (b"true", b"false")
-_OBJECT_FORMATS = (b"sha1", b"sha256")
 
 
 class LinesUnfit(ValueError):
-    """rev-parse printed at least as many lines as were asked for, but they don't fit what was
-    asked: a path it printed (the prefix, the cdup) holds a newline. `ask_where_alone` asks
-    each question in a process of its own then."""
+    """rev-parse printed more lines than the answers asked of it, so they can't be told apart:
+    a path it printed holds a newline. The caller then asks each question in a process of its
+    own (see `ask_where_alone`)."""
 
 
 def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
@@ -552,40 +550,36 @@ def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
 
 
 def learn_where(
-    git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], *rest: int
+    git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], rest: int
 ) -> list[bytes]:
     """Remember git's answers to `questions` (from `where_questions`) at `where`, from the first
-    of `lines`, what `rev-parse` printed, and return the lines after them, the caller's, of
-    which as many follow as one of `rest` says. Remembers nothing, and raises ValueError where
-    there are too few lines (e.g. a FakeGit's answer a line short), so one isn't taken for
-    another's; and LinesUnfit where there are more than that, or an answer can't be git's,
-    which is what a path with a newline in it does (then the caller asks again, with
-    `ask_where_alone`)."""
-    answers: dict[str, bytes] = {}
-    used = 0
-    for question in questions:
-        line = lines[used] if used < len(lines) else None
-        if question == "--show-cdup" and line in _INSIDE_WORK_TREE:
-            answers[question] = b""  # git printed none
-            continue
-        if line is None:
-            raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {questions}")
-        answers[question] = line
-        used += 1
-    left = len(lines) - used
-    if left < min(rest):
-        raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {questions}")
-    unfit = (
-        left > max(rest)
-        or answers.get("--is-inside-work-tree", b"true") not in _INSIDE_WORK_TREE
-        or answers.get("--show-object-format", b"sha1") not in _OBJECT_FORMATS
-    )
-    if unfit:
-        if not questions:
-            raise ValueError(f"rev-parse printed {len(lines)} lines, not {rest}")
-        raise LinesUnfit(f"rev-parse printed {len(lines)} lines that don't fit {questions}")
+    of `lines`, what `rev-parse` printed, and return the `rest` lines after them, the caller's
+    answers (each one line, unless it's a path with a newline in it). Remembers nothing, and
+    raises ValueError where there are too few lines (e.g. a FakeGit's answer a line short),
+    and LinesUnfit where a line's answer can't be told (then the caller asks each question in
+    a process of its own).
+
+    Each answer is a line, but a path's, which is one more line for each newline in it, and
+    the cdup's, which is none where git knows no worktree (and its prefix is then ""). So
+    with `n` lines asked for in all, n of them (with the cdup's not "true" or "false", which
+    would be --is-inside-work-tree's after no cdup) is one line each, and n - 1 is one each
+    but no cdup; more can't be told apart, and is LinesUnfit."""
+    asked = len(questions) + rest
+    cdup = "--show-cdup" in questions
+    if len(lines) == asked and not (cdup and lines[1] in _INSIDE_WORK_TREE):
+        answers = dict(zip(questions, lines, strict=False))
+    elif cdup and len(lines) == asked - 1:
+        answers = dict(zip([q for q in questions if q != "--show-cdup"], lines, strict=False))
+        answers["--show-cdup"] = b""  # git printed none
+    elif len(lines) < asked - cdup:
+        raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {asked}")
+    else:
+        raise LinesUnfit(f"rev-parse printed {len(lines)} lines for {asked}")
+    if answers.get("--is-inside-work-tree", b"true") not in _INSIDE_WORK_TREE:
+        # Not git's answer (e.g. a FakeGit's, made for another question).
+        raise ValueError(f"rev-parse's lines don't answer {questions}")
     _remember(git, where, answers)
-    return lines[used:]
+    return lines[len(lines) - rest :]
 
 
 def ask_where_alone(
@@ -597,8 +591,8 @@ def ask_where_alone(
 ) -> None:
     """Ask each of `questions` (from `where_questions`) in a `rev-parse` of its own, and
     remember git's answers, each its whole output but the newline that ends it: for where
-    their answers in one `rev-parse` didn't fit (LinesUnfit), as a path with a newline in it
-    makes them."""
+    their answers in one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a
+    newline in it makes them."""
     answers = {
         question: git.run_bytes("rev-parse", question, timeout=timeout).removesuffix(b"\n")
         for question in questions
@@ -619,7 +613,7 @@ def _remember(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -
 def rev_parse_lines(output: bytes) -> list[bytes]:
     """The lines of rev-parse's output. Not splitlines(): an answer can be an empty line (e.g.
     the prefix's at the top), and only "\\n" ends one. A path git prints can hold a newline
-    (off Windows), which makes it two lines: `learn_where` notices."""
+    (off Windows), which makes it two lines: `learn_where` tells."""
     return output.removesuffix(b"\n").split(b"\n") if output else []
 
 

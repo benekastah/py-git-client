@@ -47,9 +47,11 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   while the prefix isn't, then `--show-object-format` while the object id length isn't. A
   `FakeGit` answering it gives, in this order: the prefix's line (empty at the top), the
   cdup's (none at all where git knows no worktree: a bare repository, a git directory),
-  `true` or `false`, then `sha1` or `sha256`; then the paths and HEAD. One still answering
-  the old way (the prefix's line alone, or then the format's) gets too few lines: `ValueError:
-  rev-parse printed N lines, too few for [...]` (#67).
+  `true` or `false`, then `sha1` or `sha256`; then the paths and HEAD (none where git exits
+  1 for an unborn branch, or 0 saying "refname 'HEAD' is ambiguous"). Where a path holds a
+  newline, so that the lines can't be told apart, each question is asked alone. One still
+  answering the old way (the prefix's line alone, or then the format's) gets too few lines:
+  `ValueError: rev-parse printed N lines, too few for M` (#67).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and

@@ -1,3 +1,5 @@
+import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from git_client import (
     ReadOnlyError,
     RefUpdate,
     config,
+    decode,
     git_paths,
     git_paths_and_head,
     hash_blob_at,
@@ -21,7 +24,7 @@ from git_client import (
     refs,
     update_refs,
 )
-from git_client.testing import FakeGit, GitCall
+from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -905,6 +908,79 @@ def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo:
     repo.run("update-ref", "refs/heads/HEAD", "HEAD")  # which makes "HEAD" ambiguous
 
     assert git_paths_and_head(repo, "HEAD")[1] == Head()
+
+
+# Names whose newline makes a path's lines look like other answers: the marker after the
+# cdup, an object format, a ref's name, an empty line, and a leading space.
+ADVERSARIAL_NAMES = ["w\ntrue", "\nfalse", "x\nrefs", "\nsha1", " a\n\nb"]
+HEAD_STATES = ["main", "ambiguous", "unborn"]
+
+
+def make_adversarial_repositories(directory: Path) -> None:
+    """For each HEAD state and adversarial name: a repository whose path ends in the name,
+    with a directory of that name in it, and a bare one beside it."""
+    for state in HEAD_STATES:
+        for i, name in enumerate(ADVERSARIAL_NAMES):
+            top = directory / state / name
+            Git(directory).run("init", "--quiet", str(top))
+            git = Git(top)
+            (top / name).mkdir()
+            if state != "unborn":
+                git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+            if state == "ambiguous":
+                git.run("update-ref", "refs/heads/HEAD", "HEAD")
+            bare = directory / state / f"bare{i}{name}"
+            if state == "unborn":
+                Git(directory).run("init", "--quiet", "--bare", str(bare))
+            else:
+                Git(directory).run("clone", "--quiet", "--bare", str(top), str(bare))
+                if state == "ambiguous":
+                    Git(bare).run("update-ref", "refs/heads/HEAD", "HEAD")
+
+
+def asked_alone(git: Git) -> tuple[str, str, list[Path], Head]:
+    """The prefix, cdup, paths of HEAD and config, and HEAD, each asked of git alone."""
+
+    def answer(*args: str) -> bytes:
+        return git.process("rev-parse", *args, capture_output=True).stdout.removesuffix(b"\n")
+
+    paths = [
+        Path(os.fsdecode(answer("--path-format=absolute", "--git-path", name)))
+        for name in ("HEAD", "config")
+    ]
+    named = decode(answer("--verify", "--quiet", "--symbolic-full-name", "HEAD"))
+    head = Head() if not named else Head(detached=True) if named == "HEAD" else Head(branch=named)
+    return decode(answer("--show-prefix")), decode(answer("--show-cdup")), paths, head
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+@pytest.mark.parametrize("state", HEAD_STATES)
+@pytest.mark.parametrize("layout", ["top", "below", "git directory", "bare", "outside"])
+def test_git_paths_and_head_tells_lines_apart_as_git_asked_alone_does(
+    state: str, layout: str, repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    root = repo_templates.build("adversarial", make_adversarial_repositories) / state
+    for i, name in enumerate(ADVERSARIAL_NAMES):
+        env: dict[str, str] = {}
+        directory = {
+            "top": root / name,
+            "below": root / name / name,
+            "git directory": root / name / ".git",
+            "bare": root / f"bare{i}{name}",
+            "outside": tmp_path,
+        }[layout]
+        if layout == "outside":
+            top = tmp_path / f"top{i}{name}"
+            top.mkdir()
+            env = {"GIT_DIR": str(root / name / ".git"), "GIT_WORK_TREE": str(top)}
+        expected = asked_alone(Git(directory, env=env))
+        for length in (None, 40):  # the object format asked too, or not
+            git = Git(directory, env=env, object_id_length=length)
+            paths, head = git_paths_and_head(git, "HEAD", "config")
+            assert (git.prefix(), git.cdup(), paths, head) == expected, (name, length)
+            git = Git(directory, env=env, object_id_length=length)
+            assert git_paths(git, "HEAD", "config") == expected[2], (name, length)
+            assert (git.prefix(), git.cdup()) == expected[:2], (name, length)
 
 
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
