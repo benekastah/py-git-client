@@ -11,8 +11,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `Git.write_config` takes changes, not `git config`'s arguments, and returns what each did
   (a list of `ConfigResult`), not git's output: `git.write_config("k", "v")` becomes
   `git.write_config(ConfigSet("k", "v"))`, and `git.write_config("--unset", k)` becomes
-  `git.write_config(ConfigUnset(k))`, whose result says `NOT_FOUND` where git failed (exit 5)
-  (`ConfigUnset(k, v)` removes only the value `v`, as `--unset --fixed-value`). Other `git
+  `git.write_config(ConfigUnset(k))`: where git failed with exit 5, its result says so,
+  rather than raise, as `NOT_FOUND` for a key that isn't set, and `SEVERAL_VALUES` for one
+  with several values (`ConfigUnset(k, v)` removes only the value `v`, as `--unset
+  --fixed-value`). Other `git
   config` writes (`--add`, `--rename-section`, `--worktree`, ...) go through
   `git.run("config", ...)`, which doesn't try again while the file is locked (#61).
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
@@ -91,10 +93,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
-- Many config changes in one `Git.write_config` call, each a `ConfigSet` or `ConfigUnset`,
-  with a `ConfigResult` for each: `CHANGED`, or, for an unset that removes nothing,
-  `NOT_FOUND` or `SEVERAL_VALUES` (a key with several values unset without the one to
-  remove), which raise nothing (#61).
+- Many config changes in one `Git.write_config` call, each a `ConfigSet` or `ConfigUnset`
+  (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
+  `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
+  with several values unset without the one to remove), which raise nothing (#61).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the

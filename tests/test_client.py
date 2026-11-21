@@ -501,6 +501,57 @@ def test_write_config_raises_what_git_rejects_keeping_the_changes_before(repo: G
     assert repo.run("config", "branch.m.y") == "1"
 
 
+@pytest.mark.parametrize(("key", "returncode"), [("no-section", 2), ("branch.a.1x", 1)])
+def test_write_config_raises_for_an_unset_git_rejects(repo: Git, key: str, returncode: int) -> None:
+    # A key git can't take, not one that isn't set.
+    with pytest.raises(GitError) as raised:
+        repo.write_config(ConfigUnset(key))
+
+    assert raised.value.returncode == returncode
+
+
+def test_write_config_tells_an_empty_value_to_unset_from_none(repo: Git) -> None:
+    repo.run("config", "--add", "branch.m.x", "")
+    repo.run("config", "--add", "branch.m.x", "2")
+    repo.run("config", "--add", "branch.m.y", "1")
+    repo.run("config", "--add", "branch.m.y", "1")
+
+    results = repo.write_config(ConfigUnset("branch.m.x", ""), ConfigUnset("branch.m.y", "1"))
+
+    # The empty value only; then both of y's values are 1, which git won't choose between.
+    assert results == [ConfigResult.CHANGED, ConfigResult.SEVERAL_VALUES]
+    assert repo.run("config", "--get-all", "branch.m.x") == "2"
+
+
+def test_write_config_tries_an_unset_again_while_locked(repo: Git) -> None:
+    repo.run("config", "branch.m.x", "1")
+    lock = locked_config(repo)
+    with pytest.raises(ConfigLockedError):
+        repo.write_config(ConfigUnset("branch.m.x"), wait=0.2)
+    timer = threading.Timer(0.2, lock.unlink)
+
+    timer.start()
+    try:
+        assert repo.write_config(ConfigUnset("branch.m.x")) == [ConfigResult.CHANGED]
+    finally:
+        timer.join()
+
+
+@pytest.mark.parametrize(
+    "wrong",
+    [[ConfigSet("branch.m.x", "1")], "--unset", ("branch.m.x", "1")],
+    ids=["a list", "the old form", "a tuple"],
+)
+def test_write_config_refuses_what_isnt_a_change_before_making_any(
+    repo: Git, git_calls: list[list[str]], wrong: object
+) -> None:
+    with pytest.raises(TypeError, match="ConfigSet or ConfigUnset"):
+        changes = [ConfigSet("branch.m.x", "1"), ConfigUnset("branch.m.y"), wrong]
+        repo.write_config(*changes)  # pyright: ignore[reportArgumentType]
+
+    assert git_calls == []
+
+
 def test_input_and_output_keep_their_line_endings(repo: Git) -> None:
     # On Windows, text mode would write each \n as \r\n; hash-object would then hash those.
     blob = repo.run("hash-object", "-w", "--stdin", input="one\ntwo\n")

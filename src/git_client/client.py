@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Final, Literal
 
-from git_client.config_file import ConfigChange, ConfigResult, ConfigSet
+from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
     CORRUPT_OBJECT,
     MISSING_OBJECT,
@@ -938,8 +938,10 @@ class Git(ReadOnlyGit):
         values unset without the one to remove (git config's exit status 5). Anything else git
         rejects (e.g. a set of a key with several values, or a key that isn't valid) raises
         GitError, the changes before it made: they're made one at a time, not all or nothing.
-        No change starts no process. Other config writes (e.g. `--add`, `--rename-section`,
-        `--worktree`) go through `run("config", ...)`, which doesn't try again while locked.
+        Called with no changes, it starts no process. Raises TypeError, making no change, if
+        an argument isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
+        `--rename-section`, `--worktree`) go through `run("config", ...)`, which doesn't try
+        again while locked.
 
         While another process has the config file locked, each change is tried again,
         starting no try after `wait` seconds, then raises ConfigLockedError (a write is made
@@ -948,6 +950,16 @@ class Git(ReadOnlyGit):
         core.configLockTimeout (a second by default; -1: for as long as it's locked) on each
         try, so a change can run that much past `wait`. Older git fails at once, so without
         this, any write racing another process's (e.g. an editor's git) would fail."""
+        for change in changes:
+            # Before any is made: a call of the old form, with git config's own arguments,
+            # comes here too.
+            wrong = not isinstance(change, (ConfigSet, ConfigUnset))  # pyright: ignore[reportUnnecessaryIsInstance]
+            if wrong:
+                raise TypeError(
+                    f"write_config takes a ConfigSet or ConfigUnset for each change, not"
+                    f' {change!r}: write_config("k", "v") is write_config(ConfigSet("k", "v")),'
+                    ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
+                )
         return [self._write_config_change(change, wait) for change in changes]
 
     def _config_write(self, *args: Arg, wait: float) -> None:
