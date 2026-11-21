@@ -290,6 +290,61 @@ def test_a_tag_a_corrupt_commit_names_as_parent_is_still_its_commit(
     assert merge_base_says(git, tag, c[3])
 
 
+def test_an_uppercase_parent_is_followed(
+    git_calls: list[GitCall], shapes: tuple[Git, list[str]]
+) -> None:
+    git, c = shapes
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    odd = literal_commit(git, f"tree {tree}\nparent {c[1].upper()}\n")
+    top = git.run("commit-tree", "-p", odd, "-m", "top", tree)
+    started = len(git_calls)
+
+    # Through the walk, as git reads it: no merge-base.
+    assert is_ancestor(git, (c[0], top)) == [True]
+    assert "merge-base" not in [call[0] for call in git_calls[started:]]
+    assert merge_base_says(git, c[0], top)
+
+
+def test_a_blob_named_as_parent_is_no_commit_whatever_it_holds(
+    shapes: tuple[Git, list[str]],
+) -> None:
+    git, c = shapes
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    who = "T <t@example.com> 1000000000 +0000"
+    like_a_commit = f"tree {tree}\nparent {c[0]}\nauthor {who}\ncommitter {who}\n\nblob\n"
+    blob = git.run("hash-object", "-w", "--stdin", input=like_a_commit)
+    odd = literal_commit(git, f"tree {tree}\nparent {blob}\n")
+    top = git.run("commit-tree", "-p", odd, "-m", "top", tree)
+    pairs = [(c[0], top), (blob, top)]
+
+    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+    assert not merge_base_says(git, c[0], top)
+
+
+def test_a_40_digit_parent_in_a_sha256_repository_is_no_parent(tmp_path: Path) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "repo")
+    git = Git(tmp_path / "repo")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "c0")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "c1")
+    c0, c1 = git.run("rev-parse", "HEAD~", "HEAD").split()
+    tree = git.run("rev-parse", "HEAD^{tree}")
+    # An abbreviation there, which cat-file would resolve to c1: git fails the commit.
+    odd = literal_commit(git, f"tree {tree}\nparent {c1[:40]}\n")
+    top = git.run("commit-tree", "-p", odd, "-m", "top", tree)
+
+    assert is_ancestor(git, (c0, top)) == [merge_base_says(git, c0, top)]
+    assert not merge_base_says(git, c0, top)
+
+
+def literal_commit(git: Git, headers: str) -> str:
+    """A commit object of `headers` (a tree and parent lines, or anything), then an author,
+    committer and message, written as it is, however odd: as a fetch without
+    transfer.fsckObjects could bring it."""
+    who = "T <t@example.com> 1000000000 +0000"
+    content = f"{headers}author {who}\ncommitter {who}\n\nodd\n"
+    return git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
+
+
 def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> None:
     # 40 hex digits: an abbreviation there, which cat-file would resolve.
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "repo")
