@@ -1,7 +1,6 @@
 """Which commits are ancestors of which: many pairs answered through one git process."""
 
 import heapq
-from collections.abc import Iterable
 
 from git_client.batch import git_paths
 from git_client.cat_file import CatFile
@@ -32,9 +31,9 @@ class _TooFar(Exception):
     """A pair's walk took more than _WALK_LIMIT commits."""
 
 
-def is_ancestor_many(git: ReadOnlyGit, pairs: Iterable[tuple[str, str]]) -> list[bool]:
-    """For each (ancestor, descendant) pair of full object ids, whether `git merge-base
-    --is-ancestor <ancestor> <descendant>` succeeds: whether the ancestor is reachable from
+def is_ancestor(git: ReadOnlyGit, *pairs: tuple[str, str]) -> list[bool]:
+    """For each (ancestor, descendant) pair of full object ids (one or more; none starts no git
+    and gives []), whether `git merge-base --is-ancestor <ancestor> <descendant>` succeeds: whether the ancestor is reachable from
     the descendant (a commit is its own ancestor), as git sees history, through replace refs,
     grafts and a shallow clone's cut. A tag's id stands for its commit, as git peels it. A pair
     `merge-base` would fail on is False: an id of no object, or of one that peels to no commit
@@ -73,7 +72,6 @@ def is_ancestor_many(git: ReadOnlyGit, pairs: Iterable[tuple[str, str]]) -> list
     ancestor's generation where there's a commit-graph, and to where they meet (or all of it,
     if they don't) where there's none.
     """
-    pairs = list(pairs)
     if not pairs:
         return []
     shallow_file, grafts_file = git_paths(git, "shallow", "info/grafts")
@@ -165,7 +163,7 @@ class _Walker:
         return self._commits[commit_id]
 
     def _walk(self, ancestor: str, descendant: str) -> bool:
-        """Whether ancestor is reachable from descendant (see is_ancestor_many). Raises
+        """Whether ancestor is reachable from descendant (see is_ancestor). Raises
         _TooFar past _WALK_LIMIT commits, and what _commit does."""
         if ancestor == descendant:
             return True

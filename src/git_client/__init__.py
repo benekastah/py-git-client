@@ -1,7 +1,7 @@
 """Run git from Python with as few processes as possible: one way to start git, a long-lived
 cat-file, and batched reads and writes."""
 
-from git_client.ancestry import is_ancestor_many
+from git_client.ancestry import is_ancestor
 from git_client.batch import (
     Head,
     Ref,
@@ -97,7 +97,7 @@ __all__ = [
     "git_paths_and_head",
     "hash_blob_at",
     "hash_blobs",
-    "is_ancestor_many",
+    "is_ancestor",
     "merge_file",
     "merge_trees",
     "patch_ids",

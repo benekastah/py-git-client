@@ -13,7 +13,7 @@ what git-stack, git-recommit and move-forward share for that:
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
-- **Ancestry for many pairs of commits** through one `git cat-file` (`is_ancestor_many`), as
+- **Ancestry for many pairs of commits** through one `git cat-file` (`is_ancestor`), as
   `git merge-base --is-ancestor` answers each, reading only the commits between each pair's two.
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
@@ -56,7 +56,7 @@ from git_client import (
     git_paths_and_head,
     hash_blob_at,
     hash_blobs,
-    is_ancestor_many,
+    is_ancestor,
     merge_file,
     refs,
     update_refs,
@@ -116,7 +116,7 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # process however many pairs, each walk reading the commits between its pair's two.
 branches = refs(git, "refs/heads/")
 a, b = branches["refs/heads/a"].object, branches["refs/heads/b"].object
-a_under_b, b_under_a = is_ancestor_many(git, [(a, b), (b, a)])
+a_under_b, b_under_a = is_ancestor(git, (a, b), (b, a))
 # The directory with the refs, objects and config of a checkout (its top), or of a git
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from git_client import CatFile, Git, NotARepositoryError, is_ancestor_many, refs
+from git_client import CatFile, Git, NotARepositoryError, is_ancestor, refs
 from git_client import ancestry as ancestry_module
 from git_client.testing import GitCall
 
@@ -89,7 +89,7 @@ def test_answers_as_merge_base_does_in_random_histories(tmp_path: Path, seed: in
     # Every pair in one call, so pairs can get in each other's way if they would.
     every_pair = [(a, d) for a in range(len(commits)) for d in range(len(commits))]
 
-    answers = is_ancestor_many(git, [(commits[a], commits[d]) for a, d in every_pair])
+    answers = is_ancestor(git, *((commits[a], commits[d]) for a, d in every_pair))
 
     assert answers == [a in reach[d] for a, d in every_pair]
     # The oracle is git's: merge-base, a process each, on a sample.
@@ -111,7 +111,7 @@ def shapes(tmp_path: Path) -> tuple[Git, list[str]]:
 def test_a_merge_reaches_both_its_parents_histories(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
 
-    answers = is_ancestor_many(git, [(c[5], c[6]), (c[4], c[6]), (c[3], c[6]), (c[6], c[5])])
+    answers = is_ancestor(git, (c[5], c[6]), (c[4], c[6]), (c[3], c[6]), (c[6], c[5]))
 
     assert answers == [True, True, True, False]
 
@@ -119,7 +119,7 @@ def test_a_merge_reaches_both_its_parents_histories(shapes: tuple[Git, list[str]
 def test_criss_cross_merges(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
 
-    answers = is_ancestor_many(git, [(c[2], c[8]), (c[4], c[7]), (c[7], c[8]), (c[8], c[7])])
+    answers = is_ancestor(git, (c[2], c[8]), (c[4], c[7]), (c[7], c[8]), (c[8], c[7]))
 
     assert answers == [True, True, False, False]
 
@@ -127,13 +127,13 @@ def test_criss_cross_merges(shapes: tuple[Git, list[str]]) -> None:
 def test_a_commit_is_its_own_ancestor(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
 
-    assert is_ancestor_many(git, [(c[6], c[6]), (c[0], c[0])]) == [True, True]
+    assert is_ancestor(git, (c[6], c[6]), (c[0], c[0])) == [True, True]
 
 
 def test_unrelated_histories(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
 
-    answers = is_ancestor_many(git, [(c[9], c[6]), (c[0], c[10]), (c[9], c[10])])
+    answers = is_ancestor(git, (c[9], c[6]), (c[0], c[10]), (c[9], c[10]))
 
     assert answers == [False, False, True]
 
@@ -143,13 +143,13 @@ def test_the_descendant_of_a_reversed_pair_isnt_an_ancestor(
 ) -> None:
     git, c = shapes
 
-    assert is_ancestor_many(git, [(c[3], c[0]), (c[0], c[3])]) == [False, True]
+    assert is_ancestor(git, (c[3], c[0]), (c[0], c[3])) == [False, True]
 
 
 def test_a_pair_repeated_gets_the_same_answer(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
 
-    answers = is_ancestor_many(git, [(c[0], c[6]), (c[6], c[0])] * 3)
+    answers = is_ancestor(git, *[(c[0], c[6]), (c[6], c[0])] * 3)
 
     assert answers == [True, False] * 3
 
@@ -159,7 +159,7 @@ def test_a_stack_whose_ancestors_are_each_others(shapes: tuple[Git, list[str]]) 
     # Each pair's ancestor is the next pair's descendant, as in a stack of branches.
     stack = [(c[2], c[3]), (c[1], c[2]), (c[0], c[1]), (c[0], c[3]), (c[1], c[3])]
 
-    assert is_ancestor_many(git, stack) == [True] * 5
+    assert is_ancestor(git, *stack) == [True] * 5
 
 
 def test_an_ancestor_below_another_pairs_ancestor(tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ def test_an_ancestor_below_another_pairs_ancestor(tmp_path: Path) -> None:
     git_dir = tmp_path / "repo"
     c = make_commits(git_dir, [[], [0], [1], [1]])
 
-    answers = is_ancestor_many(Git(git_dir), [(c[2], c[2]), (c[0], c[3]), (c[2], c[3])])
+    answers = is_ancestor(Git(git_dir), (c[2], c[2]), (c[0], c[3]), (c[2], c[3]))
 
     assert answers == [True, True, False]
 
@@ -179,7 +179,7 @@ def test_a_missing_object_is_no_ones_ancestor_or_descendant(
     git, c = shapes
     missing = "1" * 40
 
-    answers = is_ancestor_many(git, [(missing, c[6]), (c[0], missing), (missing, missing)])
+    answers = is_ancestor(git, (missing, c[6]), (c[0], missing), (missing, missing))
 
     assert answers == [False, False, False]
 
@@ -190,7 +190,7 @@ def test_anything_but_an_object_id_is_false_and_never_an_option(
 ) -> None:
     git, c = shapes
 
-    assert is_ancestor_many(git, [(name, c[6]), (c[0], name)]) == [False, False]
+    assert is_ancestor(git, (name, c[6]), (c[0], name)) == [False, False]
 
 
 def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]) -> None:
@@ -206,7 +206,7 @@ def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]
     odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
     pairs = [(c[9], odd), (c[0], odd)]
 
-    assert is_ancestor_many(git, pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
     assert merge_base_says(git, c[0], odd)
 
 
@@ -217,7 +217,7 @@ def test_an_abbreviated_id_is_false_in_a_sha256_repository(tmp_path: Path) -> No
     git.run("commit", "--quiet", "--allow-empty", "-m", "first")
     commit = git.run("rev-parse", "HEAD")
 
-    assert is_ancestor_many(git, [(commit[:40], commit), (commit, commit)]) == [False, True]
+    assert is_ancestor(git, (commit[:40], commit), (commit, commit)) == [False, True]
 
 
 def test_a_tag_is_its_commit_and_a_tree_no_commit(shapes: tuple[Git, list[str]]) -> None:
@@ -226,7 +226,7 @@ def test_a_tag_is_its_commit_and_a_tree_no_commit(shapes: tuple[Git, list[str]])
     tag = git.run("rev-parse", "refs/tags/t")
     tree = git.run("rev-parse", f"{c[1]}^{{tree}}")
 
-    answers = is_ancestor_many(git, [(tag, c[3]), (c[0], tag), (tree, c[3]), (c[1], tree)])
+    answers = is_ancestor(git, (tag, c[3]), (c[0], tag), (tree, c[3]), (c[1], tree))
 
     assert answers == [merge_base_says(git, a, d) for a, d in [(tag, c[3]), (c[0], tag)]] + [
         False,
@@ -239,7 +239,7 @@ def test_no_pairs_start_no_git(git_calls: list[GitCall], shapes: tuple[Git, list
     git, _ = shapes
     started = len(git_calls)
 
-    assert is_ancestor_many(git, []) == []
+    assert is_ancestor(git) == []
     assert git_calls[started:] == []
 
 
@@ -251,9 +251,9 @@ def test_a_hundred_pairs_take_as_many_processes_as_one(
     started = len(git_calls)
     pairs = [(c[i % 11], c[(i * 7) % 11]) for i in range(100)]
 
-    is_ancestor_many(git, pairs)
+    is_ancestor(git, *pairs)
     first = [call[0] for call in git_calls[started:]]
-    is_ancestor_many(git, pairs[:1])
+    is_ancestor(git, *pairs[:1])
     second = [call[0] for call in git_calls[started + len(first) :]]
 
     # Where the shallow and grafts files are, asked once per client; one cat-file per call.
@@ -263,7 +263,7 @@ def test_a_hundred_pairs_take_as_many_processes_as_one(
 
 def test_it_raises_outside_a_repository(tmp_path: Path) -> None:
     with pytest.raises(NotARepositoryError):
-        is_ancestor_many(Git(tmp_path), [("1" * 40, "2" * 40)])
+        is_ancestor(Git(tmp_path), ("1" * 40, "2" * 40))
 
 
 def test_a_shallow_clones_cut_history(git_calls: list[GitCall], tmp_path: Path) -> None:
@@ -278,7 +278,7 @@ def test_a_shallow_clones_cut_history(git_calls: list[GitCall], tmp_path: Path) 
     pairs = [(a, d) for a in c for d in c]
     started = len(git_calls)
 
-    answers = is_ancestor_many(git, pairs)
+    answers = is_ancestor(git, *pairs)
 
     assert [call[0] for call in git_calls[started:]] == ["rev-parse", "cat-file"]
     assert answers == [merge_base_says(git, a, d) for a, d in pairs]
@@ -295,7 +295,7 @@ def test_replace_refs_change_history_as_they_do_for_merge_base(
     git.run("replace", c[2], root)
     pairs = [(c[1], c[3]), (c[2], c[3]), (c[1], c[6]), (c[0], c[8])]
 
-    answers = is_ancestor_many(git, pairs)
+    answers = is_ancestor(git, *pairs)
 
     assert answers == [merge_base_says(git, a, d) for a, d in pairs]
     assert answers[0] is False
@@ -311,7 +311,7 @@ def test_grafts_change_history_as_they_do_for_merge_base(
     grafts.write_text(f"{c[3]} {c[9]}\n", encoding="utf-8")
     pairs = [(c[2], c[3]), (c[9], c[3]), (c[0], c[6]), (c[9], c[6])]
 
-    answers = is_ancestor_many(git, [*pairs, ("c0", c[3])])
+    answers = is_ancestor(git, *pairs, ("c0", c[3]))
 
     assert answers == [merge_base_says(git, a, d) for a, d in pairs] + [False]
 
@@ -323,7 +323,7 @@ def test_a_walk_too_long_asks_merge_base(
     monkeypatch.setattr(ancestry_module, "_WALK_LIMIT", 2)
     started = len(git_calls)
 
-    answers = is_ancestor_many(git, [(c[0], c[6]), (c[9], c[6]), (c[5], c[6])])
+    answers = is_ancestor(git, (c[0], c[6]), (c[9], c[6]), (c[5], c[6]))
 
     assert answers == [True, False, True]
     merge_bases = [call for call in git_calls[started:] if call[0] == "merge-base"]
@@ -342,7 +342,7 @@ def test_a_missing_commit_in_the_walk_answers_as_merge_base_does(
     remove_object(git, c[4])
     pairs = [(c[1], c[5]), (c[1], c[6]), (c[0], c[3])]
 
-    answers = is_ancestor_many(git, pairs)
+    answers = is_ancestor(git, *pairs)
 
     assert answers == [merge_base_says(git, a, d) for a, d in pairs]
     assert answers[2] is True
@@ -351,7 +351,7 @@ def test_a_missing_commit_in_the_walk_answers_as_merge_base_does(
 def test_a_damaged_commit_is_no_ones_ancestor_or_descendant(damaged_repo: Git) -> None:
     head = damaged_repo.run("rev-parse", "HEAD")
 
-    assert is_ancestor_many(damaged_repo, [(head, head)]) == [False]
+    assert is_ancestor(damaged_repo, (head, head)) == [False]
     assert not merge_base_says(damaged_repo, head, head)
 
 
@@ -417,7 +417,7 @@ def test_the_work_is_bounded_by_the_stack_not_the_history(
             started = len(git_calls)
             with pytest.MonkeyPatch.context() as patch:
                 read = counting_reads(patch)
-                answers = is_ancestor_many(git, pairs)
+                answers = is_ancestor(git, *pairs)
             assert answers == [True] * 100 + [False] * 49
             # Where the shallow and grafts files are is asked only the first time.
             processes = [call[0] for call in git_calls[started:]]

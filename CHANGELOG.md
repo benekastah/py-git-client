@@ -97,10 +97,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
-- `is_ancestor_many`: for many (ancestor, descendant) pairs of full object ids, what `git
-  merge-base --is-ancestor` says of each (any failure being no), through one `git cat-file
-  --batch-command`, each pair's walk reading the commits between its two, so a stack's pairs
-  cost about the same in any history (#60).
+- `is_ancestor(git, *pairs)`: for one or more (ancestor, descendant) pairs of full object
+  ids, what `git merge-base --is-ancestor` says of each (any failure being no), through one
+  `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
+  stack's pairs cost about the same in any history (#60).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
