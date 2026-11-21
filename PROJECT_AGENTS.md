@@ -20,7 +20,8 @@ the shape of the code or a rule here changes.
   CatFile reads.
 - `src/git_client/paths.py`: where a repository keeps its files, read without running git.
 - `src/git_client/config_file.py`: the changes `Git.write_config` makes
-  (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
+  (`ConfigSet`, `ConfigUnset`), what each did (`ConfigResult`), and a port of git's reader and
+  writer of config files, to make them as `git config` does, where it can be sure to.
 - `src/git_client/snapshot.py`: `RefSnapshot`, and which commands may change refs, which
   `ReadOnlyGit` (and `FakeGit`) count as each ends.
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
