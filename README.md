@@ -242,45 +242,6 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
-### Keeping what refs say
-
-A tool that asks about the same few refs over and over can read them once with a
-`RefSnapshot`, which keeps what its function read until a command that may change a ref
-(HEAD included) or a branch's upstream runs through any `Git` in the process, and reads it
-again when next asked:
-
-```python
-from git_client import ConfigSet, Git, RefSnapshot, refs
-
-git = Git("path/to/repo")
-branches = RefSnapshot(lambda: refs(git, "refs/heads/"))
-branches.get()["refs/heads/main"].upstream  # one git for-each-ref...
-branches.get()["refs/heads/a"].object  # ...for both
-git.write_configs(ConfigSet("branch.a.myToolParent", "main"))  # a branch's own setting: kept
-git.run("branch", "c")  # may change refs: read again when next asked
-reflogs = RefSnapshot(dict[str, list[str]])  # answers found one at a time, forgotten together
-known = reflogs.get()
-if "a" not in known:
-    known["a"] = git.run("log", "-g", "--format=%H", "refs/heads/a").split()
-```
-
-Only commands known not to change refs keep it: those a `ReadOnlyGit` runs; those that write
-only objects, the index or the worktree (`diff`, `merge-tree`, `hash-object`, `read-tree`,
-`update-index`, `apply`, `commit-tree`, ...); `ls-remote`; the reading forms of `branch`
-(`--show-current`), `symbolic-ref`, `remote` and `worktree`; and a `git config` that reads,
-or writes one key, `branch.<name>.<setting>`, that isn't the branch's `remote`, `merge` or
-`pushRemote`. Anything else may, an alias or a command that failed included (with what it
-ran, e.g. its hooks), and is counted once it ends; a long-lived process (`popen`), when it
-starts. `FakeGit`'s commands are counted too.
-
-It doesn't see changes made any other way: by another process (the user, another tool, a
-git the tool starts itself), or by a long-lived process after it starts; nor a textconv's
-cache (`refs/notes/textconv/`), which a `Git`'s `log`, `show`, `blame`, `range-diff` or
-`status -v` may write (a `ReadOnlyGit`'s don't). So keep one for no
-longer than one of the tool's operations (under its lock, if it has one), and make a new one
-to read afresh. `get` can be called from several threads; what a read that a change
-overlapped gave isn't kept.
-
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same

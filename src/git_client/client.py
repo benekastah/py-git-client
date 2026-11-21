@@ -31,7 +31,6 @@ from git_client.errors import (
     error_for,
 )
 from git_client.reading import READING_COMMANDS, names, reading_form
-from git_client.snapshot import ref_changes
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -821,9 +820,7 @@ class ReadOnlyGit:
         before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the
         user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
         says so. Every git process but `popen`'s starts here, so a subclass can override this
-        to change how each runs, calling `super().process`: once git ends, it counts one that
-        may have changed refs for RefSnapshot, whether it succeeded or not, and an override
-        that starts git itself leaves RefSnapshot keeping what such a command changed.
+        to change how each runs, calling `super().process`.
 
         git reads `input`, if given; else, with `capture_output`, nothing (as from
         /dev/null), so a command that reads stdin when given no input (e.g. `shortlog` with no
@@ -833,32 +830,28 @@ class ReadOnlyGit:
         refuse_if_stopping(self, args)
         seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
         own_group = _own_process_group(seconds, self.process_groups)
-        try:
-            with subprocess.Popen(
-                command,
-                stdin=_stdin(input, capture_output),
-                stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
-                stderr=subprocess.PIPE if capture_output else None,
-                env=self.environment(env, english=capture_output),
-                close_fds=CLOSE_FDS,
-                process_group=0 if own_group else None,
-            ) as process:
-                try:
-                    output, errors = process.communicate(input, timeout=seconds)
-                except subprocess.TimeoutExpired:
-                    _stop(process, own_group, interrupted=False)
-                    output, errors = _remaining_output(process)
-                    raise GitTimeoutError(
-                        args, None, decode(errors or b""), decode(output or b"")
-                    ) from None
-                except BaseException:  # e.g. KeyboardInterrupt
-                    _stop(process, own_group, interrupted=True)
-                    _let_go_of_output(process)
-                    raise
-            return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
-        finally:
-            # Whether git succeeded or not: e.g. a rebase that stops on a conflict has moved HEAD.
-            ref_changes.ran(args)
+        with subprocess.Popen(
+            command,
+            stdin=_stdin(input, capture_output),
+            stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
+            stderr=subprocess.PIPE if capture_output else None,
+            env=self.environment(env, english=capture_output),
+            close_fds=CLOSE_FDS,
+            process_group=0 if own_group else None,
+        ) as process:
+            try:
+                output, errors = process.communicate(input, timeout=seconds)
+            except subprocess.TimeoutExpired:
+                _stop(process, own_group, interrupted=False)
+                output, errors = _remaining_output(process)
+                raise GitTimeoutError(
+                    args, None, decode(errors or b""), decode(output or b"")
+                ) from None
+            except BaseException:  # e.g. KeyboardInterrupt
+                _stop(process, own_group, interrupted=True)
+                _let_go_of_output(process)
+                raise
+        return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
 
     def popen(
         self,
@@ -875,8 +868,6 @@ class ReadOnlyGit:
         there."""
         command = self.command(*args)
         refuse_if_stopping(self, args)
-        # When it starts: when it ends isn't known here (see RefSnapshot).
-        ref_changes.ran(args)
         return subprocess.Popen(
             command,
             stdin=subprocess.PIPE,

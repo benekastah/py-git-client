@@ -14,13 +14,11 @@ from git_client import (
     Git,
     ReadOnlyError,
     ReadOnlyGit,
-    RefSnapshot,
     config,
     git_paths,
     patch_ids,
     refs,
 )
-from git_client.snapshot import ref_changes
 
 # A day well before any test runs, for a file's mtime: not racily clean (as a file changed in
 # the second the index was written would be), so git sees it changed since the index has it.
@@ -102,14 +100,10 @@ def test_a_read_only_client_runs_what_only_reads_and_writes_nothing(
     # Whatever the user's environment says: status writes the index unless this is 0.
     monkeypatch.setenv("GIT_OPTIONAL_LOCKS", "1")
     before = files(stale.parent)
-    # What only reads keeps refs, as RefSnapshot counts them.
-    snapshot = RefSnapshot(lambda: ref_changes.count())
-    kept = snapshot.get()
 
     ReadOnlyGit(stale).process(*args, capture_output=True)  # e.g. check-ignore exits 1
 
     assert files(stale.parent) == before
-    assert snapshot.get() == kept
 
 
 def test_status_writes_a_stale_index_without_a_read_only_clients_environment(

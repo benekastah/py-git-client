@@ -40,7 +40,6 @@ from git_client.client import (
     refuse_if_stopping,
 )
 from git_client.config_file import ConfigChange
-from git_client.snapshot import ref_changes
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -561,8 +560,6 @@ class FakeGit(Git):
         refuse_if_stopping(self, args)
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
-        # As Git counts it, so a RefSnapshot is read again after a fake command too.
-        ref_changes.ran(args)
         for prefix, completed in self._responses:
             if command[: len(prefix)] == prefix:
                 return completed

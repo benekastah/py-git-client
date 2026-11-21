@@ -50,7 +50,6 @@ from git_client.errors import (
 )
 from git_client.merging import MergeResult, merge_trees
 from git_client.paths import git_common_dir, git_dir
-from git_client.snapshot import RefSnapshot
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -80,7 +79,6 @@ __all__ = [
     "ReadOnlyError",
     "ReadOnlyGit",
     "Ref",
-    "RefSnapshot",
     "RefUpdate",
     "RemoteError",
     "Timeout",
