@@ -187,6 +187,23 @@ def test_anything_but_an_object_id_is_false_and_never_an_option(
     assert is_ancestor_many(git, [(name, c[6]), (c[0], name)]) == [False, False]
 
 
+def test_a_parent_header_out_of_place_is_no_parent(shapes: tuple[Git, list[str]]) -> None:
+    git, c = shapes
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    # git takes a commit's parents only from the lines right after its tree, as fsck would
+    # insist, but a commit fetched unchecked can have another (and a second committer).
+    who = "T <t@example.com> 1000000000 +0000"
+    content = (
+        f"tree {tree}\nparent {c[0]}\nauthor {who}\ncommitter {who}\n"
+        f"parent {c[9]}\ncommitter {who}\n\nodd\n"
+    )
+    odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=content)
+    pairs = [(c[9], odd), (c[0], odd)]
+
+    assert is_ancestor_many(git, pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+    assert merge_base_says(git, c[0], odd)
+
+
 def test_a_tag_is_its_commit_and_a_tree_no_commit(shapes: tuple[Git, list[str]]) -> None:
     git, c = shapes
     git.run("tag", "-a", "-m", "tag", "t", c[1])

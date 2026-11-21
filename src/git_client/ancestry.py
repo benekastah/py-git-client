@@ -139,16 +139,24 @@ class _Walker:
         Raises what CatFile.read does for one it can't read."""
         if commit_id not in self._commits:
             _, content = self._cat_file.read(commit_id, "commit")
+            # Read as git's parse_commit_buffer reads it: its parents are the run of parent
+            # lines right after its tree (a later one is no parent), and its date is that of
+            # the committer line right after them and the author line (else 0).
+            headers = content.split(b"\n\n", 1)[0].split(b"\n")
+            end = 1
+            while end < len(headers) and headers[end].startswith(b"parent "):
+                end += 1
+            parents = [line.removeprefix(b"parent ").decode("ascii") for line in headers[1:end]]
             date = 0
-            parents: list[str] = []
-            # Its headers: up to the first empty line.
-            for line in content.split(b"\n\n", 1)[0].split(b"\n"):
-                if line.startswith(b"parent "):
-                    parents.append(line.removeprefix(b"parent ").decode("ascii"))
-                elif line.startswith(b"committer "):
-                    # "committer <name> <<email>> <seconds> <zone>"; any number orders it.
-                    fields = line.rsplit(b" ", 2)
-                    date = int(fields[1]) if len(fields) == 3 and fields[1].isdigit() else 0
+            after = headers[end : end + 2]
+            if (
+                len(after) == 2
+                and after[0].startswith(b"author ")
+                and after[1].startswith(b"committer ")
+            ):
+                # "committer <name> <<email>> <seconds> <zone>"; any number orders it.
+                fields = after[1].rsplit(b" ", 2)
+                date = int(fields[1]) if len(fields) == 3 and fields[1].isdigit() else 0
             self._commits[commit_id] = (date, () if commit_id in self._shallow else tuple(parents))
         return self._commits[commit_id]
 
