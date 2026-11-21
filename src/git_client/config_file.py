@@ -9,6 +9,7 @@ a file whose every line ends in CRLF, the lines written end in CRLF too (git wri
 a value with a carriage return is quoted, as git quotes it only from 2.51 (older git can't
 read back the value it writes)."""
 
+import contextlib
 import enum
 import os
 import re
@@ -288,11 +289,16 @@ def write(
     lock that can't be made other than for being held; and if writing, flushing or renaming
     fails (e.g. a full disk). Raises ConfigLockedError, as `git config` for the first change
     would, if another process holds the lock past `wait` seconds, and NotStartedError,
-    having written nothing, once `stopping` says so while it waits."""
+    having written nothing, once `stopping` says so while it waits. A KeyboardInterrupt the
+    moment the lock is made can leave `<path>.lock` behind, as with git, for the user to
+    delete."""
     lock = path.with_name(path.name + ".lock")
     fd: int | None = None
     ours: os.stat_result | None = None  # the lock's, once closed
     try:
+        # A KeyboardInterrupt as os.open returns, before `fd` holds the lock's descriptor,
+        # leaves config.lock behind (as git's own lock can be), for the user to delete: masking
+        # SIGINT around it would take each system's own way, and only works in the main thread.
         fd = _lock(lock, path, wait, config_args(changes[0]), stopping)
         if fd is None:
             return None
@@ -335,16 +341,16 @@ def write(
             return None  # nothing changed: git's to make them, or say why it can't
         return results
     finally:
-        # Whatever stops it (e.g. KeyboardInterrupt, or a failed close), but only our lock:
-        # once renamed, the lock may be another process's.
-        try:
-            if fd is not None:
-                ours = os.fstat(fd)
-                fd, closing = None, fd
+        # Whatever stops it (e.g. KeyboardInterrupt), but only our lock: once renamed, the
+        # lock may be another process's. A failed close here changes nothing written, so it
+        # mustn't replace what's returned (e.g. None, for git to make the changes).
+        if fd is not None:
+            ours = os.fstat(fd)
+            fd, closing = None, fd
+            with contextlib.suppress(OSError):
                 os.close(closing)
-        finally:
-            if ours is not None:
-                _remove_if_ours(lock, ours)
+        if ours is not None:
+            _remove_if_ours(lock, ours)
 
 
 def _remove_if_ours(lock: Path, ours: os.stat_result) -> None:

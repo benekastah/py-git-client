@@ -445,19 +445,24 @@ def test_write_config_leaves_a_write_that_fails_midway_to_git(
     assert not config_file(repo).with_name("config.lock").exists()
 
 
-def test_write_config_whose_close_fails_leaves_no_lock_and_falls_back(
-    repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
-) -> None:
-    git_paths(repo, "config")
+def fail_one_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the next os.close let go of its descriptor, as Linux does, then report EIO."""
     close = os.close
     failures = [OSError(errno.EIO, "I/O error")]
 
     def close_then_fail(fd: int) -> None:
-        close(fd)  # Linux lets go of the descriptor even when close reports an error
+        close(fd)
         if failures:
             raise failures.pop()
 
     monkeypatch.setattr(os, "close", close_then_fail)
+
+
+def test_write_config_whose_close_fails_leaves_no_lock_and_falls_back(
+    repo: Git, monkeypatch: pytest.MonkeyPatch, git_calls: list[GitCall]
+) -> None:
+    git_paths(repo, "config")
+    fail_one_close(monkeypatch)
     repo.write_config(ConfigSet("branch.a.x", "1"))
 
     assert [call[:2] for call in git_calls[1:]] == [["config", "branch.a.x"]]
@@ -479,6 +484,32 @@ def test_write_config_once_written_doesnt_look_for_its_lock(
     monkeypatch.setattr(os, "lstat", no_lock)
 
     repo.write_config(ConfigSet("branch.a.x", "1"))
+
+
+def test_write_config_whose_write_and_close_both_fail_falls_back(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git_paths(repo, "config")
+
+    def fail(*args: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(os, "write", fail)
+    fail_one_close(monkeypatch)
+    repo.write_config(ConfigSet("branch.a.x", "1"))
+
+    assert repo.run("config", "branch.a.x") == "1"
+    assert not config_file(repo).with_name("config.lock").exists()
+
+
+def test_write_config_whose_close_fails_with_nothing_to_change_says_so(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git_paths(repo, "config")
+    fail_one_close(monkeypatch)
+
+    assert repo.write_config(ConfigUnset("branch.a.x")) == [ConfigResult.NOT_FOUND]
+    assert not config_file(repo).with_name("config.lock").exists()
 
 
 def test_write_config_stops_waiting_for_a_lock_once_the_tool_is_stopping(repo: Git) -> None:
