@@ -73,7 +73,8 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
-# asked of git once per client (and directory), as are git_paths and object_id_length()
+# asked of git once per client (and directory), as are git_paths, git_dir and
+# object_id_length(), all in one git while any is unknown
 git.cdup()  # "../" there: the way up to the top, as git prints it, asked with prefix()
 # git config, tried again while locked, for each change; what each did: an unset that removes
 # nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
@@ -116,7 +117,8 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
 # The client's git directory (in a linked worktree, its own: its HEAD, index and rebase state),
-# and the common one, with the refs, objects and config, from one git, remembered per client.
+# and the common one, with the refs, objects and config: asked with prefix() and git_paths, in
+# the same git, and remembered per client.
 # NotARepositoryError if there's no repository.
 own, common = git_dir(git), git_common_dir(git)
 

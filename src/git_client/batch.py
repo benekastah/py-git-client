@@ -21,6 +21,7 @@ from git_client.client import (
     learn_where,
     location,
     rev_parse_lines,
+    where_command,
     where_questions,
 )
 from git_client.errors import GitError
@@ -136,8 +137,8 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()` and `cdup()`, and `object_id_length()`, if they
-    aren't known yet. Where a path git prints holds a newline, which makes its answers'
+    process tells the client's `prefix()` and `cdup()`, `object_id_length()`, `git_dir` and
+    `git_common_dir`, if they aren't known yet. Where a path git prints holds a newline, which makes its answers'
     lines impossible to tell apart, each is asked in a process of its own."""
     if not names:
         return []
@@ -153,7 +154,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     if new:
         questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
-        output = git.run_bytes("rev-parse", *questions, "--path-format=absolute", *args)
+        output = git.run_bytes(*where_command(questions), *args)
         try:
             lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
         except LinesUnfit:  # a path with a newline: each in a process of its own
@@ -179,7 +180,8 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
     (so a tool that wants both pays for one process). The paths are as `git_paths` gives
     them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept),
-    `git.prefix()`, `git.cdup()` and `git.object_id_length()`; HEAD is read afresh each
+    `git.prefix()`, `git.cdup()`, `git.object_id_length()`, `git_dir` and `git_common_dir`;
+    HEAD is read afresh each
     time, since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
@@ -195,7 +197,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     args = [arg for name in unique for arg in ("--git-path", name)]
     # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
     # taken for a path and printed as "HEAD", which a detached HEAD prints too.
-    command = ["rev-parse", *questions, "--path-format=absolute", *args]
+    command = [*where_command(questions), *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
     result = git.process(*command, capture_output=True)
     stderr = decode(result.stderr)
@@ -239,8 +241,11 @@ def git_dir(git: ReadOnlyGit) -> Path:
     (see `git_common_dir`). Raises GitError if git fails (e.g. NotARepositoryError for a
     directory in no repository).
 
-    One `git rev-parse` answers both this and `git_common_dir`, asked of git once per client
-    and location (its directory and `env`) and remembered."""
+    Asked of git once per client and location (its directory and `env`) and remembered, with
+    `git_common_dir`, in the `rev-parse` that asks where things are: the one `prefix()`,
+    `git_paths` and `git_paths_and_head` run, which tells this too while it isn't known, as
+    this tells them. Where a path git prints holds a newline, which makes its answers' lines
+    impossible to tell apart, each is asked in a process of its own."""
     return _git_dirs(git)[0]
 
 
@@ -257,11 +262,12 @@ def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
     known = known_git_dirs.setdefault(git, {})
     where = location(git)
     if where not in known:
-        output = git.run_bytes(
-            "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"
-        )
-        own, common = (Path(os.fsdecode(line)) for line in rev_parse_lines(output))
-        known[where] = own, common
+        questions = where_questions(git, where)
+        output = git.run_bytes(*where_command(questions))
+        try:
+            learn_where(git, where, questions, rev_parse_lines(output), 0)
+        except LinesUnfit:  # a path with a newline: each in a process of its own
+            ask_where_alone(git, where, questions)
     return known[where]
 
 

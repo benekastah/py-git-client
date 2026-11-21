@@ -511,8 +511,9 @@ known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str
 known_git_dirs: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[Path, Path]]] = (
     weakref.WeakKeyDictionary()
 )
-"""Each client's own and common git directories, per location (see `git_dir`). A client and
-its `read_only()` share theirs."""
+"""Each client's own and common git directories, per location (see `git_dir`): kept here, as
+`tops` is, so that the `rev-parse` that asks where things are asks them too (see
+`where_questions`). A client and its `read_only()` share theirs."""
 
 
 # Guards each client's object id lengths: held only to read or change them, never while git
@@ -526,6 +527,8 @@ _lengths_lock = threading.Lock()
 # "true" or "false" after it tells the two apart (see learn_where).
 _TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
 _INSIDE_WORK_TREE = (b"true", b"false")
+# What asks for git_dir and git_common_dir, absolute paths (see where_command).
+_DIR_QUESTIONS = ("--git-dir", "--git-common-dir")
 
 
 class LinesUnfit(ValueError):
@@ -537,17 +540,28 @@ class LinesUnfit(ValueError):
 
 def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
     """The `rev-parse` options that ask git what the client doesn't know yet at `where` (its
-    `location`): `--show-prefix` and `--show-cdup` (with `--is-inside-work-tree`) for
-    `prefix()` and `cdup()`, and `--show-object-format` for `object_id_length()` (unless the
-    client was given it). A function that runs `rev-parse` anyway puts them first, so they
-    cost no process of their own, then gives the lines git printed to `learn_where`."""
+    `location`), in this order: `--show-prefix` and `--show-cdup` (with
+    `--is-inside-work-tree`) for `prefix()` and `cdup()`, `--show-object-format` for
+    `object_id_length()` (unless the client was given it), and `--git-dir` and
+    `--git-common-dir` for `git_dir` and `git_common_dir`. A function that runs `rev-parse`
+    anyway runs `where_command(questions)`, then its own options, so they cost no process of
+    their own, then gives the lines git printed to `learn_where`."""
     questions: list[str] = [] if where in tops.setdefault(git, {}) else [*_TOP_QUESTIONS]
     if git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
         with _lengths_lock:
             known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
         if not isinstance(known, int):
             questions.append("--show-object-format")
+    if where not in known_git_dirs.setdefault(git, {}):
+        questions += _DIR_QUESTIONS
     return questions
+
+
+def where_command(questions: Sequence[str]) -> list[str]:
+    """The `rev-parse` that asks `questions` (from `where_questions`), to which a caller adds
+    its own options: every path it prints is absolute (which changes neither the prefix nor
+    the cdup, nor a `--git-path` given after it)."""
+    return ["rev-parse", "--path-format=absolute", *questions]
 
 
 def learn_where(
@@ -560,11 +574,14 @@ def learn_where(
     and LinesUnfit where a line's answer can't be told (then the caller asks each question in
     a process of its own).
 
-    Each answer is a line, but a path's, which is one more line for each newline in it, and
-    the cdup's, which is none where git knows no worktree (and its prefix is then ""). So
-    with `n` lines asked for in all, n of them (with the cdup's not "true" or "false", which
-    would be --is-inside-work-tree's after no cdup) is one line each, and n - 1 is one each
-    but no cdup; more can't be told apart, and is LinesUnfit."""
+    Each answer is one line, but a path's (the prefix, an absolute cdup, the git directories,
+    a `--git-path`), which is one more line for each newline in it, and the cdup's, which is
+    none where git knows no worktree (and its prefix is then "", so the next line is
+    --is-inside-work-tree's "true" or "false"). A missing cdup is the only answer short of a
+    line, so with `n` lines asked for in all: n - 1 lines is one each but no cdup; n lines
+    is either one each, or no cdup and one newline, told apart by the line after the prefix,
+    "true" or "false" only after no cdup (a cdup is "", "../" repeated or an absolute path);
+    more, or n with no cdup, is newlines that could be anywhere: LinesUnfit."""
     asked = len(questions) + rest
     cdup = "--show-cdup" in questions
     if len(lines) == asked and not (cdup and lines[1] in _INSIDE_WORK_TREE):
@@ -595,7 +612,7 @@ def ask_where_alone(
     their answers in one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a
     newline in it makes them."""
     answers = {
-        question: git.run_bytes("rev-parse", question, timeout=timeout).removesuffix(b"\n")
+        question: git.run_bytes(*where_command([question]), timeout=timeout).removesuffix(b"\n")
         for question in questions
         if question != "--is-inside-work-tree"
     }
@@ -609,6 +626,9 @@ def _remember(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -
         tops.setdefault(git, {})[where] = decode(prefix), decode(cdup)
     if "--show-object-format" in answers:
         _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
+    if "--git-dir" in answers:
+        own, common = (Path(os.fsdecode(answers[question])) for question in _DIR_QUESTIONS)
+        known_git_dirs.setdefault(git, {})[where] = own, common
 
 
 def rev_parse_lines(output: bytes) -> list[bytes]:
@@ -802,8 +822,8 @@ class ReadOnlyGit:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
         SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
         --show-object-format`) once per `location` (the directory and `env`, which a tool may
-        change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths` or
-        `git_paths_and_head`, which asks it too while it isn't known. Not the length of an id
+        change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths`,
+        `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the length of an id
         git printed: in a repository with `extensions.compatObjectFormat`, git gives a SHA-1
         id back for one, whatever the repository's format. Threads that ask at once wait for
         one git's answer; if it fails, the next asks."""
@@ -844,8 +864,8 @@ class ReadOnlyGit:
 
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
-        its directory isn't noticed. The same process tells `cdup()`, and
-        `object_id_length()` if it isn't known yet."""
+        its directory isn't noticed. The same process tells `cdup()`, and `object_id_length()`,
+        `git_dir` and `git_common_dir` if they aren't known yet."""
         return self._top(timeout)[0]
 
     def cdup(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
@@ -866,7 +886,7 @@ class ReadOnlyGit:
         if where not in known:
             # Not run's, which would strip a directory's leading space.
             questions = where_questions(self, where)
-            output = self.run_bytes("rev-parse", *questions, timeout=timeout)
+            output = self.run_bytes(*where_command(questions), timeout=timeout)
             try:
                 learn_where(self, where, questions, rev_parse_lines(output), 0)
             except LinesUnfit:
