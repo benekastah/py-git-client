@@ -465,6 +465,22 @@ def test_write_config_whose_close_fails_leaves_no_lock_and_falls_back(
     assert repo.run("config", "branch.a.x") == "1"
 
 
+def test_write_config_once_written_doesnt_look_for_its_lock(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Where inode numbers don't tell files apart (0 on some filesystems, or one reused at
+    # once), a lock made since would look like ours.
+    lstat = os.lstat
+
+    def no_lock(path: Path, **kwargs: bool) -> os.stat_result:
+        assert Path(path).name != "config.lock"
+        return lstat(path, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", no_lock)
+
+    repo.write_config(ConfigSet("branch.a.x", "1"))
+
+
 def test_write_config_interrupted_once_written_leaves_anothers_lock(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:

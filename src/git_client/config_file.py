@@ -324,6 +324,7 @@ def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[Conf
                 _retry(PermissionError, wait, lambda: os.replace(lock, path))
             else:
                 os.replace(lock, path)
+            ours = None  # renamed: any lock now is another's
         except OSError:
             return None  # nothing changed: git's to make them, or say why it can't
         return results
