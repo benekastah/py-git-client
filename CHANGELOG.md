@@ -15,9 +15,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   failed with exit 5, its result says so, rather than raise, as `NOT_FOUND` for a key that
   isn't set, and `SEVERAL_VALUES` for one with several values (`ConfigUnset(k, v)` removes
   only the value `v`, as `--unset --fixed-value`, and a key with no value whatever `v` says,
-  as git does from 2.46.1, where older git crashes). Other `git config` writes (`--add`, `--rename-section`,
-  `--worktree`, ...) go through `git.run("config", ...)`, which doesn't try again while the
-  file is locked (#61).
+  as git does from 2.46.1, where older git crashes). Other `git config` writes (`--add`,
+  `--rename-section`, `--worktree`, ...) go through `git.run("config", ...)`, which doesn't
+  try again while the file is locked (#61).
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
   that cached them itself can drop its cache (and its `cdup` is
