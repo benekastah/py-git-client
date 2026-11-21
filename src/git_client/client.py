@@ -495,10 +495,12 @@ def location(git: ReadOnlyGit) -> Location:
     return os.path.abspath(git.directory), tuple(sorted(git.env.items()))
 
 
-prefixes: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, str]] = weakref.WeakKeyDictionary()
-"""Each client's `prefix()`, per location: kept here rather than on the client, so that
-`git_paths` can learn it from the `rev-parse` it runs anyway. A client and its `read_only()`
-share theirs."""
+tops: weakref.WeakKeyDictionary[ReadOnlyGit, dict[Location, tuple[str, str]]] = (
+    weakref.WeakKeyDictionary()
+)
+"""Each client's `prefix()` and `cdup()`, per location: kept here rather than on the client,
+so that `git_paths` can ask for them in the `rev-parse` it runs anyway (see
+`where_questions`). A client and its `read_only()` share theirs."""
 
 known_git_paths: weakref.WeakKeyDictionary[ReadOnlyGit, dict[tuple[Location, str], Path]] = (
     weakref.WeakKeyDictionary()
@@ -518,19 +520,111 @@ its `read_only()` share theirs."""
 _lengths_lock = threading.Lock()
 
 
-def learn_object_id_length(git: ReadOnlyGit, where: Location, object_id: str) -> None:
-    """Remember the length of `object_id`, a full id git printed at `where` (the client's
-    `location` when it started that git), as the repository's there, so `object_id_length()`
-    needn't ask git; and wake any thread waiting for git's answer. Not if it's no full id
-    (e.g. a ref's empty object)."""
-    if not OBJECT_ID.fullmatch(object_id):
-        return
+# What asks for prefix() and cdup(). Where git knows no worktree (in a bare repository, or a
+# git directory), it prints no cdup at all, not even an empty line (where it knows the top but
+# the directory is outside it, it prints the top's absolute path). --is-inside-work-tree's
+# "true" or "false" after it tells the two apart (see learn_where).
+_TOP_QUESTIONS = ("--show-prefix", "--show-cdup", "--is-inside-work-tree")
+_INSIDE_WORK_TREE = (b"true", b"false")
+
+
+class LinesUnfit(ValueError):
+    """rev-parse's lines can't be told apart: there are more than the answers asked of it, or
+    as many with "true" or "false" after the prefix (no cdup, and a line more). A path it
+    printed holds a newline. The caller then asks each question in a process of its own (see
+    `ask_where_alone`)."""
+
+
+def where_questions(git: ReadOnlyGit, where: Location) -> list[str]:
+    """The `rev-parse` options that ask git what the client doesn't know yet at `where` (its
+    `location`): `--show-prefix` and `--show-cdup` (with `--is-inside-work-tree`) for
+    `prefix()` and `cdup()`, and `--show-object-format` for `object_id_length()` (unless the
+    client was given it). A function that runs `rev-parse` anyway puts them first, so they
+    cost no process of their own, then gives the lines git printed to `learn_where`."""
+    questions: list[str] = [] if where in tops.setdefault(git, {}) else [*_TOP_QUESTIONS]
+    if git._object_id_length is None:  # pyright: ignore[reportPrivateUsage]
+        with _lengths_lock:
+            known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
+        if not isinstance(known, int):
+            questions.append("--show-object-format")
+    return questions
+
+
+def learn_where(
+    git: ReadOnlyGit, where: Location, questions: Sequence[str], lines: list[bytes], rest: int
+) -> list[bytes]:
+    """Remember git's answers to `questions` (from `where_questions`) at `where`, from the first
+    of `lines`, what `rev-parse` printed, and return the `rest` lines after them, the caller's
+    answers (each one line, unless it's a path with a newline in it). Remembers nothing, and
+    raises ValueError where there are too few lines (e.g. a FakeGit's answer a line short),
+    and LinesUnfit where a line's answer can't be told (then the caller asks each question in
+    a process of its own).
+
+    Each answer is a line, but a path's, which is one more line for each newline in it, and
+    the cdup's, which is none where git knows no worktree (and its prefix is then ""). So
+    with `n` lines asked for in all, n of them (with the cdup's not "true" or "false", which
+    would be --is-inside-work-tree's after no cdup) is one line each, and n - 1 is one each
+    but no cdup; more can't be told apart, and is LinesUnfit."""
+    asked = len(questions) + rest
+    cdup = "--show-cdup" in questions
+    if len(lines) == asked and not (cdup and lines[1] in _INSIDE_WORK_TREE):
+        answers = dict(zip(questions, lines, strict=False))
+    elif cdup and len(lines) == asked - 1:
+        answers = dict(zip([q for q in questions if q != "--show-cdup"], lines, strict=False))
+        answers["--show-cdup"] = b""  # git printed none
+    elif len(lines) < asked - cdup:
+        raise ValueError(f"rev-parse printed {len(lines)} lines, too few for {asked}")
+    else:
+        raise LinesUnfit(f"rev-parse printed {len(lines)} lines for {asked}")
+    if answers.get("--is-inside-work-tree", b"true") not in _INSIDE_WORK_TREE:
+        # Not git's answer (e.g. a FakeGit's, made for another question).
+        raise ValueError(f"rev-parse's lines don't answer {questions}")
+    _remember(git, where, answers)
+    return lines[len(lines) - rest :]
+
+
+def ask_where_alone(
+    git: ReadOnlyGit,
+    where: Location,
+    questions: Sequence[str],
+    *,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> None:
+    """Ask each of `questions` (from `where_questions`) in a `rev-parse` of its own, and
+    remember git's answers, each its whole output but the newline that ends it: for where
+    their answers in one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a
+    newline in it makes them."""
+    answers = {
+        question: git.run_bytes("rev-parse", question, timeout=timeout).removesuffix(b"\n")
+        for question in questions
+        if question != "--is-inside-work-tree"
+    }
+    _remember(git, where, answers)
+
+
+def _remember(git: ReadOnlyGit, where: Location, answers: Mapping[str, bytes]) -> None:
+    """Remember git's answers at `where`, by the question each answers."""
+    if "--show-prefix" in answers:
+        prefix, cdup = answers["--show-prefix"], answers["--show-cdup"]
+        tops.setdefault(git, {})[where] = decode(prefix), decode(cdup)
+    if "--show-object-format" in answers:
+        _remember_length(git, where, 64 if answers["--show-object-format"] == b"sha256" else 40)
+
+
+def rev_parse_lines(output: bytes) -> list[bytes]:
+    """The lines of rev-parse's output. Not splitlines(): an answer can be an empty line (e.g.
+    the prefix's at the top), and only "\\n" ends one. A path git prints can hold a newline
+    (off Windows), which makes it two lines: `learn_where` tells."""
+    return output.removesuffix(b"\n").split(b"\n") if output else []
+
+
+def _remember_length(git: ReadOnlyGit, where: Location, length: int) -> None:
+    """Remember `length`, git's answer, as the object id length at `where`, and wake any thread
+    waiting for git's answer to `object_id_length()`."""
     with _lengths_lock:
         known = git._object_id_lengths.get(where)  # pyright: ignore[reportPrivateUsage]
-        if isinstance(known, int):
-            return
-        git._object_id_lengths[where] = len(object_id)  # pyright: ignore[reportPrivateUsage]
-    if known is not None:
+        git._object_id_lengths[where] = length  # pyright: ignore[reportPrivateUsage]
+    if isinstance(known, threading.Event):
         known.set()
 
 
@@ -615,9 +709,9 @@ class ReadOnlyGit:
     interrupted), and a CatFile's process keeps answering until it's closed, though one
     that has to start (again) raises. `object_id_length` (40 for SHA-1, 64 for SHA-256), if
     given, is the repository's, which `object_id_length()` then returns without starting git:
-    for a tool that already knows it, e.g. from the length of an id it has read. It's trusted,
-    not checked (that would start the process it saves): a wrong one makes what reads ids by
-    it (e.g. `patch_ids`) fail.
+    for a tool that knows it some other way than asking git. It's trusted, not checked (that
+    would start the process it saves): a wrong one makes what reads ids by it (e.g.
+    `patch_ids`) fail.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
     first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
@@ -689,7 +783,7 @@ class ReadOnlyGit:
         `timeout`, `stopping`, `process_groups` and `env`, as they are now. It's of the
         client's own class, so a subclass's methods (e.g. its own `process`) and attributes
         are kept (an attribute that holds the client itself still writes through it); and it
-        shares what git told the client about where things are (`prefix()`,
+        shares what git told the client about where things are (`prefix()`, `cdup()`,
         `object_id_length()`, `git_paths`, `git_dir`), so it asks no question the client
         asked, nor the client one it asked. A new copy each call; a read-only client gives
         itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
@@ -699,17 +793,20 @@ class ReadOnlyGit:
         reader = copy.copy(self)
         reader.env = dict(self.env)
         reader._read_only = True
-        prefixes[reader] = prefixes.setdefault(self, {})
+        tops[reader] = tops.setdefault(self, {})
         known_git_paths[reader] = known_git_paths.setdefault(self, {})
         known_git_dirs[reader] = known_git_dirs.setdefault(self, {})
         return reader
 
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
-        SHA-256: the client's `object_id_length` if given, else asked of git once per
-        `location` (the directory and `env`, which a tool may change) and remembered, or
-        learned from a full id the library has read there (`refs`, `resolve`, CatFile).
-        Threads that ask at once wait for one git's answer; if it fails, the next asks."""
+        SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
+        --show-object-format`) once per `location` (the directory and `env`, which a tool may
+        change) and remembered, or told by the `rev-parse` of `prefix()`, `git_paths` or
+        `git_paths_and_head`, which asks it too while it isn't known. Not the length of an id
+        git printed: in a repository with `extensions.compatObjectFormat`, git gives a SHA-1
+        id back for one, whatever the repository's format. Threads that ask at once wait for
+        one git's answer; if it fails, the next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
         key = location(self)
@@ -747,14 +844,34 @@ class ReadOnlyGit:
 
         Asked of git once per `location` (the directory and `env`, which a tool may change)
         and remembered, so a repository moved or turned into another while the client keeps
-        its directory isn't noticed."""
-        known = prefixes.setdefault(self, {})
-        key = location(self)
-        if key not in known:
+        its directory isn't noticed. The same process tells `cdup()`, and
+        `object_id_length()` if it isn't known yet."""
+        return self._top(timeout)[0]
+
+    def cdup(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
+        """The path from the client's directory up to the top of the worktree, as `git
+        rev-parse --show-cdup` gives it: "../" for each directory of `prefix()` ("" at the
+        top), or the top's absolute path where the directory is outside a worktree whose top
+        git knows (e.g. GIT_WORK_TREE names it); "" where git knows none (in a bare
+        repository, or a git directory), and prints nothing. Put it before a path from the top
+        to name that path from the directory. Raises GitError if git fails (e.g.
+        NotARepositoryError). Asked of git with `prefix()`, in the same one process, and
+        remembered as it is."""
+        return self._top(timeout)[1]
+
+    def _top(self, timeout: Timeout) -> tuple[str, str]:
+        """`prefix()` and `cdup()`."""
+        known = tops.setdefault(self, {})
+        where = location(self)
+        if where not in known:
             # Not run's, which would strip a directory's leading space.
-            output = self.run_bytes("rev-parse", "--show-prefix", timeout=timeout)
-            known[key] = decode(output.removesuffix(b"\n"))
-        return known[key]
+            questions = where_questions(self, where)
+            output = self.run_bytes("rev-parse", *questions, timeout=timeout)
+            try:
+                learn_where(self, where, questions, rev_parse_lines(output), 0)
+            except LinesUnfit:
+                ask_where_alone(self, where, questions, timeout=timeout)
+        return known[where]
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
@@ -974,7 +1091,6 @@ class ReadOnlyGit:
         line = batch_line(name)
         if line is None:
             return None
-        where = location(self)
         args = ("cat-file", "--batch-check")
         result = self.process(*args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout)
         answered, _, reply = result.stdout.partition(b"\n")
@@ -997,7 +1113,6 @@ class ReadOnlyGit:
             if MISSING_OBJECT.search(stderr):
                 raise MissingObjectError(args, result.returncode, stderr)
             return None  # if it exited, it was on the name, which names nothing
-        learn_object_id_length(self, where, header[0])
         return header[0]
 
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:

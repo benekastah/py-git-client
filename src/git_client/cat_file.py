@@ -20,13 +20,10 @@ from typing import IO, Literal, Self, get_args
 from git_client.client import (
     FATAL,
     OBJECT_ID,
-    Location,
     ReadOnlyGit,
     batch_line,
     check_names_nothing,
     decode,
-    learn_object_id_length,
-    location,
     object_header,
 )
 from git_client.errors import (
@@ -117,9 +114,6 @@ class CatFile:
         # Stops the process when this is freed, or as it's asked to (see _stop).
         self._stopper: _Stopper | None = None
         self._lock = threading.Lock()
-        # The client's `location` when the process started, where its ids are from, until its
-        # first id has told the client its object id length there.
-        self._where: Location | None = None
         # Whether a request was sent whose answer hasn't all been read: interrupted (e.g. by
         # KeyboardInterrupt), its answer would answer the next request, which kills the
         # process first.
@@ -256,7 +250,6 @@ class CatFile:
                 process = None
                 stopper: _Stopper | None = None
                 try:
-                    self._where = location(self.git)
                     process = self.git.popen(*_COMMAND, stderr=file)
                     assert process.stdout is not None
                     output = _Output(process.stdout)
@@ -298,10 +291,7 @@ class CatFile:
                     process.stdin.write(command)
                     process.stdin.flush()
                     reply = output.readline(deadline)
-            if (header := object_header(reply)) is not None:
-                if self._where is not None and (git := self._git()) is not None:
-                    learn_object_id_length(git, self._where, header[0])
-                    self._where = None
+            if object_header(reply) is not None:
                 # It writes its warnings before the reply.
                 return reply, _said(stderr) if os.fstat(stderr.fileno()).st_size else ""
             if reply:

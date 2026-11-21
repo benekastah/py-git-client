@@ -1,6 +1,7 @@
 """Reads and writes that answer many questions, or make many changes, with one git process."""
 
 import os
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,15 +10,18 @@ from git_client.client import (
     Arg,
     EnvValue,
     Git,
+    LinesUnfit,
     ReadOnlyGit,
+    ask_where_alone,
     decode,
     encode,
     error_from,
     known_git_dirs,
     known_git_paths,
-    learn_object_id_length,
+    learn_where,
     location,
-    prefixes,
+    rev_parse_lines,
+    where_questions,
 )
 from git_client.errors import GitError
 
@@ -58,11 +62,15 @@ _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\
 
 def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
-    included files), from one `git config --list`: each key, as git prints it (section and
-    name in lower case, a subsection as written), with its values in the order git reads
-    them. A key with no value at all (`[core]` then `bare`, which git reads as true) has None,
-    unlike one set to nothing (`bare =`, which git reads as false), which has "". Look a key
-    up by `config_key(key)`, which names it as git prints it."""
+    included files), from one `git config --list -z`, with each key's values in the order git
+    reads them. A key with no value at all (`[core]` then `bare`, which git reads as true) has
+    None, unlike one set to nothing (`bare =`, which git reads as false), which has "".
+
+    The keys are exactly what git prints: section and name in lower case, the subsection as
+    written. So a lookup uses that form: `config(git).get("init.defaultbranch")`, not
+    `"init.defaultBranch"`, which finds nothing, with no error; `branch.Topic.pushremote`
+    keeps `Topic`. For a key a user typed, a tool runs `git config --get <key>` (one process),
+    so git reads it and says what's wrong with it."""
     entries: dict[str, list[str | None]] = {}
     for entry in decode(git.run_bytes("config", "--list", "-z")).split("\0"):
         if entry:
@@ -70,14 +78,6 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
             key, newline, value = entry.partition("\n")
             entries.setdefault(key, []).append(value if newline else None)
     return entries
-
-
-def config_key(key: str) -> str:
-    """A config key as `config` gives it, and as git reads it: its section and name in lower
-    case, and a subsection (what's between them, e.g. a branch's name) as written."""
-    section, dot, rest = key.partition(".")
-    subsection, dot2, name = rest.rpartition(".")
-    return f"{section.lower()}{dot}{subsection}{dot2}{name.lower()}"
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,6 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
     full ref names or object ids rather than short names."""
     extra = "".join(f"%00%({name})" for name in fields)
-    where = location(git)
     listing = git.run_bytes(
         "for-each-ref",
         f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
@@ -121,8 +120,6 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
         found[name] = Ref(
             name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
         )
-    if found:
-        learn_object_id_length(git, where, next(iter(found.values())).object)
     return found
 
 
@@ -139,7 +136,9 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     Each name is asked of git once per client and location (its directory and
     `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
     may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()`, if it isn't known yet."""
+    process tells the client's `prefix()` and `cdup()`, and `object_id_length()`, if they
+    aren't known yet. Where a path git prints holds a newline, which makes its answers'
+    lines impossible to tell apart, each is asked in a process of its own."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -152,14 +151,14 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         if (where, name) not in known or _moved_by_config(name)
     ]
     if new:
-        # The prefix too, if it's not known: it costs no process of its own here.
-        known_prefixes = prefixes.setdefault(git, {})
-        prefix = [] if where in known_prefixes else ["--show-prefix"]
+        questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
-        output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
-        lines = _lines(output)
-        if prefix:
-            known_prefixes[where] = decode(lines.pop(0))
+        output = git.run_bytes("rev-parse", *questions, "--path-format=absolute", *args)
+        try:
+            lines = learn_where(git, where, questions, rev_parse_lines(output), len(new))
+        except LinesUnfit:  # a path with a newline: each in a process of its own
+            ask_where_alone(git, where, questions)
+            lines = [_git_path_alone(git, name) for name in new]
         for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
@@ -179,35 +178,46 @@ class Head:
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
     (so a tool that wants both pays for one process). The paths are as `git_paths` gives
-    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept) and
-    `git.prefix()`; HEAD is read afresh each time,
-    since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
+    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept),
+    `git.prefix()`, `git.cdup()` and `git.object_id_length()`; HEAD is read afresh each
+    time, since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
-    paths and exits 1 without a word (it's asked to `--verify` HEAD), and the Head is the empty
+    paths and exits 1 (it's asked to `--verify` HEAD, `--quiet`ly, so it says nothing of it,
+    though it may warn of other things, e.g. its config), and the Head is the empty
     one, `Head()`, which isn't `detached`."""
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
     unique = list(dict.fromkeys(names))
     where = location(git)
-    known_prefixes = prefixes.setdefault(git, {})
-    prefix = [] if where in known_prefixes else ["--show-prefix"]
+    questions = where_questions(git, where)
     args = [arg for name in unique for arg in ("--git-path", name)]
-    wanted = len(prefix) + len(unique)
     # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
     # taken for a path and printed as "HEAD", which a detached HEAD prints too.
-    command = ["rev-parse", *prefix, "--path-format=absolute", *args]
+    command = ["rev-parse", *questions, "--path-format=absolute", *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
+    result = git.process(*command, capture_output=True)
+    stderr = decode(result.stderr)
+    if result.returncode == 0:
+        # No HEAD line where git can't say which ref "HEAD" is (a branch named HEAD).
+        head_lines = 0 if _AMBIGUOUS_HEAD.search(stderr) else 1
+    elif result.returncode == 1:
+        head_lines = 0  # unborn, whatever git warned of (e.g. its config)
+    else:
+        raise error_from(command, result)  # git said why
     try:
-        output = git.run_bytes(*command)
-    except GitError as error:
-        output = encode(error.stdout)
-        if error.returncode != 1 or error.stderr.strip() or len(_lines(output)) != wanted:
-            raise  # not an unborn HEAD: git said why, or didn't print what was asked
-    lines = _lines(output)
-    if prefix:
-        known_prefixes[where] = decode(lines.pop(0))
+        lines = learn_where(
+            git, where, questions, rev_parse_lines(result.stdout), len(unique) + head_lines
+        )
+    except LinesUnfit:  # a path with a newline: each in a process of its own
+        ask_where_alone(git, where, questions)
+        lines = [_git_path_alone(git, name) for name in unique]
+        lines += _head_alone(git)
+    except ValueError:
+        if result.returncode == 0:
+            raise
+        raise error_from(command, result) from None  # it didn't print what was asked
     found = {
         name: Path(os.fsdecode(line))
         for name, line in zip(unique, lines[: len(unique)], strict=True)
@@ -250,15 +260,32 @@ def _git_dirs(git: ReadOnlyGit) -> tuple[Path, Path]:
         output = git.run_bytes(
             "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"
         )
-        own, common = (Path(os.fsdecode(line)) for line in _lines(output))
+        own, common = (Path(os.fsdecode(line)) for line in rev_parse_lines(output))
         known[where] = own, common
     return known[where]
 
 
-def _lines(output: bytes) -> list[bytes]:
-    """The lines of rev-parse's output. Not splitlines(): the prefix's line can be empty, and
-    a path can't hold a line ending."""
-    return output.removesuffix(b"\n").split(b"\n") if output else []
+# What git says (on stderr, with exit 0) where it prints no HEAD line: a ref named HEAD (e.g.
+# refs/heads/HEAD) makes the name ambiguous.
+_AMBIGUOUS_HEAD = re.compile(r"refname 'HEAD' is ambiguous")
+
+
+def _git_path_alone(git: ReadOnlyGit, name: str) -> bytes:
+    """Where git keeps `name`, from a `rev-parse` of its own: its whole output but the newline
+    that ends it, for a path with a newline in it."""
+    output = git.run_bytes("rev-parse", "--path-format=absolute", "--git-path", name)
+    return output.removesuffix(b"\n")
+
+
+def _head_alone(git: ReadOnlyGit) -> list[bytes]:
+    """The full name of what HEAD points at, from a `rev-parse` of its own, as one line; none
+    where git can't say (an unborn branch, a branch named HEAD). A ref's name holds no
+    newline."""
+    args = ("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "HEAD")
+    result = git.process(*args, capture_output=True)
+    if result.returncode not in (0, 1):  # 1: unborn, whatever git warned of
+        raise error_from(args, result)
+    return rev_parse_lines(result.stdout)
 
 
 def _moved_by_config(name: str) -> bool:
@@ -376,10 +403,10 @@ def hash_blob_at(
     `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
     `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
     (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
-    top (`git.prefix()`'s, asked of git once per client) and down to the path, taking it as it
-    is, with no magic."""
+    top (`git.cdup()`, asked of git once per client) and down to the path, taking it as it is,
+    with no magic."""
     if paths_from_top:
-        path = b"../" * git.prefix().count("/") + os.fsencode(path)
+        path = os.path.join(encode(git.cdup()), os.fsencode(path))
     output = git.run_bytes(
         "hash-object", *(["-w"] if write else []), "--path", path, "--stdin", input=content
     )

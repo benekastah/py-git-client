@@ -12,7 +12,6 @@ import contextlib
 import contextvars
 import functools
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -36,6 +35,7 @@ from git_client.client import (
     Timeout,
     decode,
     encode,
+    error_from,
     find_git,
     refuse_if_stopping,
 )
@@ -216,12 +216,14 @@ class RepoTemplates:
     def __init__(self, root: Path, config: Path) -> None:
         self.root = root
         self.config = config
-        self._built: set[str] = set()
+        # Each template built, by name: its repositories' remote URLs (see _remote_urls).
+        self._built: dict[str, dict[Path, dict[str, list[str]]]] = {}
 
     def build(self, name: str, make: Callable[[Path], None]) -> Path:
         """The directory `make` filled, making it the first time `name` is asked for, then
-        deleting git's sample hooks (`hooks/*.sample`). If `make` fails, nothing is kept, so
-        the next build tries again and fails as it did."""
+        deleting git's sample hooks (`hooks/*.sample`), and reading its remotes' URLs, for
+        `copy` to repoint. If `make` fails, nothing is kept, so the next build tries again and
+        fails as it did."""
         directory = self.root / name
         if name not in self._built:
             directory.mkdir(parents=True)
@@ -229,13 +231,14 @@ class RepoTemplates:
                 with pytest.MonkeyPatch.context() as patch, _unrecorded():
                     patch.setenv("GIT_CONFIG_GLOBAL", str(self.config))
                     make(directory)
+                    urls = _remote_urls(directory)
             except BaseException:
                 _remove(directory)
                 raise
             # Fewer files to copy; the hooks directories stay, for a test to add a hook to.
             for sample in directory.glob("**/hooks/*.sample"):
                 sample.unlink()
-            self._built.add(name)
+            self._built[name] = urls
         return directory
 
     def copy(self, name: str, dest: Path) -> Path:
@@ -250,7 +253,7 @@ class RepoTemplates:
         source = self.root / name
         shutil.copytree(source, dest, symlinks=True)
         with _unrecorded():
-            _repoint_remotes(source, dest)
+            _repoint_remotes(self._built[name], source, dest)
         return dest
 
 
@@ -266,98 +269,78 @@ def _remove(directory: Path) -> None:
 
 
 def _repositories(root: Path) -> Iterator[Path]:
-    """Every repository under root, root included: each directory with a `.git` in it, and each
-    bare repository (a directory with `HEAD`, `config` and `objects`). One whose `.git` is a
-    file (a submodule, or a linked worktree) is listed, but its `gitdir:` isn't followed, so a
-    submodule's own repository (under `.git/modules/`) isn't."""
+    """The git directory of each repository under root, root included, that's no submodule or
+    linked worktree: each `.git` directory, and each bare repository's (a directory with
+    `HEAD`, `config` and `objects`), which git then reads as one, or can't. A `.git` file
+    (a submodule's, or a linked worktree's) isn't followed, so a submodule's own repository
+    (under `.git/modules/`) isn't listed."""
     for directory, subdirectories, files in os.walk(root):
-        if ".git" in subdirectories or ".git" in files:
-            yield Path(directory)
-            if ".git" in subdirectories:
-                subdirectories.remove(".git")
-        elif "HEAD" in files and "config" in files and "objects" in subdirectories:
+        if ".git" in subdirectories:
+            yield Path(directory) / ".git"
+            subdirectories.remove(".git")
+        elif (
+            ".git" not in files and {"HEAD", "config"} <= set(files) and "objects" in subdirectories
+        ):
             yield Path(directory)
             subdirectories.clear()
 
 
-def _repoint_remotes(source: Path, dest: Path) -> None:
-    """In each repository under `dest` (copied from `source`), point every remote URL (`url`
-    and `pushurl`) that's a path under `source`, or a `file://` URL of one, at the same path
-    under `dest`. The URLs are read from the config file (not from files it includes), and
-    each that moves is set through `git config` rather than by editing the file, where git
-    escapes backslashes (Windows' paths): one process for a key with one value, and for one
-    with several, one to clear it and one per value. Submodules aren't repointed (their
-    remote, in `.git/modules/<name>/config`, and the superproject's `submodule.<name>.url`
-    still name the template), nor linked worktrees (whose `gitdir:` is an absolute path into
-    the template)."""
-    for repo in _repositories(dest):
-        if (repo / ".git").is_file():
-            continue
-        config = repo / ".git" / "config" if (repo / ".git").is_dir() else repo / "config"
-        if not config.is_file():
-            continue
-        git = Git(repo, program=real_git())
-        for key, values in _remote_urls(decode(config.read_bytes())).items():
+# The keys of remotes' URLs, as `git config --get-regexp` takes them.
+_URL_KEYS = r"^remote\..*\.(push)?url$"
+
+
+def _remote_urls(root: Path) -> dict[Path, dict[str, list[str]]]:
+    """The remotes' URLs (`url` and `pushurl`) in the config file of each repository under
+    root (see _repositories; not files it includes), by its git directory, relative to root,
+    then by key, in order, as git reads them: one `git config --get-regexp` per repository.
+    One git can't read (`rev-parse --git-dir` fails too) has none; raises GitError where git
+    fails otherwise (e.g. killed, or a usage error)."""
+    found: dict[Path, dict[str, list[str]]] = {}
+    for git_dir in _repositories(root):
+        args = (f"--git-dir={git_dir}", "config", "--local", "-z", "--get-regexp", _URL_KEYS)
+        git = Git(root, program=real_git())
+        result = git.process(*args, capture_output=True)
+        if result.returncode == 1:
+            continue  # no URL
+        if result.returncode != 0:
+            if not git.succeeds(f"--git-dir={git_dir}", "rev-parse", "--git-dir"):
+                # git can't read it (e.g. a bad config line, or no repository), so its copy
+                # can't run git either: it's left as it is, for git to say so there.
+                continue
+            raise error_from(args, result)
+        urls: dict[str, list[str]] = {}
+        for entry in decode(result.stdout).split("\0"):
+            # A key, then its value after a newline; a key with no value has no newline.
+            key, newline, url = entry.partition("\n")
+            if newline:
+                urls.setdefault(key, []).append(url)
+        if urls:
+            found[git_dir.relative_to(root)] = urls
+    return found
+
+
+def _repoint_remotes(urls: dict[Path, dict[str, list[str]]], source: Path, dest: Path) -> None:
+    """In each repository copied from `source` to `dest`, point every remote URL in `urls`
+    (from `_remote_urls(source)`) that's a path under `source`, or a `file://` URL of one, at
+    the same path under `dest`. Each that moves is set through `git config`, which writes it
+    as git reads it (e.g. escaping Windows' backslashes): one process for a key with one
+    value, and for one with several, one to clear it and one per value. Submodules aren't
+    repointed (their remote, in `.git/modules/<name>/config`, and the superproject's
+    `submodule.<name>.url` still name the template), nor linked worktrees (whose `gitdir:` is
+    an absolute path into the template)."""
+    for git_dir, keys in urls.items():
+        git = Git(dest, program=real_git())
+        local = (f"--git-dir={dest / git_dir}", "config", "--local")
+        for key, values in keys.items():
             moved = [_moved(url, source, dest) for url in values]
             if moved == values:
                 continue
             if len(moved) == 1:
-                git.run("config", "--local", key, moved[0])
+                git.run(*local, key, moved[0])
             else:
-                git.run("config", "--local", "--unset-all", key)
+                git.run(*local, "--unset-all", key)
                 for url in moved:
-                    git.run("config", "--local", "--add", key, url)
-
-
-# A config file's section header, `[remote "origin"]` (or the old `[remote.origin]`), and a
-# remote's URL, `url = ...` or `pushurl = ...`: names are case-insensitive.
-_SECTION = re.compile(r'\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]')
-_URL = re.compile(r"\s*(url|pushurl)\s*=(.*)", re.IGNORECASE)
-
-
-def _remote_urls(text: str) -> dict[str, list[str]]:
-    """The remotes' URLs in a config file's text, by key (`remote.<name>.url` or
-    `.pushurl`), in order, as git reads them."""
-    urls: dict[str, list[str]] = {}
-    remote: str | None = None
-    for line in text.splitlines():
-        if section := _SECTION.match(line):
-            name, subsection = section[1], section[2]
-            if subsection is not None:
-                remote = _unescaped(subsection) if name.lower() == "remote" else None
-            else:
-                # The old form, whose subsection git reads in lower case.
-                first, dot, rest = name.partition(".")
-                remote = rest.lower() if dot and first.lower() == "remote" else None
-        elif remote is not None and (entry := _URL.match(line)):
-            key = f"remote.{remote}.{entry[1].lower()}"
-            urls.setdefault(key, []).append(_config_value(entry[2]))
-    return urls
-
-
-def _unescaped(text: str) -> str:
-    """A quoted subsection's text, without its escapes (\\" and \\\\)."""
-    return re.sub(r"\\(.)", r"\1", text)
-
-
-def _config_value(raw: str) -> str:
-    """A value as git reads it from what follows `=`: without the space around it (outside
-    quotes), its quotes, its escapes (\\n, \\t, \\b, \\" and \\\\), and a comment after it."""
-    value: list[str] = []
-    quoted = escaped = False
-    for c in raw:
-        if escaped:
-            value.append({"n": "\n", "t": "\t", "b": "\b"}.get(c, c))
-            escaped = False
-        elif c == "\\":
-            escaped = True
-        elif c == '"':
-            quoted = not quoted
-        elif c in "#;" and not quoted:
-            break
-        else:
-            value.append(c)
-    return "".join(value).strip()
+                    git.run(*local, "--add", key, url)
 
 
 def _moved(url: str, source: Path, dest: Path) -> str:

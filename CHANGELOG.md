@@ -19,6 +19,42 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
   removes them from `os.environ` first (a client's `env` can set a variable, not remove
   one), or gets the hook's repository (#65).
+- `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
+  one back unchanged, so a lookup found nothing where git says "key does not contain a
+  section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
+  name in lower case, the subsection as written. A lookup must use that form: one written
+  in camelCase, as `config(git).get("init.defaultBranch")`, now finds nothing, with no
+  error; write `"init.defaultbranch"` (`branch.Topic.pushremote` keeps `Topic`). So a tool
+  that dropped `config_key` lower-cases the section and name of each key (keeping the
+  subsection) before it looks it up in `config()`'s result, or writes its constant keys that
+  way (e.g. `f"branch.{name}.pushremote"`). Two tools must: git-stack, which calls
+  `config_key` in `git_stack/git.py` and looks up `stack.perfLog`, `stack.perfLogMaxBytes`
+  and `core.sshCommand`, and move-forward, whose `RepoConfig.get` is given camelCase keys.
+  For a key a user typed, a tool runs `git config --get <key>` (one process; `git config
+  get` from git 2.46): git takes the key however it's written and canonicalizes it itself.
+  It exits 1 both for a key that isn't set and for one that isn't a key (`nosection`, `a.b
+  c`), saying why only on stderr (e.g. "key does not contain a section"), so a tool that reads
+  exit 1 as "not set" reads a mistyped key as unset: one that must tell them apart checks
+  stderr (#67).
+- `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
+  the length of an id git printed, which in a SHA-256 repository with
+  `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
+  `git_paths` and `git_paths_and_head` asks it too while it isn't known, so it usually costs
+  no process: a `FakeGit` answering them gives the lines the `cdup()` entry below lists, or
+  is made with `object_id_length=40`, which asks no format (#67).
+- `ReadOnlyGit.cdup()` gives the path up to the top of the worktree, as `git rev-parse
+  --show-cdup` prints it, where a tool built it from the prefix (`"../" *
+  prefix().count("/")`, which outside a worktree git knows the top of is wrong). It's asked
+  with `prefix()`. The `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head`
+  run starts with what isn't known yet: `--show-prefix --show-cdup --is-inside-work-tree`
+  while the prefix isn't, then `--show-object-format` while the object id length isn't. A
+  `FakeGit` answering it gives, in this order: the prefix's line (empty at the top), the
+  cdup's (none at all where git knows no worktree: a bare repository, a git directory),
+  `true` or `false`, then `sha1` or `sha256`; then the paths and HEAD (none where git exits
+  1 for an unborn branch, or 0 saying "refname 'HEAD' is ambiguous"). Where a path holds a
+  newline, so that the lines can't be told apart, each question is asked alone. One still
+  answering the old way (the prefix's line alone, or then the format's) gets too few lines:
+  `ValueError: rev-parse printed N lines, too few for M` (#67).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -31,12 +67,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   try again while the file is locked (#61).
 - `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
   under it) ask git once per client, directory and `env`, and remember the answer: a tool
-  that cached them itself can drop its cache (and its `cdup` is
-  `"../" * prefix().count("/")`). `git_paths` learns `prefix()` in its own process: its
-  command is `rev-parse --show-prefix --path-format=absolute --git-path ...` while the
-  prefix isn't known, so a `FakeGit` answering it gives the prefix's line first. A
-  repository moved or replaced under a client that keeps its directory isn't noticed; make a
-  new client (#50).
+  that cached them itself can drop its cache (and its cdup is `cdup()`'s, remembered with
+  the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
+  gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
+  client that keeps its directory isn't noticed; make a new client (#50).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -80,10 +114,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
   failure raises `RemoteError` from `run`, as before (#52).
 
-- `object_id_length()` learns the length from the first full id `refs`, `Git.resolve` or a
-  `CatFile` reads at the client's location, and then starts no `git rev-parse
-  --show-object-format`: a `FakeGit` test that expects that command after one of those no
-  longer sees it. Threads that ask at once wait for one git's answer, where each could
+- `object_id_length()`: threads that ask at once wait for one git's answer, where each could
   start its own (#54).
 - `Git.resolve` takes one process for every name, where a name `git cat-file` exits on (e.g.
   `main@{upstream}` with no upstream) took a second, a `rev-parse`: it sends cat-file a name
@@ -108,6 +139,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
+  the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
@@ -128,8 +161,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   process group of its own, so a command with a timeout starts faster without a terminal,
   but what git started isn't stopped with it (#52).
 - `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
-  already knows the length, e.g. from an id it has read, gives it, and `object_id_length()`
-  starts no `git rev-parse --show-object-format` (#50).
+  knows the length some other way than asking git gives it, and `object_id_length()` starts
+  no `git rev-parse --show-object-format` (#50).
 - `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
   but holds paths from the top of the worktree, as git reports them, as `patch_ids` has
   (#50).
@@ -153,6 +186,14 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `repo_templates` copies repoint every remote URL as git reads it, which git now reads
+  for them (`git config --get-regexp`, once per repository as the template is built), where
+  the plugin's own reading of the config file missed an entry on its section's line and
+  misread a value continued on the next line. A copy still runs only the writes. A
+  repository git can't read is copied as it is (#67).
+- `hash_blob_at(..., paths_from_top=True)` from a client outside the worktree that git is
+  told of (e.g. by GIT_WORK_TREE) takes the path from the worktree's top, as `cdup()` says,
+  where it took it from the client's directory and so read the wrong attributes (#67).
 - A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
   answer unread, to answer the next request: `resolve("HEAD")` could give another name's
   id. The next request now kills that process, and starts another (#53).

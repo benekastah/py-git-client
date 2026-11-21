@@ -46,7 +46,6 @@ from git_client import (
     ObjectType,
     RefUpdate,
     config,
-    config_key,
     git_common_dir,
     git_dir,
     git_paths,
@@ -75,7 +74,7 @@ git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
 # asked of git once per client (and directory), as are git_paths and object_id_length()
-# (which an id read by refs, resolve or CatFile also tells)
+git.cdup()  # "../" there: the way up to the top, as git prints it, asked with prefix()
 # git config, tried again while locked, for each change; what each did: an unset that removes
 # nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
 # remove), not an error. Other config writes (--add, ...): git.run("config", ...).
@@ -97,7 +96,11 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
     _, tree = cat_file.read(upstream, wanted)  # its tree; WrongTypeError if it has none
 
 remotes = config(git)["remote.origin.url"]  # every value of each key
-push_remote = config(git).get(config_key("branch.Topic.pushRemote"))  # keys as git names them
+# Keys exactly as `git config --list -z` prints them: section and name in lower case, the
+# subsection as written. config(git).get("init.defaultBranch") finds nothing, with no error.
+# For a key a user typed, run `git config --get <key>` (one process).
+default_branch = config(git).get("init.defaultbranch")
+push_remote = config(git).get("branch.Topic.pushremote")
 for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
     print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
 
@@ -245,9 +248,9 @@ except ReadOnlyError:
 A tool with a `Git` for the commands that write gives the paths that only read its
 `read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
 It's of the client's own class, so a subclass's own `process` and other methods still run, and
-it shares what git told the client about where things are (`prefix()`, `object_id_length()`,
-`git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError` if the client's `env`
-holds a variable a `ReadOnlyGit` doesn't take.
+it shares what git told the client about where things are (`prefix()`, `cdup()`,
+`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError`
+if the client's `env` holds a variable a `ReadOnlyGit` doesn't take.
 
 ```python
 git = Git("path/to/repo")
@@ -385,10 +388,12 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
 - **Repositories built once per session, copied for each test** (`repo_templates`), under
   the session's config rather than the config of the test that asks first, and without
   git's sample hooks (`hooks/*.sample`), which every copy would copy: building takes many
-  git processes, copying takes none for a repository without remotes. One with remotes takes
-  a `git config` for each remote's `url` or `pushurl` that points inside the template (a
-  path, or a `file://` URL), to point it at the copy's (for a key with several values, one
-  to clear it and one per value). Submodules and linked worktrees aren't repointed. A copy's
+  git processes, and one more per repository, to read its remotes' URLs (`git config
+  --get-regexp`); copying takes none for a repository without remotes. One with remotes
+  takes a `git config` for each remote's `url` or `pushurl` that points inside the template
+  (a path, or a `file://` URL), to point it at the copy's (for a key with several values,
+  one to clear it and one per value). Submodules and linked worktrees aren't repointed, nor a
+  repository git can't read (e.g. a bad config line), which is copied as it is. A copy's
   index keeps the template's stat data: the first command that refreshes the index (`git
   status`, `git diff`) makes it match the copy's files, but until then plumbing that doesn't
   (`git diff-index HEAD`, `git diff-files`) reports every file as modified, so a test of a

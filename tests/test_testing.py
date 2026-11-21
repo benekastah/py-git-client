@@ -8,12 +8,14 @@ from typing import IO
 
 import pytest
 
+import git_client.testing
 from git_client import (
     CLIENT_TIMEOUT,
     Arg,
     CatFile,
     EnvValue,
     Git,
+    GitError,
     NotStartedError,
     ReadOnlyError,
     ReadOnlyGit,
@@ -444,8 +446,16 @@ def test_a_copy_takes_one_git_per_url_it_repoints(
 
     copy = repo_templates.copy("origin-and-clone", tmp_path / "copy")
 
+    # Only the writes: what to repoint was read once, as the template was built.
     commands = traced_commands(tmp_path / "trace")
-    assert [command.split()[0] for command in commands] == ["config", "config"]  # url, pushurl
+    assert [command.split()[:2] for command in commands] == [
+        ["config", "--local"],
+        ["config", "--local"],
+    ]
+    assert [command.split()[2] for command in commands] == [
+        "remote.origin.url",
+        "remote.origin.pushurl",
+    ]
     for key in ("remote.origin.url", "remote.origin.pushurl"):
         assert Path(Git(copy / "clone").run("config", key)) == copy / "origin.git"
 
@@ -498,6 +508,60 @@ def test_repoints_every_url_of_a_repository_however_deep(
     assert [Path(url) for url in urls] == [copy / "up #1.git", copy / "up #1.git"]
     assert work.run("config", "remote.elsewhere.url") == "https://example.org/x.git"
     assert Path(work.run("config", "remote.byhand.url")) == copy / "up #1.git"
+
+
+def make_hand_written_urls(directory: Path) -> None:
+    Git(directory).run("init", "--quiet", "work")
+    top = directory.as_posix()
+    # What git reads, though it writes none of it so: an entry on its section's line, a value
+    # continued on the next line, a backslash, quotes, "#" and spaces in a quoted value.
+    with (directory / "work" / ".git" / "config").open("a", encoding="utf-8") as config:
+        config.write(
+            f'[remote "header"] url = "{top}/up #1.git"\n'
+            f'[remote "continued"]\n\turl = {top}/con\\\ntinued.git\n'
+            f'\tpushurl = "{top}/a \\"quoted\\" back\\\\slash.git" # a comment\n'
+        )
+
+
+def test_repoints_each_url_as_git_reads_it(repo_templates: RepoTemplates, tmp_path: Path) -> None:
+    source = repo_templates.build("hand-written-urls", make_hand_written_urls)
+    copy = repo_templates.copy("hand-written-urls", tmp_path / "copy")
+
+    keys = ("remote.header.url", "remote.continued.url", "remote.continued.pushurl")
+    for key in keys:
+        url = Git(source / "work").run("config", key)
+        assert Path(Git(copy / "work").run("config", key)) == copy / Path(url).relative_to(source)
+
+
+def make_unreadable_repositories(directory: Path) -> None:
+    # A directory that looks like a bare repository, but whose HEAD git can't read.
+    (directory / "fake.git" / "objects").mkdir(parents=True)
+    (directory / "fake.git" / "HEAD").write_bytes(b"garbage\n")
+    (directory / "fake.git" / "config").write_bytes(b'[remote "o"]\n\turl = x\n')
+    # A repository whose config git can't parse.
+    Git(directory).run("init", "--quiet", "broken")
+    with (directory / "broken" / ".git" / "config").open("ab") as config:
+        config.write(b'[remote "o"]\n\turl = ' + directory.as_posix().encode() + b"\n[bad\n")
+
+
+def test_a_repository_git_cant_read_is_copied_as_it_is(
+    repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    source = repo_templates.build("unreadable", make_unreadable_repositories)
+    copy = repo_templates.copy("unreadable", tmp_path / "copy")
+
+    for file in ("fake.git/config", "broken/.git/config"):
+        assert (copy / file).read_bytes() == (source / file).read_bytes()
+
+
+def test_a_build_raises_where_git_fails_on_a_repository_it_reads(
+    repo_templates: RepoTemplates, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The plugin's own command gone wrong, not the repository: git can read that.
+    monkeypatch.setattr(git_client.testing, "_URL_KEYS", "(")
+
+    with pytest.raises(GitError, match="invalid key pattern"):
+        repo_templates.build("bad-pattern", make_origin_and_clone)
 
 
 def make_file_url_remotes(directory: Path) -> None:

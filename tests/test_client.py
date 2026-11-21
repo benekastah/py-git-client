@@ -22,6 +22,7 @@ from git_client import (
     Git,
     GitError,
     GitTimeoutError,
+    Head,
     NoAnswerError,
     NotARepositoryError,
     NotStartedError,
@@ -30,10 +31,11 @@ from git_client import (
     UnknownRevisionError,
     decode,
     find_git,
+    git_paths,
+    git_paths_and_head,
     printable,
-    refs,
 )
-from git_client.testing import FakeGit, GitCall
+from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
 @pytest.mark.usefixtures("fresh_find_git")
@@ -95,6 +97,117 @@ def test_prefix_is_asked_of_git_once_per_directory_and_environment(
     git.env["GIT_WORK_TREE"] = str(below)
     git.prefix()
     assert len(git_calls) == 3
+
+
+def add_places(repo: Git) -> None:
+    """Changes for repo_from: a deep subdirectory, a linked worktree (`linked`, beside the
+    repository) and a submodule (`mod`) with a subdirectory, and a bare clone beside it
+    (`bare.git`)."""
+    top = Path(repo.directory)
+    (top / "sub" / "deep" / "er").mkdir(parents=True)
+    repo.run("worktree", "add", "--quiet", str(top.parent / "linked"))
+    (top.parent / "linked" / "sub").mkdir()
+    repo.run("-c", "protocol.file.allow=always", "submodule", "--quiet", "add", "./", "mod")
+    (top / "mod" / "sub").mkdir()
+    Git(top.parent).run("clone", "--quiet", "--bare", "repo", "bare.git")
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "repo",
+        "repo/sub",
+        "repo/sub/deep/er",
+        "linked",
+        "linked/sub",
+        "repo/mod/sub",
+        "bare.git",
+        "repo/.git",
+        "repo/.git/objects",
+    ],
+)
+def test_cdup_and_prefix_are_what_git_prints_wherever_the_client_is(
+    where: str, repo_from: Callable[[str, Callable[[Git], None]], Git], git_calls: list[list[str]]
+) -> None:
+    copy = Path(repo_from("places", add_places).directory).parent
+    # Outside a worktree whose top it knows, git prints no cdup at all, not an empty line.
+    cdup = Git(copy / where).run_bytes("rev-parse", "--show-cdup").removesuffix(b"\n")
+    prefix = Git(copy / where).run_bytes("rev-parse", "--show-prefix").removesuffix(b"\n")
+    git = Git(copy / where)
+    started = len(git_calls)
+
+    assert (git.cdup(), git.prefix()) == (decode(cdup), decode(prefix))
+    assert len(git_calls) == started + 1
+
+
+def test_cdup_outside_the_worktree_is_its_top(repo: Git, tmp_path: Path) -> None:
+    git = Git(
+        tmp_path,
+        env={"GIT_DIR": str(Path(repo.directory) / ".git"), "GIT_WORK_TREE": repo.directory},
+    )
+
+    assert Path(git.cdup()) == Path(repo.directory)
+    assert git.prefix() == ""
+
+
+def test_prefix_tells_the_object_id_length_in_the_same_process(
+    tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(tmp_path / "sha256")
+    started = len(git_calls)
+
+    git.prefix()
+    assert git.object_id_length() == 64
+    assert len(git_calls) == started + 1
+
+
+NO_NEWLINES_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows' file names can't hold a newline"
+)
+
+
+@NO_NEWLINES_ON_WINDOWS
+@pytest.mark.parametrize("ask", [Git.prefix, git_paths, git_paths_and_head])
+def test_where_answers_take_a_path_with_a_newline(
+    ask: Callable[[Git, str], object], repo: Git
+) -> None:
+    # With a leading space too, which stripping git's answer would lose.
+    below = Path(repo.directory) / " a\nb"
+    below.mkdir()
+    git = Git(below)
+    ask(git, "HEAD") if ask is not Git.prefix else git.prefix()
+
+    assert (git.prefix(), git.cdup()) == (" a\nb/", "../")
+    assert git_paths(git, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
+
+
+@NO_NEWLINES_ON_WINDOWS
+def test_git_paths_and_head_takes_a_path_with_a_newline_on_an_unborn_branch(
+    tmp_path: Path,
+) -> None:
+    Git(tmp_path).run("init", "--quiet", " a\nb")
+    git = Git(tmp_path / " a\nb")
+
+    assert git_paths_and_head(git, "HEAD") == ([tmp_path / " a\nb" / ".git" / "HEAD"], Head())
+    assert (git.prefix(), git.cdup()) == ("", "")
+
+
+@NO_NEWLINES_ON_WINDOWS
+def test_a_top_whose_path_ends_in_a_line_of_true_isnt_taken_for_the_marker(
+    repo: Git, tmp_path: Path
+) -> None:
+    repo.run("update-ref", "refs/heads/HEAD", "HEAD")  # so git prints no HEAD line
+    top = tmp_path / "w\ntrue"
+    top.mkdir()
+    env = {"GIT_DIR": str(Path(repo.directory) / ".git"), "GIT_WORK_TREE": str(top)}
+    git = Git(tmp_path, env=env, object_id_length=40)
+
+    paths, head = git_paths_and_head(git, "HEAD", "config")
+
+    assert paths == [Path(repo.directory) / ".git" / name for name in ("HEAD", "config")]
+    assert head == Head()
+    assert (git.prefix(), Path(git.cdup())) == ("", top)
 
 
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
@@ -934,48 +1047,39 @@ def test_object_id_length_asks_git_once_for_threads_asking_at_once(
     assert git_calls == [["rev-parse", "--show-object-format"]]
 
 
-def make_sha256_repo(directory: Path) -> Git:
-    """A SHA-256 repository, with one commit, in directory, and a client for it."""
-    Git(directory).run("init", "--quiet", "--object-format=sha256", str(directory / "sha256"))
-    git = Git(directory / "sha256")
+def make_sha256_repo_with_sha1_ids(directory: Path) -> None:
+    """A SHA-256 repository, `repo`, with one commit, that also knows each object's SHA-1 id
+    (extensions.compatObjectFormat)."""
+    Git(directory).run("init", "--quiet", "--object-format=sha256", "repo")
+    git = Git(directory / "repo")
+    git.run("config", "extensions.compatObjectFormat", "sha1")
     git.run("commit", "--quiet", "--allow-empty", "-m", "first")
-    return git
 
 
-def resolve(git: Git) -> None:
-    git.resolve("HEAD")
-
-
-def resolve_with_cat_file(git: Git) -> None:
+def resolve_with_cat_file(git: Git, name: str) -> str | None:
     with CatFile(git) as cat_file:
-        cat_file.resolve("HEAD")
+        return cat_file.resolve(name)
 
 
+@pytest.mark.needs_git(2, 46, reason="extensions.compatObjectFormat")
 @pytest.mark.parametrize(
-    "read_an_id",
-    [refs, resolve, resolve_with_cat_file],
-    ids=["refs", "resolve", "CatFile"],
+    "resolve", [Git.resolve, resolve_with_cat_file], ids=["resolve", "CatFile"]
 )
-def test_object_id_length_is_learned_from_an_id_the_library_reads(
-    read_an_id: Callable[[Git], object], tmp_path: Path, git_calls: list[GitCall]
+def test_object_id_length_is_the_repositorys_whatever_ids_were_read(
+    resolve: Callable[[Git, str], str | None], repo_templates: RepoTemplates, tmp_path: Path
 ) -> None:
-    git = Git(make_sha256_repo(tmp_path).directory)
-    read_an_id(git)
+    try:
+        repo_templates.build("sha256 with sha1 ids", make_sha256_repo_with_sha1_ids)
+    except GitError as error:
+        # As the git on macOS CI says: it's built without what makes the SHA-1 ids.
+        if "compatibility hash algorithm support requires Rust" not in error.stderr:
+            raise
+        pytest.skip("this git can't keep SHA-1 ids beside SHA-256 ones (it's built without Rust)")
+    git = Git(repo_templates.copy("sha256 with sha1 ids", tmp_path / "copy") / "repo")
+    sha1 = git.run("rev-parse", "--output-object-format=sha1", "HEAD")
 
+    assert resolve(git, sha1) == sha1  # git gives a SHA-1 id back for one
     assert git.object_id_length() == 64
-    assert ["rev-parse", "--show-object-format"] not in git_calls
-
-
-def test_an_object_id_length_learned_counts_only_where_it_was_read(
-    repo: Git, tmp_path: Path
-) -> None:
-    git = Git(make_sha256_repo(tmp_path).directory)
-    with CatFile(git) as cat_file:
-        assert cat_file.resolve("nothing") is None  # starts its process, reading no id
-        git.directory = repo.directory
-        # Its process is still the SHA-256 repository's.
-        assert cat_file.resolve("HEAD") is not None
-        assert git.object_id_length() == 40
 
 
 def test_a_failed_object_id_length_is_not_remembered(tmp_path: Path) -> None:

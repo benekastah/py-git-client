@@ -1,3 +1,5 @@
+import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from git_client import (
     ReadOnlyError,
     RefUpdate,
     config,
-    config_key,
+    decode,
     git_paths,
     git_paths_and_head,
     hash_blob_at,
@@ -22,7 +24,7 @@ from git_client import (
     refs,
     update_refs,
 )
-from git_client.testing import FakeGit, GitCall
+from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
 def test_config_gives_every_value_of_each_key_in_order(repo: Git) -> None:
@@ -61,15 +63,11 @@ def test_config_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) 
     assert printable(name) == "caf\ufffd"
 
 
-def test_config_key_names_a_key_as_config_does(repo: Git) -> None:
-    repo.run("config", "branch.Topic.pushRemote", "origin")
-    repo.run("config", "url.https://Example.org/.insteadOf", "ex:")
+def test_config_gives_keys_as_git_prints_them(repo: Git) -> None:
+    repo.run("config", "Branch.Topic.pushRemote", "origin")
 
-    entries = config(repo)
-
-    assert entries[config_key("branch.Topic.pushRemote")] == ["origin"]
-    assert entries[config_key("URL.https://Example.org/.insteadOf")] == ["ex:"]
-    assert entries[config_key("User.Name")] == ["Test"]
+    # The section and name in lower case, the subsection as written.
+    assert config(repo)["branch.Topic.pushremote"] == ["origin"]
 
 
 def test_patch_ids_in_a_sha256_repository(tmp_path: Path) -> None:
@@ -609,6 +607,22 @@ def test_hash_blob_at_takes_a_path_from_the_top_if_asked(repo: Git) -> None:
     assert hash_blob_at(repo, "sub/notes.txt", b"one\r\n", paths_from_top=True) == as_it_is
 
 
+def test_hash_blob_at_takes_a_path_from_the_top_outside_the_worktree(
+    repo: Git, tmp_path: Path
+) -> None:
+    top = Path(repo.directory)
+    (top / "sub").mkdir()
+    (top / "sub" / ".gitattributes").write_bytes(b"*.txt text\n")
+    # A client outside the worktree, which GIT_WORK_TREE names.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    env = {"GIT_DIR": str(top / ".git"), "GIT_WORK_TREE": str(top)}
+    client = Git(outside, env=env)
+
+    found = hash_blob_at(client, "sub/notes.txt", b"one\r\n", paths_from_top=True)
+    assert found == blob_id(repo, b"one\n")
+
+
 def test_hash_blob_at_writes_the_blob_only_if_asked(repo: Git) -> None:
     (Path(repo.directory) / ".gitattributes").write_bytes(b"*.txt text\n")
 
@@ -720,7 +734,26 @@ def test_git_paths_learns_the_prefix_in_the_same_process(
     git = Git(Path(repo.directory) / where)
     git_paths(git, "HEAD")
     assert git.prefix() == prefix
+    assert git.cdup() == "../" * prefix.count("/")
     assert len(git_calls) == 1
+
+
+@pytest.mark.parametrize("ask", [git_paths, git_paths_and_head])
+def test_git_paths_learns_the_object_id_length_in_the_same_process(
+    ask: Callable[[Git, str], object], tmp_path: Path, git_calls: list[list[str]]
+) -> None:
+    Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
+    git = Git(tmp_path / "sha256")
+    started = len(git_calls)
+    ask(git, "HEAD")
+    assert git.object_id_length() == 64
+    assert len(git_calls) == started + 1
+
+
+def test_git_paths_asks_no_object_id_length_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
+    repo.object_id_length()
+    git_paths(repo, "HEAD")
+    assert "--show-object-format" not in git_calls[-1]
 
 
 def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
@@ -730,15 +763,15 @@ def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]
 
 
 def test_git_paths_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)  # so rev-parse is asked no object format
     git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
     with pytest.raises(ValueError):
         git_paths(git, "HEAD")
 
 
 def test_git_paths_refuses_an_empty_answer() -> None:
-    git = FakeGit()
-    git.respond(["rev-parse", "--show-prefix"], stdout="\n")
+    git = FakeGit(object_id_length=40)
+    git.respond(["rev-parse", "--show-prefix"], stdout="\n\ntrue\n")
     git.prefix()
     git.respond(["rev-parse", "--path-format=absolute"])  # nothing
     with pytest.raises(ValueError):
@@ -831,8 +864,8 @@ def test_git_paths_and_head_without_names_still_gives_the_head(repo: Git) -> Non
     ],
 )
 def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> None:
-    git = FakeGit()
-    git.respond(["rev-parse"], stdout=f"\n{stdout}")  # the prefix's line first
+    git = FakeGit(object_id_length=40)
+    git.respond(["rev-parse"], stdout=f"\n\ntrue\n{stdout}")  # prefix, cdup, inside first
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], head)
     assert git.prefix() == ""
@@ -877,17 +910,115 @@ def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo:
     assert git_paths_and_head(repo, "HEAD")[1] == Head()
 
 
+# Names whose newline makes a path's lines look like other answers: one newline, before a
+# line of "true" (the marker after no cdup); and two, around an empty line, after a space.
+ADVERSARIAL_NAMES = ["w\ntrue", " a\n\nb"]
+HEAD_STATES = ["main", "ambiguous", "unborn"]
+LAYOUTS = ["top", "below", "git directory", "bare", "outside"]
+
+
+def make_adversarial_repositories(directory: Path) -> None:
+    """For each HEAD state and adversarial name: a repository whose path ends in the name,
+    with a directory of that name in it, and a bare one beside it."""
+    for state in HEAD_STATES:
+        for i, name in enumerate(ADVERSARIAL_NAMES):
+            top = directory / state / name
+            Git(directory).run("init", "--quiet", str(top))
+            git = Git(top)
+            (top / name).mkdir()
+            if state != "unborn":
+                git.run("commit", "--quiet", "--allow-empty", "-m", "first")
+            if state == "ambiguous":
+                git.run("update-ref", "refs/heads/HEAD", "HEAD")
+            bare = directory / state / f"bare{i}{name}"
+            if state == "unborn":
+                Git(directory).run("init", "--quiet", "--bare", str(bare))
+            else:
+                Git(directory).run("clone", "--quiet", "--bare", str(top), str(bare))
+                if state == "ambiguous":
+                    Git(bare).run("update-ref", "refs/heads/HEAD", "HEAD")
+
+
+def asked_alone(git: Git) -> tuple[str, str, list[Path], Head]:
+    """The prefix, cdup, paths of HEAD and config, and HEAD, each asked of git alone."""
+
+    def answer(*args: str) -> bytes:
+        return git.process("rev-parse", *args, capture_output=True).stdout.removesuffix(b"\n")
+
+    paths = [
+        Path(os.fsdecode(answer("--path-format=absolute", "--git-path", name)))
+        for name in ("HEAD", "config")
+    ]
+    named = decode(answer("--verify", "--quiet", "--symbolic-full-name", "HEAD"))
+    head = Head() if not named else Head(detached=True) if named == "HEAD" else Head(branch=named)
+    return decode(answer("--show-prefix")), decode(answer("--show-cdup")), paths, head
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+@pytest.mark.parametrize("state", HEAD_STATES)
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_git_paths_and_head_tells_lines_apart_as_git_asked_alone_does(
+    state: str, layout: str, repo_templates: RepoTemplates, tmp_path: Path
+) -> None:
+    root = repo_templates.build("adversarial", make_adversarial_repositories) / state
+    # One name a case, each name in every layout and HEAD state, to keep the processes few.
+    i = (HEAD_STATES.index(state) + LAYOUTS.index(layout)) % len(ADVERSARIAL_NAMES)
+    name = ADVERSARIAL_NAMES[i]
+    env: dict[str, str] = {}
+    directory = {
+        "top": root / name,
+        "below": root / name / name,
+        "git directory": root / name / ".git",
+        "bare": root / f"bare{i}{name}",
+        "outside": tmp_path,
+    }[layout]
+    if layout == "outside":
+        top = tmp_path / f"top{name}"
+        top.mkdir()
+        env = {"GIT_DIR": str(root / name / ".git"), "GIT_WORK_TREE": str(top)}
+    expected = asked_alone(Git(directory, env=env))
+    git = Git(directory, env=env)
+    paths, head = git_paths_and_head(git, "HEAD", "config")
+
+    assert (git.prefix(), git.cdup(), paths, head) == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+@pytest.mark.parametrize("ask", [git_paths, git_paths_and_head])
+def test_a_bare_repositorys_marker_after_no_cdup_isnt_taken_for_one_line_each(
+    ask: Callable[[Git, str], object], tmp_path: Path
+) -> None:
+    # No cdup, then "false", then as many lines as asked for: the path's newline adds one.
+    Git(tmp_path).run("init", "--quiet", "--bare", "b\nz")
+    git = Git(tmp_path / "b\nz")
+
+    ask(git, "HEAD")
+    assert git_paths(git, "HEAD") == [tmp_path / "b\nz" / "HEAD"]
+    assert (git.prefix(), git.cdup()) == ("", "")
+
+
+def test_git_paths_and_head_takes_an_unborn_branch_whatever_git_warns(tmp_path: Path) -> None:
+    git = Git(tmp_path)
+    git.run("init", "--quiet", "repo")
+    repo = Git(tmp_path / "repo")
+    # git warns of this ("core.bare and core.worktree do not make sense"), and answers.
+    repo.run("config", "core.bare", "true")
+    repo.run("config", "core.worktree", str(tmp_path / "repo"))
+
+    assert git_paths_and_head(repo, "HEAD") == ([tmp_path / "repo" / ".git" / "HEAD"], Head())
+
+
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit()
-    git.respond(["rev-parse"], stdout="\n/g/HEAD\n")  # one path too few for two names
+    git = FakeGit(object_id_length=40)
+    git.respond(["rev-parse"], stdout="\n\ntrue\n/g/HEAD\n")  # one path too few for two names
 
     with pytest.raises(ValueError):
         git_paths_and_head(git, "HEAD", "index")
 
 
 def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
-    git = FakeGit()
-    git.respond(["rev-parse"], stdout="\n/g/HEAD\n", returncode=1)
+    git = FakeGit(object_id_length=40)
+    git.respond(["rev-parse"], stdout="\n\ntrue\n/g/HEAD\n", returncode=1)
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
 
@@ -895,16 +1026,15 @@ def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_he
 @pytest.mark.parametrize(
     ("stderr", "returncode", "stdout"),
     [
-        ("", 2, "\n/g/HEAD\n"),  # another exit status
-        ("fatal: it said why\n", 1, "\n/g/HEAD\n"),  # git said something
-        ("", 1, "\n/g/HEAD\nextra\n"),  # more than the paths
-        ("", 1, "\n"),  # fewer than the paths
+        ("", 2, "\n\ntrue\n/g/HEAD\n"),  # another exit status
+        ("", 1, "\n\ntrue\n/g/HEAD\nextra\n"),  # more than the paths
+        ("", 1, "\n\ntrue\n"),  # fewer than the paths
     ],
 )
 def test_git_paths_and_head_raises_for_a_failure_that_is_not_an_unborn_head(
     stderr: str, returncode: int, stdout: str
 ) -> None:
-    git = FakeGit()
+    git = FakeGit(object_id_length=40)
     git.respond(["rev-parse"], stdout=stdout, stderr=stderr, returncode=returncode)
 
     with pytest.raises(GitError):
