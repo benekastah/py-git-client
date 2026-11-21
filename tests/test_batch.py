@@ -6,11 +6,14 @@ import pytest
 from git_client import (
     Git,
     GitError,
+    Head,
+    NotARepositoryError,
     ReadOnlyError,
     RefUpdate,
     config,
     config_key,
     git_paths,
+    git_paths_and_head,
     hash_blob_at,
     hash_blobs,
     merge_file,
@@ -718,3 +721,169 @@ def test_git_paths_refuses_an_empty_answer() -> None:
     git.respond(["rev-parse", "--path-format=absolute"])  # nothing
     with pytest.raises(ValueError):
         git_paths(git, "HEAD")
+
+
+def test_git_paths_and_head_gives_the_paths_and_the_branch_in_one_git(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    paths, head = git_paths_and_head(repo, "HEAD", "index")
+
+    assert paths == git_paths(repo, "HEAD", "index")
+    assert head == Head(branch="refs/heads/main")
+    assert len(git_calls) == 1
+
+
+def test_git_paths_and_head_runs_under_a_read_only_client(repo: Git) -> None:
+    assert git_paths_and_head(repo.read_only(), "HEAD")[1].branch == "refs/heads/main"
+
+
+def test_git_paths_and_head_follows_a_detached_head(repo: Git) -> None:
+    repo.run("checkout", "--quiet", "--detach")
+
+    assert git_paths_and_head(repo, "HEAD")[1] == Head(detached=True)
+
+
+def test_git_paths_and_head_asks_git_each_time_since_head_moves(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    assert git_paths_and_head(repo, "HEAD")[1].branch == "refs/heads/main"
+    repo.run("switch", "--quiet", "--create", "other")
+    del git_calls[:]
+
+    assert git_paths_and_head(repo, "HEAD")[1].branch == "refs/heads/other"
+    assert len(git_calls) == 1
+
+
+def test_git_paths_and_head_does_not_know_an_unborn_branch(tmp_path: Path) -> None:
+    Git(tmp_path).run("init", "--quiet", "--initial-branch=main", "new")
+    git = Git(tmp_path / "new")
+
+    paths, head = git_paths_and_head(git, "HEAD")
+
+    assert paths == git_paths(git, "HEAD")
+    assert head == Head()
+
+
+def test_git_paths_and_head_gives_a_linked_worktrees_own_paths(repo: Git, tmp_path: Path) -> None:
+    linked = Git(tmp_path / "linked")
+    repo.run("worktree", "add", "--quiet", "-b", "feature", str(tmp_path / "linked"))
+
+    paths, head = git_paths_and_head(linked, "HEAD", "refs")
+
+    assert paths == git_paths(linked, "HEAD", "refs")
+    assert paths[0] != git_paths(repo, "HEAD")[0]
+    assert head.branch == "refs/heads/feature"
+
+
+def test_git_paths_and_head_fills_what_git_paths_remembers(
+    repo: Git, git_calls: list[list[str]]
+) -> None:
+    git_paths_and_head(repo, "HEAD", "refs")
+    del git_calls[:]
+
+    git_paths(repo, "HEAD", "refs")
+    repo.prefix()
+
+    assert git_calls == []
+
+
+def test_git_paths_and_head_raises_when_git_fails_before_the_paths(tmp_path: Path) -> None:
+    with pytest.raises(NotARepositoryError):
+        git_paths_and_head(Git(tmp_path), "HEAD")
+
+
+def test_git_paths_and_head_refuses_a_name_with_a_line_ending(repo: Git) -> None:
+    with pytest.raises(ValueError, match="line ending"):
+        git_paths_and_head(repo, "a\nb")
+
+
+def test_git_paths_and_head_without_names_still_gives_the_head(repo: Git) -> None:
+    assert git_paths_and_head(repo) == ([], Head(branch="refs/heads/main"))
+
+
+@pytest.mark.parametrize(
+    ("stdout", "head"),
+    [
+        ("/g/HEAD\nrefs/heads/main\n", Head(branch="refs/heads/main")),
+        ("/g/HEAD\nHEAD\n", Head(detached=True)),
+    ],
+)
+def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout=f"\n{stdout}")  # the prefix's line first
+
+    assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], head)
+    assert git.prefix() == ""
+
+
+def test_git_paths_and_head_does_not_know_an_unborn_branch_wherever_it_is(tmp_path: Path) -> None:
+    git = Git(tmp_path)
+    git.run("init", "--quiet", "--initial-branch=main", "--bare", "bare")
+    git.run("init", "--quiet", "--initial-branch=main", "checkout")
+    (tmp_path / "checkout" / "HEAD").write_bytes(b"")  # a file git could take for the ref
+
+    for directory in ("bare", "checkout", "checkout/.git"):
+        assert git_paths_and_head(Git(tmp_path / directory), "HEAD")[1] == Head(), directory
+
+
+def test_git_paths_and_head_raises_when_git_fails_with_no_names_to_print(repo: Git) -> None:
+    repo.prefix()  # known, so only the head is asked for
+    (Path(repo.directory) / ".git" / "HEAD").unlink()  # no longer a repository
+
+    with pytest.raises(NotARepositoryError):
+        git_paths_and_head(repo)
+
+
+def test_git_paths_and_head_follows_hooks_wherever_config_puts_them(repo: Git) -> None:
+    git_paths_and_head(repo, "hooks")
+    repo.run("config", "core.hooksPath", "elsewhere")
+
+    assert git_paths(repo, "hooks") == [Path(repo.directory) / "elsewhere"]
+    assert git_paths_and_head(repo, "hooks")[0] == [Path(repo.directory) / "elsewhere"]
+
+
+def test_git_paths_and_head_names_any_ref_head_points_at(repo: Git) -> None:
+    repo.run("update-ref", "refs/remotes/origin/x", "HEAD")
+    repo.run("symbolic-ref", "HEAD", "refs/remotes/origin/x")
+
+    assert git_paths_and_head(repo, "HEAD")[1] == Head(branch="refs/remotes/origin/x")
+
+
+def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo: Git) -> None:
+    repo.run("update-ref", "refs/heads/HEAD", "HEAD")  # which makes "HEAD" ambiguous
+
+    assert git_paths_and_head(repo, "HEAD")[1] == Head()
+
+
+def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="\n/g/HEAD\n")  # one path too few for two names
+
+    with pytest.raises(ValueError):
+        git_paths_and_head(git, "HEAD", "index")
+
+
+def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="\n/g/HEAD\n", returncode=1)
+
+    assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
+
+
+@pytest.mark.parametrize(
+    ("stderr", "returncode", "stdout"),
+    [
+        ("", 2, "\n/g/HEAD\n"),  # another exit status
+        ("fatal: it said why\n", 1, "\n/g/HEAD\n"),  # git said something
+        ("", 1, "\n/g/HEAD\nextra\n"),  # more than the paths
+        ("", 1, "\n"),  # fewer than the paths
+    ],
+)
+def test_git_paths_and_head_raises_for_a_failure_that_is_not_an_unborn_head(
+    stderr: str, returncode: int, stdout: str
+) -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout=stdout, stderr=stderr, returncode=returncode)
+
+    with pytest.raises(GitError):
+        git_paths_and_head(git, "HEAD")

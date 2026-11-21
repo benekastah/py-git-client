@@ -155,13 +155,75 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         prefix = [] if where in known_prefixes else ["--show-prefix"]
         args = [arg for name in new for arg in ("--git-path", name)]
         output = git.run_bytes("rev-parse", *prefix, "--path-format=absolute", *args)
-        # Not splitlines(): the prefix's line can be empty, and a path can't hold a line ending.
-        lines = output.removesuffix(b"\n").split(b"\n") if output else []
+        lines = _lines(output)
         if prefix:
             known_prefixes[where] = decode(lines.pop(0))
         for name, line in zip(new, lines, strict=True):
             known[where, name] = Path(os.fsdecode(line))
     return [known[where, name] for name in names]
+
+
+@dataclass(frozen=True)
+class Head:
+    """What HEAD points at. `branch` is the full name of the ref it names (`refs/heads/main`,
+    or another ref if HEAD was pointed there), or None when that isn't known; `detached` is
+    True when it names no ref at all. Neither: git couldn't say, as with an unborn branch (a
+    repository with no commits yet) or a branch named `HEAD`, which makes "HEAD" ambiguous."""
+
+    branch: str | None = None
+    detached: bool = False
+
+
+def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
+    """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
+    (so a tool that wants both pays for one process). The paths are as `git_paths` gives
+    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept) and
+    `git.prefix()`; HEAD is read afresh each time,
+    since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
+    GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
+
+    A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
+    paths and exits 1 without a word (it's asked to `--verify` HEAD), and the Head is the empty
+    one, `Head()`, which isn't `detached`."""
+    if any(c in name for name in names for c in "\n\r"):
+        raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
+    unique = list(dict.fromkeys(names))
+    where = location(git)
+    known_prefixes = prefixes.setdefault(git, {})
+    prefix = [] if where in known_prefixes else ["--show-prefix"]
+    args = [arg for name in unique for arg in ("--git-path", name)]
+    wanted = len(prefix) + len(unique)
+    # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
+    # taken for a path and printed as "HEAD", which a detached HEAD prints too.
+    command = ["rev-parse", *prefix, "--path-format=absolute", *args]
+    command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
+    try:
+        output = git.run_bytes(*command)
+    except GitError as error:
+        output = encode(error.stdout)
+        if error.returncode != 1 or error.stderr.strip() or len(_lines(output)) != wanted:
+            raise  # not an unborn HEAD: git said why, or didn't print what was asked
+    lines = _lines(output)
+    if prefix:
+        known_prefixes[where] = decode(lines.pop(0))
+    found = {
+        name: Path(os.fsdecode(line))
+        for name, line in zip(unique, lines[: len(unique)], strict=True)
+    }
+    known = known_git_paths.setdefault(git, {})
+    for name, path in found.items():
+        known[where, name] = path  # git_paths asks again for hooks, whatever is kept
+    head = Head()
+    if len(lines) > len(unique):
+        named = os.fsdecode(lines[len(unique)])
+        head = Head(detached=True) if named == "HEAD" else Head(branch=named)
+    return [found[name] for name in names], head
+
+
+def _lines(output: bytes) -> list[bytes]:
+    """The lines of rev-parse's output. Not splitlines(): the prefix's line can be empty, and
+    a path can't hold a line ending."""
+    return output.removesuffix(b"\n").split(b"\n") if output else []
 
 
 def _moved_by_config(name: str) -> bool:
