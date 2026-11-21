@@ -177,7 +177,18 @@ def git_edits(
     return (path.read_bytes() if path.exists() else None), results
 
 
-@pytest.mark.parametrize(("contents", "changes"), CASES.values(), ids=CASES.keys())
+# What older git can't do: before 2.47, `git config --unset --fixed-value` of a key with no
+# value crashes (config.c's matches() compares the value it lacks).
+CASES_NEED_GIT = {"a key with no value": pytest.mark.needs_git(2, 47, reason="git crashes before")}
+
+
+@pytest.mark.parametrize(
+    ("contents", "changes"),
+    [
+        pytest.param(*case, id=name, marks=CASES_NEED_GIT.get(name, ()))
+        for name, case in CASES.items()
+    ],
+)
 def test_edit_makes_the_file_git_config_makes(
     tmp_path: Path, contents: bytes | None, changes: list[ConfigChange]
 ) -> None:

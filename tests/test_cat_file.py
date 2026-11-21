@@ -27,7 +27,7 @@ from git_client import (
     WrongTypeError,
 )
 from git_client import cat_file as cat_file_module
-from git_client.client import object_header
+from git_client.client import FATAL, object_header
 from git_client.testing import real_git
 
 
@@ -553,10 +553,13 @@ def test_a_corrupt_object_cat_file_answers_of_keeps_its_process(repo: Git) -> No
 
     with CatFile(git) as cat_file:
         # cat-file says HEAD~1 is missing, and what's damaged on stderr: an answer in full.
+        # (git 2.36 dies on it instead, "fatal: loose object ... is corrupt", and CatFile
+        # starts another.)
         with pytest.raises(CorruptObjectError):
             cat_file.verify("HEAD~1")
         assert cat_file.resolve(blob) == blob
-    assert len(git.started) == 1
+    # Kept, unless git exited by itself (FATAL): CatFile ended none that answered.
+    assert [process.returncode for process in git.started] in ([0], [FATAL, 0])
 
 
 def test_a_name_with_a_nul_names_nothing(repo: Git) -> None:

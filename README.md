@@ -375,7 +375,7 @@ said and raises a subclass:
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_config` does). |
-| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. |
+| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
