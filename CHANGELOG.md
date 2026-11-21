@@ -25,13 +25,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head` run, so it costs no
   process once any of them has run, nor they once it has (a `FakeGit` answering it gives the
   lines the `cdup()` entry below lists), and remembered per client and location, as they
-  are. It
-  raises `NotARepositoryError` where it returned None, and gives a subdirectory's repository,
-  as git does, where it gave None. As git does, it follows `GIT_DIR`, `GIT_COMMON_DIR` and
-  `GIT_WORK_TREE`, from the client's `env` and the process's environment, which it ignored:
-  a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
-  removes them from `os.environ` first (a client's `env` can set a variable, not remove
-  one), or gets the hook's repository (#65, #69).
+  are. It raises `NotARepositoryError` where it returned None, and gives a subdirectory's
+  repository, as git does, where it gave None. As git does, it follows `GIT_DIR`,
+  `GIT_COMMON_DIR` and `GIT_WORK_TREE`, from the client's `env` and the process's
+  environment, which it ignored: a tool run from a git hook (where git sets `GIT_DIR`) that
+  asks of another repository removes them from `os.environ` first (a client's `env` can set
+  a variable, not remove one), or gets the hook's repository (#65, #69).
 - `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
   one back unchanged, so a lookup found nothing where git says "key does not contain a
   section"). `config()`'s keys are exactly what `git config --list -z` prints: section and

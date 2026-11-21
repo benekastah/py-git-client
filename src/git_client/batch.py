@@ -186,13 +186,13 @@ class Head:
 
 
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
-    """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
-    (so a tool that wants both pays for one process). The paths are as `git_paths` gives
-    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept),
-    `git.prefix()`, `git.cdup()`, `git.object_id_length()`, `git_dir` and `git_common_dir`;
-    HEAD is read afresh each
-    time, since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
-    GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
+    """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse` (so
+    a tool that wants both pays for one process). The paths are as `git_paths` gives them, and
+    remembered for `git_paths` (which asks git again for hooks, whatever is kept),
+    `git.prefix()`, `git.cdup()`, `git.object_id_length()`, `git_dir` and `git_common_dir`; HEAD
+    is read afresh each time, since it moves. Raises what `git_paths` does: ValueError for a
+    name with a line ending, and GitError if git fails before it has printed the paths (e.g.
+    NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
     paths and exits 1 (it's asked to `--verify` HEAD, `--quiet`ly, so it says nothing of it,

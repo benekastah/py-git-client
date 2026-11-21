@@ -820,17 +820,17 @@ class ReadOnlyGit:
     would start the process it saves): a wrong one makes what reads ids by it (e.g.
     `patch_ids`) fail.
 
-    What git tells a client about where things are (`prefix()`, `cdup()`,
-    `object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`) is remembered, per
-    `location` (the directory and `env`), and shared with its `read_only()` copies, as with
-    any shallow copy (`copy.copy`); a deep copy or a pickled client starts remembering
-    nothing, keeping its `remember_for`. `remember_for`, if given, is how many seconds an answer is kept, from when git gave it
-    (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything else
-    the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
-    together. With None, the default, an answer is kept as long as the client, so a
-    repository moved or replaced under a client that keeps its directory isn't noticed.
-    `forget()` drops them all at once, e.g. for a long-lived tool to call after each
-    refresh. A given `object_id_length` never expires.
+    What git tells a client about where things are (`prefix()`, `cdup()`, `object_id_length()`,
+    `git_paths`, `git_dir` and `git_common_dir`) is remembered, per `location` (the directory
+    and `env`), and shared with its `read_only()` copies, as with any shallow copy
+    (`copy.copy`); a deep copy or a pickled client starts remembering nothing, keeping its
+    `remember_for`. `remember_for`, if given, is how many seconds an answer is kept, from when
+    git gave it (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything
+    else the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
+    together. With None, the default, an answer is kept as long as the client, so a repository
+    moved or replaced under a client that keeps its directory isn't noticed. `forget()` drops
+    them all at once, e.g. for a long-lived tool to call after each refresh. A given
+    `object_id_length` never expires.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
     first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
@@ -901,15 +901,16 @@ class ReadOnlyGit:
 
     def read_only(self) -> ReadOnlyGit:
         """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
-        (see there), and otherwise runs as the client does, with the same `program`,
-        `timeout`, `stopping`, `process_groups`, `remember_for` and `env`, as they are now.
-        It's of the client's own class, so a subclass's methods (e.g. its own `process`) and
-        attributes are kept (an attribute that holds the client itself still writes through
-        it); and, as a shallow copy (`copy.copy`) does, it shares what git told the client
-        about where things are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
-        `git_dir`, `git_common_dir`), so it asks no question the client asked, nor the client
-        one it asked, and `forget()` on either forgets for both. A new copy each call; a
-        read-only client gives itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't take."""
+        (see there), and otherwise runs as the client does, with the same `program`, `timeout`,
+        `stopping`, `process_groups`, `remember_for` and `env`, as they are now. It's of the
+        client's own class, so a subclass's methods (e.g. its own `process`) and attributes are
+        kept (an attribute that holds the client itself still writes through it); and, as a
+        shallow copy (`copy.copy`) does, it shares what git told the client about where things
+        are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`, `git_dir`,
+        `git_common_dir`), so it asks no question the client asked, nor the client one it asked,
+        and `forget()` on either forgets for both. A new copy each call; a read-only client
+        gives itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't
+        take."""
         if self._read_only:
             return self
         _refuse_environment(self.env)
