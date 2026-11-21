@@ -952,15 +952,15 @@ class Git(ReadOnlyGit):
 
         Otherwise, or where it can't be sure of making a change as git would (see
         config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link,
-        read-only or can't be read, it runs `git config` for each change, as a FakeGit does: anything else
-        git rejects (e.g. a set of a key with several values, or a key that isn't valid) then
-        raises GitError, the changes before it made, one at a time, not all or nothing. While
-        another process has the file locked, each change is tried again, starting no try after
-        `wait` seconds, then raises ConfigLockedError (a write is made whole or not at all, so
-        trying again is safe). Each try can take as long as git's own wait for the lock and the
-        client's timeout allow: git 2.56 and newer wait core.configLockTimeout (a second by
-        default; -1: for as long as it's locked) on each try, so a change can run that much
-        past `wait`. Older git fails at once, so without this, any write racing another
+        read-only or can't be read, it runs `git config` for each change, as a FakeGit does:
+        anything else git rejects (e.g. a set of a key with several values, or a key that isn't
+        valid) then raises GitError, the changes before it made, one at a time, not all or
+        nothing. While another process has the file locked, each change is tried again, starting
+        no try after `wait` seconds, then raises ConfigLockedError (a write is made whole or not
+        at all, so trying again is safe). Each try can take as long as git's own wait for the
+        lock and the client's timeout allow: git 2.56 and newer wait core.configLockTimeout (a
+        second by default; -1: for as long as it's locked) on each try, so a change can run that
+        much past `wait`. Older git fails at once, so without this, any write racing another
         process's (e.g. an editor's git) would fail."""
         for change in changes:
             # Before any is made: a call of the old form, with git config's own arguments,
