@@ -177,7 +177,8 @@ class Head:
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse`
     (so a tool that wants both pays for one process). The paths are as `git_paths` gives
-    them, and remembered the same way, as is `git.prefix()`; HEAD is read afresh each time,
+    them, and remembered for `git_paths` (which asks git again for hooks, whatever is kept) and
+    `git.prefix()`; HEAD is read afresh each time,
     since it moves. Raises what `git_paths` does: ValueError for a name with a line ending, and
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 

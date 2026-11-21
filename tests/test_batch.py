@@ -862,3 +862,29 @@ def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
 
     with pytest.raises(ValueError):
         git_paths_and_head(git, "HEAD", "index")
+
+
+def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="\n/g/HEAD\n", returncode=1)
+
+    assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
+
+
+@pytest.mark.parametrize(
+    ("stderr", "returncode", "stdout"),
+    [
+        ("", 2, "\n/g/HEAD\n"),  # another exit status
+        ("fatal: it said why\n", 1, "\n/g/HEAD\n"),  # git said something
+        ("", 1, "\n/g/HEAD\nextra\n"),  # more than the paths
+        ("", 1, "\n"),  # fewer than the paths
+    ],
+)
+def test_git_paths_and_head_raises_for_a_failure_that_is_not_an_unborn_head(
+    stderr: str, returncode: int, stdout: str
+) -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout=stdout, stderr=stderr, returncode=returncode)
+
+    with pytest.raises(GitError):
+        git_paths_and_head(git, "HEAD")
