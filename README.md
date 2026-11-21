@@ -246,8 +246,8 @@ A tool with a `Git` for the commands that write gives the paths that only read i
 `read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
 It's of the client's own class, so a subclass's own `process` and other methods still run, and
 it shares what git told the client about where things are (`prefix()`, `object_id_length()`,
-`git_paths`). It raises `ReadOnlyError` if the client's `env` holds a variable a `ReadOnlyGit`
-doesn't take.
+`git_paths`, `git_dir` and `git_common_dir`). It raises `ReadOnlyError` if the client's `env`
+holds a variable a `ReadOnlyGit` doesn't take.
 
 ```python
 git = Git("path/to/repo")
