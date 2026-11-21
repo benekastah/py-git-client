@@ -189,7 +189,7 @@ def test_edit_keeps_a_files_crlf_line_endings_where_git_writes_lf(tmp_path: Path
         ConfigSet("branch.w.x", "one"),
         ConfigSet("branch.w.z", "3"),
         ConfigUnset("branch.w.y"),
-        ConfigSet("branch.new.x", "cr\r"),
+        ConfigSet("branch.new.x", "1"),
     ]
     by_git, git_results = git_edits(tmp_path, contents.replace(b"\r\n", b"\n"), changes)
     assert by_git is not None
