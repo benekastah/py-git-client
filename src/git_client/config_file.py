@@ -10,9 +10,15 @@ a value with a carriage return is quoted, as git quotes it only from 2.51 (older
 read back the value it writes)."""
 
 import enum
+import os
 import re
-from collections.abc import Sequence
+import stat
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+
+from git_client.errors import ConfigLockedError
 
 
 @dataclass(frozen=True)
@@ -244,6 +250,98 @@ def _entry(reader: _Reader, first: int) -> tuple[bytes, bytes | None, bool] | No
             value.append(c)
 
 
+def editable(changes: Sequence[ConfigChange]) -> bool:
+    """Whether every change is of a valid `branch.<name>.<key>`, with no NUL, as `edit`
+    needs."""
+    return all(
+        _BRANCH_KEY.fullmatch(change.key) and "\0" not in change.key + (change.value or "")
+        for change in changes
+    )
+
+
+def write(path: Path, changes: Sequence[ConfigChange], wait: float) -> list[ConfigResult] | None:
+    """Make `changes` to the config file at `path` as `edit` makes them, and say what each
+    did: all or none, under git's own lock (`<path>.lock`, made as git makes it, so `git
+    config` and any other writer waits for it), written whole to the lock, flushed to disk,
+    then renamed over the file, keeping its permissions. None, having changed nothing, where
+    it's git's to make them: where `edit` says, for a file that's a symbolic link (git writes
+    the file it names), one it can't read, or a lock it can't make other than for being held
+    (git says why). Raises ConfigLockedError if another process holds the lock past `wait`
+    seconds, and the OSError of a rename that still fails after trying `wait` seconds more
+    (Windows refuses one while another process has the file open without sharing its
+    deletion)."""
+    lock = path.with_name(path.name + ".lock")
+    fd = _lock(lock, path, wait)
+    if fd is None:
+        return None
+    renamed = False
+    try:
+        try:
+            if path.is_symlink():
+                return None
+            contents, mode = path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            contents, mode = None, None
+        except OSError:
+            return None
+        edited = edit(contents, changes)
+        if edited is None:
+            return None
+        written, results = edited
+        if written is None or ConfigResult.CHANGED not in results:
+            return results
+        if mode is not None:
+            os.chmod(lock, mode)
+        view = memoryview(written)
+        while view:
+            view = view[os.write(fd, view) :]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        _retry(PermissionError, wait, lambda: os.replace(lock, path))
+        renamed = True
+        return results
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if not renamed:
+            lock.unlink(missing_ok=True)
+
+
+def _lock(lock: Path, path: Path, wait: float) -> int | None:
+    """Make `lock`, as git does, trying again while it's held, for up to `wait` seconds;
+    None if it can't be made for another reason."""
+
+    def make() -> int:
+        # O_BINARY: Windows would write each LF as CRLF.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        return os.open(lock, flags, 0o666)
+
+    try:
+        return _retry(FileExistsError, wait, make)
+    except FileExistsError:
+        message = f"error: could not lock config file {path}: File exists"
+        raise ConfigLockedError(["config"], None, message) from None
+    except OSError:
+        return None
+
+
+def _retry[T](error: type[OSError], wait: float, call: Callable[[], T]) -> T:
+    """`call()`, tried again after `error` with a growing delay, starting no try after `wait`
+    seconds; raises its last `error`."""
+    deadline = time.monotonic() + wait
+    delay = 0.01
+    while True:
+        try:
+            return call()
+        except error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, 0.5)
+
+
 def edit(
     contents: bytes | None, changes: Sequence[ConfigChange]
 ) -> tuple[bytes | None, list[ConfigResult]] | None:
@@ -259,6 +357,8 @@ def edit(
     case of its name), or for an unset of a value that git before 2.45 reads otherwise (see
     _Event)."""
     crlf = False
+    if not editable(changes):
+        return None
     if contents is not None:
         if b"\0" in contents:
             return None
@@ -271,8 +371,6 @@ def edit(
     results: list[ConfigResult] = []
     for change in changes:
         value = change.value
-        if not _BRANCH_KEY.fullmatch(change.key) or "\0" in change.key + (value or ""):
-            return None
         made = _change(
             contents,
             events,

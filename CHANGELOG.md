@@ -102,6 +102,13 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
   stack's pairs cost about the same in any history; or through the tool's own `CatFile`
   (`cat_file=`), starting no process (#60).
+- `Git.write_config` starts no git process (but `git_paths`' first, to find the file) where
+  every change is a `branch.<name>.<key>`: it edits the config file itself, as `git config`
+  would, under git's `config.lock`, all or none. It leaves to `git config` what it can't be
+  sure of (other keys, a file git can't read, a header written `[branch.<name>]` or sharing
+  its line, $GIT_CONFIG). On two points the file isn't byte for byte git's: a file whose
+  every line ends in CRLF keeps CRLF, and a value with a carriage return is quoted. A
+  `FakeGit`'s still runs `git config` for each change (#62).
 - `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
   reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55).
 - `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the

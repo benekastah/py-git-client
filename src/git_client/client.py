@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Final, Literal
 
+from git_client import config_file
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
     CORRUPT_OBJECT,
@@ -935,21 +936,30 @@ class Git(ReadOnlyGit):
         """Make each change (a ConfigSet or ConfigUnset) to the config file `git config`
         writes, in order, as `git config` makes it, and say what each did. An unset that
         removes nothing doesn't fail: it's NOT_FOUND, or SEVERAL_VALUES for a key with several
-        values unset without the one to remove (git config's exit status 5). Anything else git
-        rejects (e.g. a set of a key with several values, or a key that isn't valid) raises
-        GitError, the changes before it made: they're made one at a time, not all or nothing.
-        Called with no changes, it starts no process. Raises TypeError, making no change, if
-        an argument isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
+        values unset without the one to remove (git config's exit status 5). Called with no
+        changes, it starts no process. Raises TypeError, making no change, if an argument
+        isn't a ConfigSet or ConfigUnset. Other config writes (e.g. `--add`,
         `--rename-section`, `--worktree`) go through `run("config", ...)`, which doesn't try
-        again while locked.
+        again while locked. Raises NotStartedError, writing nothing, once `stopping` says so.
 
-        While another process has the config file locked, each change is tried again,
-        starting no try after `wait` seconds, then raises ConfigLockedError (a write is made
-        whole or not at all, so trying again is safe). Each try can take as long as git's own
-        wait for the lock and the client's timeout allow: git 2.56 and newer wait
-        core.configLockTimeout (a second by default; -1: for as long as it's locked) on each
-        try, so a change can run that much past `wait`. Older git fails at once, so without
-        this, any write racing another process's (e.g. an editor's git) would fail."""
+        Where every change is of a `branch.<name>.<key>`, it starts no git process but the one
+        `git_paths` asks where the file is (none once known): it edits the file itself, as git
+        would (see config_file for the two points where it doesn't write git's bytes), all or
+        none, under git's lock, which it waits up to `wait` seconds for before raising
+        ConfigLockedError.
+
+        Otherwise, or where it can't be sure of making a change as git would (see
+        config_file.edit), when $GIT_CONFIG names another file, or the file is a symbolic link
+        or can't be read, it runs `git config` for each change, as a FakeGit does: anything else
+        git rejects (e.g. a set of a key with several values, or a key that isn't valid) then
+        raises GitError, the changes before it made, one at a time, not all or nothing. While
+        another process has the file locked, each change is tried again, starting no try after
+        `wait` seconds, then raises ConfigLockedError (a write is made whole or not at all, so
+        trying again is safe). Each try can take as long as git's own wait for the lock and the
+        client's timeout allow: git 2.56 and newer wait core.configLockTimeout (a second by
+        default; -1: for as long as it's locked) on each try, so a change can run that much
+        past `wait`. Older git fails at once, so without this, any write racing another
+        process's (e.g. an editor's git) would fail."""
         for change in changes:
             # Before any is made: a call of the old form, with git config's own arguments,
             # comes here too.
@@ -960,6 +970,13 @@ class Git(ReadOnlyGit):
                     f' {change!r}: write_config("k", "v") is write_config(ConfigSet("k", "v")),'
                     ' and git config\'s other writes (e.g. --add) go through run("config", ...)'
                 )
+        if not changes:
+            return []
+        refuse_if_stopping(self, ("config",))
+        path = self._config_file(changes)
+        made = None if path is None else config_file.write(path, changes, wait)
+        if made is not None:
+            return made
         return [self._write_config_change(change, wait) for change in changes]
 
     def _config_write(self, *args: Arg, wait: float) -> None:
@@ -977,6 +994,16 @@ class Git(ReadOnlyGit):
                     raise
                 time.sleep(min(delay, remaining))
                 delay = min(delay * 2, 0.5)
+
+    def _config_file(self, changes: Sequence[ConfigChange]) -> Path | None:
+        """The file write_config edits itself for `changes`, or None for git to make them:
+        changes `config_file.edit` can't make, or $GIT_CONFIG naming another file for `git
+        config` to write."""
+        if not config_file.editable(changes) or "GIT_CONFIG" in self.environment():
+            return None
+        from git_client.batch import git_paths  # here: batch imports this module
+
+        return git_paths(self, "config")[0]
 
     def _write_config_change(self, change: ConfigChange, wait: float) -> ConfigResult:
         if isinstance(change, ConfigSet):
