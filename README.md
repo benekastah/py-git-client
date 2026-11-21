@@ -98,7 +98,7 @@ with CatFile(git) as cat_file:  # one process for every lookup in the block
 remotes = config(git)["remote.origin.url"]  # every value of each key
 # Keys exactly as `git config --list -z` prints them: section and name in lower case, the
 # subsection as written. config(git).get("init.defaultBranch") finds nothing, with no error.
-# For a key a user typed, run `git config get <key>` (one process).
+# For a key a user typed, run `git config --get <key>` (one process).
 default_branch = config(git).get("init.defaultbranch")
 push_remote = config(git).get("branch.Topic.pushremote")
 for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():

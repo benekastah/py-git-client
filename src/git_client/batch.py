@@ -66,7 +66,7 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     The keys are exactly what git prints: section and name in lower case, the subsection as
     written. So a lookup uses that form: `config(git).get("init.defaultbranch")`, not
     `"init.defaultBranch"`, which finds nothing, with no error; `branch.Topic.pushremote`
-    keeps `Topic`. For a key a user typed, a tool runs `git config get <key>` (one process),
+    keeps `Topic`. For a key a user typed, a tool runs `git config --get <key>` (one process),
     so git reads it and says what's wrong with it."""
     entries: dict[str, list[str | None]] = {}
     for entry in decode(git.run_bytes("config", "--list", "-z")).split("\0"):

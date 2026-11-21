@@ -24,11 +24,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
   name in lower case, the subsection as written. A lookup must use that form: one written
   in camelCase, as `config(git).get("init.defaultBranch")`, now finds nothing, with no
-  error; write `"init.defaultbranch"` (`branch.Topic.pushremote` keeps `Topic`). A tool
-  writes its keys that way itself (they're constants in its code, e.g.
-  `f"branch.{name}.pushremote"`): move-forward's `RepoConfig.get`, which is given camelCase
-  keys, must lower-case their section and name. For a key a user typed, a tool runs `git
-  config get <key>` (one process), whose errors are git's (#67).
+  error; write `"init.defaultbranch"` (`branch.Topic.pushremote` keeps `Topic`). So a tool
+  that dropped `config_key` lower-cases the section and name of each key (keeping the
+  subsection) before it looks it up in `config()`'s result, or writes its constant keys that
+  way (e.g. `f"branch.{name}.pushremote"`). Two tools must: git-stack, which calls
+  `config_key` in `git_stack/git.py` and looks up `stack.perfLog`, `stack.perfLogMaxBytes`
+  and `core.sshCommand`, and move-forward, whose `RepoConfig.get` is given camelCase keys.
+  For a key a user typed, a tool runs `git config --get <key>` (one process; `git config
+  get` from git 2.46): git takes the key however it's written, canonicalizes it itself, and
+  says what's wrong with one that isn't a key (#67).
 - `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
   the length of an id git printed, which in a SHA-256 repository with
   `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
