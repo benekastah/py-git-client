@@ -314,7 +314,24 @@ def test_a_failure_not_about_one_pair_is_raised_even_after_a_merge() -> None:
     assert len(git.calls) == 1
 
 
-@NEEDS_WRITE_TREE
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        # What the lost-object patterns would take, but for a path where git names an id.
+        "fatal: unable to read blob object /some/path\n",
+        "fatal: unable to read tree (/some/path)\n",
+        "fatal: unable to read /some/path\n",
+        "error: Could not read /some/path\n",
+    ],
+)
+def test_a_failure_to_read_what_isnt_an_object_is_raised(stderr: str) -> None:
+    git = FakeGit()
+    git.respond(["merge-tree"], stderr=stderr, returncode=128)
+
+    with pytest.raises(GitError, match="/some/path"):
+        merge_trees(git, [("b" * 40, "c" * 40)] * 2)
+
+
 @NEEDS_STDIN
 def test_an_object_a_partial_clone_cant_fetch_is_raised_at_once(
     repo: Git, tmp_path: Path, git_calls: list[GitCall]
@@ -344,6 +361,7 @@ def test_an_object_a_partial_clone_cant_fetch_is_raised_at_once(
     assert len(git_calls) == 1
 
 
+@NEEDS_WRITE_TREE
 def test_without_stdin_each_pair_takes_a_process_of_its_own_and_gets_the_same_results(
     merges: tuple[Git, dict[str, str]],
     git_calls: list[GitCall],
