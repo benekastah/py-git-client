@@ -84,6 +84,12 @@ def is_ancestor(
     cat-file doesn't apply, or while git's environment sets GIT_SHALLOW_FILE.
     FakeGit can't run it (it starts no CatFile): a tool's unit tests replace it.
 
+    In a damaged repository, it can say True where merge-base fails: an object is read only
+    when the walk takes it from its queue, so a commit with the ancestor for one parent and a
+    missing object or a non-commit for another is True as soon as the ancestor is painted.
+    Finding that damage first would take a request for every parent queued (and git with a
+    commit-graph says True there too).
+
     Each pair's walk is git's own for `merge-base` (paint_down_to_common), in Python: from
     both commits, newest committer date first, it paints commits reachable from the ancestor
     A, those from the descendant D, and those painted both stale, which spreads to their
@@ -206,18 +212,25 @@ class _Walker:
             kind, content = self._cat_file.read(commit_id)
             if kind != "commit":
                 raise _OddCommit
-            # Read as git's parse_commit_buffer reads it: its parents are the run of parent
-            # lines right after its tree (a later one is no parent), and its date is that of
-            # the committer line right after them and the author line (else 0).
+            # Read as git's parse_commit_buffer reads it: a tree line, then its parents, the run
+            # of parent lines right after it (a later one is no parent), then more; its date is
+            # that of the committer line right after them and the author line (else 0).
             headers = content.split(b"\n\n", 1)[0].split(b"\n")
             end = 1
             while end < len(headers) and headers[end].startswith(b"parent "):
                 end += 1
-            # git reads each id's hex in either case; one it can't read fails the commit.
             parents = [line.removeprefix(b"parent ").lower() for line in headers[1:end]]
-            if not all(
-                _OBJECT_ID_BYTES.fullmatch(parent) and len(parent) == len(commit_id)
-                for parent in parents
+            tree = headers[0].removeprefix(b"tree ").lower()
+            # git reads each id's hex in either case; a tree or parent it can't read, or
+            # nothing after them, fails the commit.
+            ids_end = sum(len(line) + 1 for line in headers[:end])
+            if (
+                not headers[0].startswith(b"tree ")
+                or ids_end >= len(content)
+                or not all(
+                    _OBJECT_ID_BYTES.fullmatch(object_id) and len(object_id) == len(commit_id)
+                    for object_id in (tree, *parents)
+                )
             ):
                 raise _OddCommit
             date = 0

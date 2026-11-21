@@ -241,6 +241,33 @@ def test_an_odd_parent_line_answers_as_merge_base_does(
     assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "tree {short_tree}\nparent {c0}\n{people}\nodd\n",
+        "parent {c1}\nparent {c0}\n{people}\nodd\n",
+        "tree {tree}\nparent {c0}\n",
+    ],
+    ids=["bad-tree", "no-tree", "ends-after-parent"],
+)
+def test_a_commit_git_cant_parse_reached_as_a_parent_answers_as_merge_base_does(
+    shapes: tuple[Git, list[str]], content: str
+) -> None:
+    git, c = shapes
+    tree = git.run("rev-parse", f"{c[0]}^{{tree}}")
+    who = "T <t@example.com> 1000000000 +0000"
+    odd_content = content.format(
+        tree=tree, short_tree=tree[:39], c0=c[0], c1=c[1],
+        people=f"author {who}\ncommitter {who}\n",
+    )  # fmt: skip
+    odd = git.run("hash-object", "--literally", "-t", "commit", "-w", "--stdin", input=odd_content)
+    # cat-file parses odd as it peels an endpoint, but reads a parent as it is.
+    top = git.run("commit-tree", "-p", odd, "-m", "top", tree)
+    pairs = [(c[0], top), (c[1], top)]
+
+    assert is_ancestor(git, *pairs) == [merge_base_says(git, a, d) for a, d in pairs]
+
+
 def test_a_tag_a_corrupt_commit_names_as_parent_is_still_its_commit(
     git_calls: list[GitCall], shapes: tuple[Git, list[str]]
 ) -> None:
