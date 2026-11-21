@@ -1,3 +1,4 @@
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -762,8 +763,6 @@ def test_git_paths_and_head_does_not_know_an_unborn_branch(tmp_path: Path) -> No
 
     assert paths == git_paths(git, "HEAD")
     assert head == Head()
-    assert not head.detached
-    assert head.branch is None
 
 
 def test_git_paths_and_head_gives_a_linked_worktrees_own_paths(repo: Git, tmp_path: Path) -> None:
@@ -816,3 +815,50 @@ def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> Non
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], head)
     assert git.prefix() == ""
+
+
+def test_git_paths_and_head_does_not_know_an_unborn_branch_wherever_it_is(tmp_path: Path) -> None:
+    git = Git(tmp_path)
+    git.run("init", "--quiet", "--initial-branch=main", "--bare", "bare")
+    git.run("init", "--quiet", "--initial-branch=main", "checkout")
+    (tmp_path / "checkout" / "HEAD").write_bytes(b"")  # a file git could take for the ref
+
+    for directory in ("bare", "checkout", "checkout/.git"):
+        assert git_paths_and_head(Git(tmp_path / directory), "HEAD")[1] == Head(), directory
+
+
+def test_git_paths_and_head_raises_when_git_fails_with_no_names_to_print(repo: Git) -> None:
+    repo.prefix()  # known, so only the head is asked for
+    shutil.rmtree(Path(repo.directory) / ".git")
+
+    with pytest.raises(NotARepositoryError):
+        git_paths_and_head(repo)
+
+
+def test_git_paths_and_head_follows_hooks_wherever_config_puts_them(repo: Git) -> None:
+    git_paths_and_head(repo, "hooks")
+    repo.run("config", "core.hooksPath", "elsewhere")
+
+    assert git_paths(repo, "hooks") == [Path(repo.directory) / "elsewhere"]
+    assert git_paths_and_head(repo, "hooks")[0] == [Path(repo.directory) / "elsewhere"]
+
+
+def test_git_paths_and_head_names_any_ref_head_points_at(repo: Git) -> None:
+    repo.run("update-ref", "refs/remotes/origin/x", "HEAD")
+    repo.run("symbolic-ref", "HEAD", "refs/remotes/origin/x")
+
+    assert git_paths_and_head(repo, "HEAD")[1] == Head(branch="refs/remotes/origin/x")
+
+
+def test_git_paths_and_head_does_not_know_head_when_a_branch_is_named_head(repo: Git) -> None:
+    repo.run("update-ref", "refs/heads/HEAD", "HEAD")  # which makes "HEAD" ambiguous
+
+    assert git_paths_and_head(repo, "HEAD")[1] == Head()
+
+
+def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="\n/g/HEAD\n")  # one path too few for two names
+
+    with pytest.raises(ValueError):
+        git_paths_and_head(git, "HEAD", "index")

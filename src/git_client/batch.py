@@ -165,9 +165,10 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
 
 @dataclass(frozen=True)
 class Head:
-    """What HEAD points at. `branch` is the full name it names (`refs/heads/main`), or None
-    when that isn't known; `detached` is True when HEAD names no branch at all. Neither: an
-    unborn branch (a repository with no commits yet), which `git rev-parse` can't resolve."""
+    """What HEAD points at. `branch` is the full name of the ref it names (`refs/heads/main`,
+    or another ref if HEAD was pointed there), or None when that isn't known; `detached` is
+    True when it names no ref at all. Neither: git couldn't say, as with an unborn branch (a
+    repository with no commits yet) or a branch named `HEAD`, which makes "HEAD" ambiguous."""
 
     branch: str | None = None
     detached: bool = False
@@ -181,7 +182,8 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     GitError if git fails before it has printed the paths (e.g. NotARepositoryError).
 
     A branch with no commits yet (unborn) has no commit for git to resolve: git prints the
-    paths and then fails, and the Head is the empty one, `Head()`, which isn't `detached`."""
+    paths and exits 1 without a word (it's asked to `--verify` HEAD), and the Head is the empty
+    one, `Head()`, which isn't `detached`."""
     if any(c in name for name in names for c in "\n\r"):
         raise ValueError(f"git_paths_and_head can't take a name with a line ending: {names}")
     unique = list(dict.fromkeys(names))
@@ -190,34 +192,28 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     prefix = [] if where in known_prefixes else ["--show-prefix"]
     args = [arg for name in unique for arg in ("--git-path", name)]
     wanted = len(prefix) + len(unique)
-    command = [
-        "rev-parse",
-        *prefix,
-        "--path-format=absolute",
-        *args,
-        "--symbolic-full-name",
-        "HEAD",
-    ]
-    failed = False
+    # --verify, so that an unborn HEAD fails (exit 1, quietly) after the paths, rather than being
+    # taken for a path and printed as "HEAD", which a detached HEAD prints too.
+    command = ["rev-parse", *prefix, "--path-format=absolute", *args]
+    command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
     try:
         output = git.run_bytes(*command)
     except GitError as error:
-        # An unborn HEAD fails after it has printed the paths and then "HEAD", which then says
-        # nothing about HEAD: only that git couldn't resolve it.
         output = encode(error.stdout)
-        if len(_lines(output)) < wanted:
-            raise
-        failed = True
+        if error.returncode != 1 or error.stderr.strip() or len(_lines(output)) != wanted:
+            raise  # not an unborn HEAD: git said why, or didn't print what was asked
     lines = _lines(output)
     if prefix:
         known_prefixes[where] = decode(lines.pop(0))
-    found = {name: Path(os.fsdecode(line)) for name, line in zip(unique, lines, strict=False)}
+    found = {
+        name: Path(os.fsdecode(line))
+        for name, line in zip(unique, lines[: len(unique)], strict=True)
+    }
     known = known_git_paths.setdefault(git, {})
     for name, path in found.items():
-        if not _moved_by_config(name):
-            known[where, name] = path
+        known[where, name] = path  # git_paths asks again for hooks, whatever is kept
     head = Head()
-    if not failed and len(lines) > len(unique):
+    if len(lines) > len(unique):
         named = os.fsdecode(lines[len(unique)])
         head = Head(detached=True) if named == "HEAD" else Head(branch=named)
     return [found[name] for name in names], head

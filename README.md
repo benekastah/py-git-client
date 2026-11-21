@@ -98,7 +98,7 @@ update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; o
 # main repository's; config such as core.hooksPath moves hooks.
 head_file, hooks = git_paths(git, "HEAD", "hooks")
 # The same, and what HEAD points at, from the same one git: Head(branch="refs/heads/main"),
-# Head(detached=True), or Head() for a branch with no commits yet (unborn: it can't be told).
+# Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
 # The directory with the refs, objects and config of a checkout (its top), or of a git
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
