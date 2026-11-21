@@ -101,11 +101,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
-- `is_ancestor(git, *pairs)`: for one or more (ancestor, descendant) pairs of full object
-  ids, what `git merge-base --is-ancestor` says of each (any failure being no), through one
-  `git cat-file --batch-command`, each pair's walk reading the commits between its two, so a
-  stack's pairs cost about the same in any history; or through the tool's own `CatFile`
-  (`cat_file=`), starting no process (#60).
 - `Git.write_configs` starts no git process (but `git_paths`' first, to find the file) where
   every change is a `branch.<name>.<key>`: it edits the config file itself, as `git config`
   would, under git's `config.lock`, all or none. It leaves to `git config` what it can't be

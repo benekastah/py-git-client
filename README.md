@@ -13,8 +13,6 @@ what git-stack, git-recommit and move-forward share for that:
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
-- **Ancestry for many pairs of commits** through one `git cat-file` (`is_ancestor`), as
-  `git merge-base --is-ancestor` answers each, reading only the commits between each pair's two.
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
   their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
   where git keeps many files in the git directory (`git_paths`), blobs as they are
@@ -59,7 +57,6 @@ from git_client import (
     git_paths_and_head,
     hash_blob_at,
     hash_blobs,
-    is_ancestor,
     merge_file,
     refs,
     update_refs,
@@ -121,16 +118,6 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # The same, and what HEAD points at, from the same one git: Head(branch="refs/heads/main"),
 # Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
-# For each (ancestor, descendant) pair of full commit ids, whether `merge-base --is-ancestor`
-# says yes (a commit is its own ancestor; an id of no commit, or a name: False), through one
-# process however many pairs, each walk reading the commits between its pair's two.
-branches = refs(git, "refs/heads/")
-a, b = branches["refs/heads/a"].object, branches["refs/heads/b"].object
-a_under_b, b_under_a = is_ancestor(git, (a, b), (b, a))
-with CatFile(git) as cat_file:  # the tool's own, for its other reads too
-    # Through it, the call starts no cat-file of its own; with "shallow" and "info/grafts" in
-    # a git_paths the tool asked for already, no process at all.
-    [a_under_a] = is_ancestor(git, (a, a), cat_file=cat_file)
 # The directory with the refs, objects and config of a checkout (its top), or of a git
 # directory, without running git: a linked worktree's or a submodule's too. None if it's
 # neither (a subdirectory of a checkout included).

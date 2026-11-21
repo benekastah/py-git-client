@@ -460,6 +460,18 @@ def test_sees_refs_as_they_are_when_asked(repo: Git) -> None:
         assert cat_file.resolve("main") == repo.run("rev-parse", "main")
 
 
+def test_reads_replace_refs_once_until_closed(repo: Git) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    replacement = repo.run("commit-tree", "-m", "replacement", f"{head}^{{tree}}")
+    with CatFile(repo) as cat_file:
+        before = cat_file.read(head)
+        repo.run("replace", head, replacement)
+
+        assert cat_file.read(head) == before
+        cat_file.close()
+        assert cat_file.read(head) == cat_file.read(replacement) != before
+
+
 def test_reads_an_objects_type_and_content(repo: Git) -> None:
     blob = repo.run("rev-parse", "HEAD:a")
 
