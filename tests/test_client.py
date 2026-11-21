@@ -684,6 +684,22 @@ def test_passthrough_speaks_the_users_language(repo: Git, tmp_path: Path) -> Non
     assert "Auf Branch main" in (tmp_path / "out").read_text(encoding="utf-8")
 
 
+@pytest.mark.usefixtures("german")
+def test_captured_and_passthrough_commands_keep_their_languages_in_turn(
+    repo: Git, tmp_path: Path
+) -> None:
+    # The environment kept for one isn't the other's.
+    said: list[str] = []
+    for _ in range(2):
+        with (tmp_path / "out").open("wb") as out:
+            repo.passthrough("status", stdout=out)
+        said.append((tmp_path / "out").read_text(encoding="utf-8"))
+        with pytest.raises(UnknownRevisionError):
+            repo.run("rev-parse", "--verify", "no-such-branch")
+
+    assert all("Auf Branch main" in each for each in said)
+
+
 def test_what_git_runs_keeps_the_users_locale(
     repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
