@@ -496,11 +496,13 @@ def location(git: ReadOnlyGit) -> Location:
 class AskingFormat:
     """A thread asking git for object_id_length() alone: `done` is set once it has git's
     answer, `format` (None if it failed), which the threads waiting for it take as it is,
-    however soon it expires."""
+    however soon it expires, unless forget() was called since it started asking, `asked`
+    (from `Memory.asking_locked()`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, asked: int) -> None:
         self.done = threading.Event()
         self.format: bytes | None = None
+        self.asked = asked
 
 
 # When git gave an answer, and how long ago that is, for remember_for: a seam the tests
@@ -555,10 +557,15 @@ class Memory:
         with self.lock:
             return self.recall_locked(where, questions, remember_for)
 
+    def asking_locked(self) -> int:
+        """What a caller gives `remember` for answers git is asked from now on. The caller
+        holds `lock`."""
+        return self._forgotten
+
     def asking(self) -> int:
         """What a caller gives `remember` for answers git is asked from now on."""
         with self.lock:
-            return self._forgotten
+            return self.asking_locked()
 
     def remember(self, where: Location, answers: Mapping[str, bytes], asked: int) -> None:
         """Remember git's `answers` at `where`, by the option each answers, as given now, all
@@ -937,8 +944,8 @@ class ReadOnlyGit:
         `git_paths_and_head` or `git_dir`, which asks it too while it isn't known. Not the
         length of an id git printed: in a repository with `extensions.compatObjectFormat`, git
         gives a SHA-1 id back for one, whatever the repository's format. Threads that ask at
-        once wait for one git's answer, and take it however soon it expires; if it fails, the
-        next asks."""
+        once wait for one git's answer, and take it however soon it expires (but not across a
+        `forget()`: a thread that joins after one asks again); if it fails, the next asks."""
         if self._object_id_length is not None:
             return self._object_id_length
         where = location(self)
@@ -948,19 +955,20 @@ class ReadOnlyGit:
                 known = memory.recall_locked(where, [_FORMAT_QUESTION], self.remember_for)
                 if known is not None:
                     return object_id_length_of(known[_FORMAT_QUESTION])
+                seen = memory.asking_locked()
                 asking = memory.asking_format.get(where)
                 mine = asking is None
                 if asking is None:
-                    asking = memory.asking_format[where] = AskingFormat()
+                    asking = memory.asking_format[where] = AskingFormat(seen)
             if not mine:
                 asking.done.wait()
-                if asking.format is not None:
+                # Not an answer from before a forget() that came before this call.
+                if asking.format is not None and asking.asked == seen:
                     return object_id_length_of(asking.format)
-                continue  # it failed: ask again
+                continue  # it failed, or may be out of date: ask again
             try:
-                asked = memory.asking()
                 asking.format = encode(self.run("rev-parse", _FORMAT_QUESTION))
-                memory.remember(where, {_FORMAT_QUESTION: asking.format}, asked)
+                memory.remember(where, {_FORMAT_QUESTION: asking.format}, asking.asked)
                 return object_id_length_of(asking.format)
             finally:
                 # Whatever stops it (e.g. KeyboardInterrupt), so no waiter waits for good.

@@ -283,3 +283,30 @@ def test_what_another_thread_learns_mid_call_still_answers_the_caller(
     monkeypatch.setattr("git_client.client.asking", others_learn_it_meanwhile)
 
     assert ask(git) == (Path(repo.directory) / ".git" if ask is git_dir else "")
+
+
+def test_object_id_length_after_forget_takes_no_answer_git_gave_before(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    answered = threading.Event()
+
+    class SlowGit(Git):
+        """Holds the first answer a moment once git has given it, so that forget() comes
+        after git answered and another thread can join the ask before it ends."""
+
+        def run(self, *args: Arg, **kwargs: Any) -> str:
+            output = super().run(*args, **kwargs)
+            if not answered.is_set():
+                answered.set()
+                time.sleep(0.1)
+            return output
+
+    git = SlowGit(repo.directory)
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(git.object_id_length)
+        answered.wait()
+        git.forget()  # e.g. after the repository was replaced
+        assert git.object_id_length() == 40
+        assert first.result() == 40
+
+    assert git_calls == [["rev-parse", "--show-object-format"]] * 2
