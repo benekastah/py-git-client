@@ -91,12 +91,13 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `GitError` or `UnknownRevisionError`. A missing name still resolves to None (#50, #54).
 - An object a partial clone lacks and couldn't fetch (its promisor remote unreachable, say)
   raises `MissingObjectError`, a `GitError` (with git 2.39 and newer, which names the object),
-  from a `Git`'s `run` and the like, `resolve` and `CatFile`: where `run` and `resolve` raised
-  `RemoteError`, `CatFile`'s `info` and `resolve` gave None, its `verify` raised
+  from a `Git`'s `run` and the like, `resolve` and `CatFile`: where `run` raised `RemoteError`,
+  `resolve` raised it for a name git reads an object for (e.g. `HEAD:path`, `HEAD^{tree}`) but
+  gave None for a bare full id, `CatFile`'s `info` and `resolve` gave None, its `verify` raised
   `UnknownRevisionError` and its `read` a plain `GitError`. A tool catches `MissingObjectError`
   around those calls too (it caught `RemoteError` around `run`), and in a partial clone, its
-  `is None` checks of a `Git`'s `CatFile` no longer see None for such a name: they get the
-  error (#52, #55).
+  `is None` checks of a `Git`'s `resolve` and `CatFile` no longer see None for such a name:
+  they get the error (#52, #55).
 - For a name cat-file says only "<name> missing" of, `CatFile.verify` and `read` raise an
   `UnknownRevisionError` whose `stderr` is rev-parse's `fatal: bad revision '<name>'` (with
   ": git exited without saying why" where cat-file exited), not "<name> missing": a tool that
