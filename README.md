@@ -249,7 +249,9 @@ What one `rev-parse` told expires together, and is asked again together. An
 git's answer, and threads that ask at once what isn't known may each start a process. A
 shallow copy of a client (`copy.copy`) shares its answers and `forget()`, as `read_only()`
 does; a deep copy, or a pickled client (e.g. sent to a process pool), starts remembering
-nothing, with the same `remember_for`.
+nothing, with the same `remember_for`. A client can be deep-copied or pickled only if its
+`stopping` (and a subclass's attributes) can be: a `threading.Event`'s `is_set` or a lambda
+can't, so give a worker process a client of its own.
 
 ### Reading only
 
