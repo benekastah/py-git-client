@@ -2,7 +2,6 @@
 text and paths to it as git expects them."""
 
 import contextlib
-import copy
 import enum
 import functools
 import os
@@ -27,7 +26,6 @@ from git_client.errors import (
     NotStartedError,
     error_for,
 )
-from git_client.reading import READING_COMMANDS, names, reading_form
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -61,7 +59,7 @@ _SEVERAL_VALUES = re.compile(r"^warning: .* has multiple values$", re.MULTILINE)
 # git takes its messages' language from its environment alone, and passes that on to what it
 # runs, so no variable could reach git and not its hooks.
 # git itself keeps the user's LC_CTYPE (from 2.39), which its regex matching follows (see
-# ReadOnlyGit.process).
+# Git.process).
 _ENGLISH = {"GIT_TEXTDOMAINDIR": os.devnull}
 
 # What `git var` says when no identity is set for the name or email it's asked for.
@@ -192,7 +190,9 @@ def check_names_nothing(git: ReadOnlyGit, name: str, *, timeout: Timeout = CLIEN
     the GitError for what made it exit (e.g. NotARepositoryError, or a broken config), as
     `git rev-parse --verify --quiet` finds it."""
     args = ("rev-parse", "--verify", "--quiet", "--end-of-options", name)
-    result = git.process(*args, capture_output=True, stdout=subprocess.DEVNULL, timeout=timeout)
+    result = read_process(
+        git, *args, capture_output=True, stdout=subprocess.DEVNULL, timeout=timeout
+    )
     if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr):
         raise error_from(args, result)
 
@@ -359,126 +359,159 @@ def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) 
     return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
 
 
-class ReadOnlyError(ValueError):
-    """A ReadOnlyGit refused a command, or an environment for one, that could write."""
+# What a ReadOnlyGit's git gets, last: no fetching a missing object in a partial clone (which
+# writes a pack; git before 2.45 ignores this, and fetches, but for the security releases
+# 2.39.4 to 2.44.1). Not GIT_OPTIONAL_LOCKS=0: none of its reads (rev-parse, cat-file,
+# for-each-ref, var, config --list) refreshes the index, as status and diff do.
+_READ_ONLY_ENVIRONMENT = {"GIT_NO_LAZY_FETCH": "1"}
+
+# What a ReadOnlyGit gives git before each command but `config --list` (whose entries it would
+# join): no core.fsmonitor hook, a program the repository's config names, which git runs as it
+# reads the index for a name such as `:path` (in `resolve`, CatFile and check_names_nothing).
+_NO_FSMONITOR = ("-c", "core.fsmonitor=false")
 
 
-# Options that make a command in READING_COMMANDS write: a file (--output), the index
-# (describe's --dirty and --broken, whatever GIT_OPTIONAL_LOCKS says), or what git or a program
-# it runs likes: a textconv's cache, in refs/notes/textconv/<driver>, which a driver's
-# cachetextconv asks for (--textconv), or an external diff (--ext-diff: GIT_EXTERNAL_DIFF, or a
-# driver's command). Most commands (not log's or diff's options) take an unambiguous
-# abbreviation of a long option (e.g. describe's --dirt), so those are refused too.
-_WRITING_OPTIONS = (
-    "--output",
-    "--output-directory",
-    "--dirty",
-    "--broken",
-    "--textconv",
-    "--ext-diff",
-)
-
-# What git takes as an abbreviation of one of _WRITING_OPTIONS but is an option of its own.
-_NOT_WRITING_OPTIONS = frozenset({"--text"})
-
-# Arguments that write through what they have git run: `--submodule=diff` runs a porcelain
-# `git diff` in each changed submodule, which runs a textconv (and caches it), an external
-# diff (GIT_EXTERNAL_DIFF) and refreshes the submodule's index, none of which it's told not
-# to. (Diff's options take no abbreviation; nor does --submodule's value.)
-_WRITING_ARGUMENTS = frozenset({"--submodule=diff"})
-
-# The commands that run a diff driver's textconv unless told not to; a ReadOnlyGit tells them.
-_TEXTCONV_COMMANDS = frozenset({"log", "show", "blame"})
-
-# What a ReadOnlyGit gives git before any command but config (whose output it would join):
-# config that the repository's, or the tool's environment's, can't override (ours comes last),
-# so git runs no core.fsmonitor hook, a program that could write anything, and, whatever
-# diff.submodule says, no `--submodule=diff` (see _WRITING_ARGUMENTS).
-_READ_ONLY_CONFIG = ("-c", "core.fsmonitor=false", "-c", "diff.submodule=short")
-
-# What git's options before the command may be: none that names another config (-c),
-# repository or program.
-_READING_GIT_OPTIONS = frozenset(
-    {
-        "--no-pager",
-        "-P",
-        "--literal-pathspecs",
-        "--glob-pathspecs",
-        "--noglob-pathspecs",
-        "--icase-pathspecs",
-        "--no-replace-objects",
-        "--no-optional-locks",
-    }
-)
-
-# The variables a ReadOnlyGit may be given for git's environment, beyond the locale's (LC_*):
-# none that adds config (GIT_CONFIG_*, or HOME for another global config), names a program git
-# runs (GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, ...) or another repository (GIT_DIR, as --git-dir
-# isn't taken either: the client's directory says which).
-_READING_ENVIRONMENT = frozenset(
-    {
-        "LANG",
-        "LANGUAGE",
-        "TZ",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_CEILING_DIRECTORIES",
-        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-        "GIT_LITERAL_PATHSPECS",
-        "GIT_GLOB_PATHSPECS",
-        "GIT_NOGLOB_PATHSPECS",
-        "GIT_ICASE_PATHSPECS",
-        "GIT_NO_REPLACE_OBJECTS",
-    }
-)
+def command_line(git: ReadOnlyGit, args: Sequence[Arg]) -> list[str] | list[bytes]:
+    """git's command line for `args` (see Git.command)."""
+    if sys.platform == "win32":
+        return [git.program, "-C", git.directory, *map(os.fsdecode, args)]
+    return [
+        os.fsencode(git.program),
+        b"-C",
+        os.fsencode(git.directory),
+        *(arg if isinstance(arg, bytes) else encode(arg) for arg in args),
+    ]
 
 
-# What a ReadOnlyGit's git gets, last: no optional locks (status would write the index), and no
-# fetching a missing object in a partial clone (which writes a pack; git before 2.45 ignores
-# this, and fetches, but for the security releases 2.39.4 to 2.44.1).
-_READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
+def environment_for(
+    git: ReadOnlyGit, env: Mapping[str, EnvValue] | None, *, english: bool, read_only: bool
+) -> dict[str, str]:
+    """git's environment (see Git.environment), and, if `read_only`, _READ_ONLY_ENVIRONMENT
+    last. What it builds is kept, for the next command given the same, until os.environ
+    changes."""
+    added = {**git.env, **(env or {})}
+
+    def build() -> dict[str, str]:
+        return {
+            **os.environ,
+            **(_ENGLISH if english else {}),
+            **{key: _environment_value(value) for key, value in added.items()},
+            **(_READ_ONLY_ENVIRONMENT if read_only else {}),
+        }
+
+    # A copy of the one kept (see _Environments), which costs little: a dict's, not
+    # os.environ's, which decodes each variable.
+    return dict(_environments.get((english, read_only, tuple(added.items())), build))
 
 
-def _read_only_args(args: Sequence[Arg]) -> list[Arg]:
-    """`args` as a ReadOnlyGit runs them: with _READ_ONLY_CONFIG, and for a command that
-    would run a textconv, `--no-textconv`. Raises ReadOnlyError unless they're a command a
-    ReadOnlyGit runs."""
-    start = _refuse_writes(args)
-    command = os.fsdecode(args[start])
-    if command == "config":
-        return list(args)
-    no_textconv: list[Arg] = ["--no-textconv"] if command in _TEXTCONV_COMMANDS else []
-    return [*_READ_ONLY_CONFIG, *args[: start + 1], *no_textconv, *args[start + 1 :]]
+def _environment_value(value: EnvValue) -> str:
+    if isinstance(value, bytes):
+        return os.fsdecode(value)
+    return value if sys.platform == "win32" else os.fsdecode(encode(value))
 
 
-def _refuse_writes(args: Sequence[Arg]) -> int:
-    """Raise ReadOnlyError unless `args` are a command a ReadOnlyGit runs; else return where
-    the command is in them."""
-    texts = [os.fsdecode(arg) for arg in args]
-    start = 0
-    while start < len(texts) and texts[start].startswith("-"):
-        if texts[start] not in _READING_GIT_OPTIONS:
-            raise ReadOnlyError(f"ReadOnlyGit doesn't take git's option {texts[start]}")
-        start += 1
-    if start == len(texts):
-        raise ReadOnlyError("ReadOnlyGit was given no command")
-    # Every argument is checked, even after "--" or "--end-of-options": either can be another
-    # option's value (`log --grep --end-of-options --output=x`), and git then reads on.
-    command, rest = texts[start], texts[start + 1 :]
-    if command not in READING_COMMANDS and not reading_form(command, rest):
-        raise ReadOnlyError(f"ReadOnlyGit runs only commands that read, not git {texts}")
-    for arg in rest:
-        if arg in _WRITING_ARGUMENTS or (
-            arg not in _NOT_WRITING_OPTIONS
-            and any(names(arg, option) for option in _WRITING_OPTIONS)
-        ):
-            raise ReadOnlyError(f"ReadOnlyGit doesn't take {arg}: it writes")
-        # status -v shows the index's diff through a textconv, which caches it; even bundled
-        # with other short options (-sv), none of which holds a "v".
-        short = arg.startswith("-") and not arg.startswith("--")
-        if command == "status" and (names(arg, "--verbose") or short and "v" in arg):
-            raise ReadOnlyError(f"ReadOnlyGit doesn't take status {arg}: it writes")
-    return start
+def start_process(
+    git: ReadOnlyGit,
+    args: Sequence[Arg],
+    command: list[str] | list[bytes],
+    environment: dict[str, str],
+    *,
+    capture_output: bool,
+    input: bytes | None,
+    stdout: int | IO[bytes] | IO[str] | None,
+    timeout: Timeout,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run `command` (git's, for `args`) to its end, as Git.process says: where every git
+    process but a long-lived one starts, a ReadOnlyGit's and a Git's (git_calls wraps it)."""
+    refuse_if_stopping(git, args)
+    seconds = git.timeout if timeout is CLIENT_TIMEOUT else timeout
+    own_group = _own_process_group(seconds, git.process_groups)
+    with subprocess.Popen(
+        command,
+        stdin=_stdin(input, capture_output),
+        stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
+        stderr=subprocess.PIPE if capture_output else None,
+        env=environment,
+        close_fds=CLOSE_FDS,
+        process_group=0 if own_group else None,
+    ) as process:
+        try:
+            output, errors = process.communicate(input, timeout=seconds)
+        except subprocess.TimeoutExpired:
+            _stop(process, own_group, interrupted=False)
+            output, errors = _remaining_output(process)
+            raise GitTimeoutError(
+                args, None, decode(errors or b""), decode(output or b"")
+            ) from None
+        except BaseException:  # e.g. KeyboardInterrupt
+            _stop(process, own_group, interrupted=True)
+            _let_go_of_output(process)
+            raise
+    return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
+
+
+def start_popen(
+    git: ReadOnlyGit,
+    args: Sequence[Arg],
+    command: list[str] | list[bytes],
+    environment: dict[str, str],
+    stderr: int | IO[bytes],
+) -> subprocess.Popen[bytes]:
+    """Start `command` (git's, for `args`) as Git.popen says: where every long-lived git
+    process starts, a ReadOnlyGit's and a Git's (git_calls wraps it)."""
+    refuse_if_stopping(git, args)
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=stderr,
+        env=environment,
+        # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
+        # non-inheritable, so a process that lives as long as the tool could hold the pipe
+        # another thread is making, and that thread's process would never see EOF. One
+        # process a session doesn't need posix_spawn's speed.
+        close_fds=True,
+    )
+
+
+def stdout_of(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
+    """What git printed to stdout, if it succeeded. Raises GitError if it failed."""
+    if result.returncode != 0:
+        raise error_from(args, result)
+    return result.stdout
+
+
+def read_process(
+    git: ReadOnlyGit,
+    *args: Arg,
+    capture_output: bool = False,
+    input: bytes | None = None,
+    stdout: int | IO[bytes] | IO[str] | None = None,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one of the library's reads, a command it fixes, through `git`: the way every typed
+    read (e.g. `refs`, `config`, `resolve`) starts a process. A Git's goes through its own
+    `process`, which a subclass may override; a ReadOnlyGit offers no such method."""
+    return git._process(  # pyright: ignore[reportPrivateUsage]
+        *args, capture_output=capture_output, input=input, stdout=stdout, timeout=timeout
+    )
+
+
+def read_popen(
+    git: ReadOnlyGit, *args: Arg, stderr: int | IO[bytes] = subprocess.DEVNULL
+) -> subprocess.Popen[bytes]:
+    """Start one of the library's long-lived reads (CatFile's) through `git`, as read_process
+    runs the others: a Git's through its own `popen`."""
+    return git._popen(*args, stderr=stderr)  # pyright: ignore[reportPrivateUsage]
+
+
+def read_output(
+    git: ReadOnlyGit, *args: Arg, input: bytes | None = None, timeout: Timeout = CLIENT_TIMEOUT
+) -> bytes:
+    """What one of the library's reads printed, as Git.run_bytes gives it, run as read_process
+    runs it."""
+    result = read_process(git, *args, capture_output=True, input=input, timeout=timeout)
+    return stdout_of(args, result)
 
 
 type Location = tuple[str, tuple[tuple[str, EnvValue], ...]]
@@ -513,9 +546,9 @@ _clock = time.monotonic
 class Memory:
     """What git told a client about where things are (the answers of the `rev-parse` options
     `where_questions` lists, and `--git-path`'s), by location and option, as git printed
-    each, but the newline that ends it, with when git gave it. A client and its `read_only()`
-    copies (or any shallow copy) share one, so forget() on any forgets for all; a deep copy
-    or a pickled one is empty."""
+    each, but the newline that ends it, with when git gave it. A client, the ReadOnlyGit its
+    `read_only()` gives, and any shallow copy of it share one, so forget() on any forgets for
+    all; a deep copy or a pickled one is empty."""
 
     def __init__(self) -> None:
         # Held only to read or change what's here, never while git runs.
@@ -704,7 +737,7 @@ def ask_where_alone(
     one `rev-parse` couldn't be told apart (LinesUnfit), as a path with a newline in it makes
     them."""
     return {
-        question: git.run_bytes(*where_command([question]), timeout=timeout).removesuffix(b"\n")
+        question: read_output(git, *where_command([question]), timeout=timeout).removesuffix(b"\n")
         for question in questions
         if question != "--is-inside-work-tree"
     }
@@ -720,7 +753,7 @@ def ask_where(
         asked = asking(git)
         questions = where_questions(git, where, needed)
         # Not run's, which would strip a directory's leading space.
-        output = git.run_bytes(*where_command(questions), timeout=timeout)
+        output = read_output(git, *where_command(questions), timeout=timeout)
         try:
             found, _ = read_where(questions, rev_parse_lines(output), 0)
         except LinesUnfit:
@@ -744,71 +777,30 @@ def object_id_length_of(format: bytes) -> int:
 
 def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
     """Raise NotStartedError if `git`'s `stopping` says the tool is stopping: checked before
-    each git process starts (FakeGit's too), but after a ReadOnlyGit refuses what it won't
-    run, so that programming error isn't passed off as stopping."""
+    each git process starts (FakeGit's too)."""
     if git.stopping is not None and git.stopping():
         raise NotStartedError(args, None, "the tool is stopping")
 
 
-def _refuse_environment(env: Mapping[str, EnvValue]) -> None:
-    """Raise ReadOnlyError unless each of `env`'s variables is one a ReadOnlyGit takes."""
-    for key in env:
-        if key not in _READING_ENVIRONMENT and not key.startswith("LC_"):
-            raise ReadOnlyError(f"ReadOnlyGit doesn't take {key} for git's environment")
-
-
 class ReadOnlyGit:
-    """Runs git in `directory`, as `git -C <directory>` does, but only commands that read:
-    before it starts git, it raises ReadOnlyError for anything else, so a tool that only
-    reads can show that it does by making one. Git extends it to run any command, so a
-    function that only reads takes a ReadOnlyGit, and is given either: a parameter typed
-    ReadOnlyGit says what the function asks of git, not that the client can't write. A Git's
-    `read_only()` gives one that can't.
+    """Reads a repository with git in `directory`, as `git -C <directory>` does, offering the
+    library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
+    `cdup` and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`,
+    `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and `CatFile`).
+    It has no public way to run a command of the caller's (no `run`, `process` and the like),
+    so a tool that only reads can show that it does by making one: what it doesn't offer, it
+    can't be asked to run (the library's private helpers can, as anything private can be
+    misused). Git extends it with those, so a function that only reads takes a
+    ReadOnlyGit, and is given either; a Git's `read_only()` gives a ReadOnlyGit of its own. A
+    tool that reads with other commands (`log`, `status`, ...) runs them through a Git.
 
-    It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`,
-    `count-objects`, `describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`,
-    `log`, `ls-files`, `ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`,
-    `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`, `config` with an action that
-    reads (e.g. `--get`, `--list`, `get`) or a lone key, after options that say which files
-    it reads and how it gives values (e.g. `--global`, `-f <file>`, `--type=bool`,
-    `--default <value>`), `branch --show-current`, `symbolic-ref` naming one ref (`--quiet`,
-    `--short`), `remote` (`-v`) and `remote get-url`, and `worktree list`; git's options
-    before them only if they name no config, repository or program (e.g. `--no-pager`, not
-    `-c`); and none of the options that write: `--output`, describe's `--dirty` and
-    `--broken` (the index), `--textconv` and status's `-v` (a textconv's cache),
-    `--ext-diff` (which runs a program), and `--submodule=diff` (which runs a `git diff` in
-    each submodule, which does all of that). Not `diff`, which writes the index when it compares
-    the worktree: `diff-index`, `diff-files` and `diff-tree` don't. Not `range-diff`, whose
-    log runs a textconv whatever it's told. Not `merge-tree`, which writes the merge's
-    objects; with `--quiet` (git 2.50 and newer), still those of the merge it makes of
-    several merge bases. Not `ls-remote`, which runs ssh or credential
-    helpers, which may store what they're given. Each argument is checked, wherever it is
-    (after `--` too), and config's action must come first. `env` (the client's or a
-    command's) may set only the locale (LANG, LANGUAGE, LC_*), TZ, and which index and paths
-    git reads (e.g. GIT_INDEX_FILE, GIT_LITERAL_PATHSPECS).
-
-    What it runs, it runs so that what the repository's config, or the tool's environment, tells
-    git to run doesn't write: `log`, `show` and `blame` get `--no-textconv` (a textconv whose
-    driver has cachetextconv writes its cache, refs/notes/textconv/<driver>), so they show git's
-    own diff of a file a textconv would show otherwise; every command but `config` gets `-c
-    core.fsmonitor=false -c diff.submodule=short`, which win over the config git inherits too,
-    so no core.fsmonitor hook runs, and diff.submodule can't ask for a submodule's `git diff`
-    (`log -p` and `show` show a submodule's change as its commits' ids, whatever diff.submodule,
-    `log` or `diff`, says); and git gets GIT_OPTIONAL_LOCKS=0, so `status` doesn't write the
-    index, and GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
-    2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it), and what needs one fails: the
-    commands that read a blob's content to diff or search it (`log -p`, `show <commit>`,
-    `diff-tree -p`, ...) raise MissingObjectError, but those given a blob's name don't (see the
-    README), and `resolve` and CatFile take it as a name that names nothing. What git still runs
-    can write: a filter (e.g. git-lfs's smudge, run by `cat-file --filters`, or its clean, which
-    `status` runs on a file whose stat information changed), a merge driver
-    (merge.<driver>.driver, which `log --remerge-diff` runs, as does `log -m` under
-    log.diffMerges=remerge), the program gpg.program or gpg.ssh.program names (`log
-    --show-signature`, or log.showSignature), and, through `passthrough`, the pager. The rest of
-    the tool's environment reaches git as it is: GIT_DIR (which `Git` follows too), GIT_TRACE*
-    (which write where they name), GIT_EXTERNAL_DIFF (which git runs only for `--ext-diff`, and
-    in a submodule's `git diff`, both refused), and config from GIT_CONFIG_PARAMETERS or
-    GIT_CONFIG_COUNT, which can't get past the above.
+    Its git gets GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
+    2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it): `resolve` and CatFile take it
+    as a name that names nothing. Each command but `config --list` gets `-c
+    core.fsmonitor=false`, so no core.fsmonitor hook runs as git reads the index for a name
+    such as `:path`. They keep its reads from writing; they're not a promise that git writes
+    nothing: the tool's environment reaches git as it is (e.g. GIT_TRACE*, which write where
+    they name).
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises
@@ -829,8 +821,8 @@ class ReadOnlyGit:
 
     What git tells a client about where things are (`prefix()`, `cdup()`, `object_id_length()`,
     `git_paths`, `git_dir` and `git_common_dir`) is remembered, per `location` (the directory
-    and `env`), and shared with its `read_only()` copies, as with any shallow copy
-    (`copy.copy`); a deep copy or a pickled client starts remembering nothing, keeping its
+    and `env`), and shared with the ReadOnlyGit its `read_only()` gives, and with any shallow
+    copy (`copy.copy`); a deep copy or a pickled client starts remembering nothing, keeping its
     `remember_for`. `remember_for`, if given, is how many seconds an answer is kept, from when
     git gave it (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything
     else the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
@@ -875,10 +867,6 @@ class ReadOnlyGit:
     would keep Python from using posix_spawn.
     """
 
-    # Whether it runs only commands that read (see ReadOnlyGit); Git's runs any, but for the
-    # one read_only() makes.
-    _read_only: bool = True
-
     def __init__(
         self,
         directory: str | os.PathLike[str] = ".",
@@ -907,27 +895,12 @@ class ReadOnlyGit:
         self._memory = Memory()
 
     def read_only(self) -> ReadOnlyGit:
-        """This client, made read-only: a copy of it that refuses what a ReadOnlyGit refuses
-        (see there), and otherwise runs as the client does, with the same `program`, `timeout`,
-        `stopping`, `process_groups`, `remember_for` and `env`, as they are now. It's of the
-        client's own class, so a subclass's methods (e.g. its own `process`) and attributes are
-        kept (an attribute that holds the client itself still writes through it); and, as a
-        shallow copy (`copy.copy`) does, it shares what git told the client about where things
-        are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`, `git_dir`,
-        `git_common_dir`), so it asks no question the client asked, nor the client one it asked,
-        and `forget()` on either forgets for both. A new copy each call; a read-only client
-        gives itself. Raises ReadOnlyError if `env` holds a variable a ReadOnlyGit doesn't
-        take."""
-        if self._read_only:
-            return self
-        _refuse_environment(self.env)
-        reader = copy.copy(self)
-        reader.env = dict(self.env)
-        reader._read_only = True  # and shares the client's _memory
-        return reader
+        """This client itself, which is read-only already (a Git's gives a ReadOnlyGit), so
+        that code given either can ask any client for one."""
+        return self
 
     def forget(self) -> None:
-        """Forget what git told the client (and its `read_only()` copies) about where things
+        """Forget what git told the client (and what its `read_only()` gave) about where things
         are, everywhere (see the class), and any answer git is giving now in another thread,
         so that each is asked of git again the next time it's wanted: one process, the
         `rev-parse` that asks them all. For a long-lived tool to call after each request or
@@ -967,7 +940,7 @@ class ReadOnlyGit:
                     return object_id_length_of(asking.format)
                 continue  # it failed, or may be out of date: ask again
             try:
-                asking.format = encode(self.run("rev-parse", _FORMAT_QUESTION))
+                asking.format = read_output(self, "rev-parse", _FORMAT_QUESTION).strip()
                 memory.remember(where, {_FORMAT_QUESTION: asking.format}, asking.asked)
                 return object_id_length_of(asking.format)
             finally:
@@ -1006,21 +979,147 @@ class ReadOnlyGit:
         found = ask_where(self, location(self), TOP_QUESTIONS, timeout)
         return decode(found["--show-prefix"]), decode(found["--show-cdup"])
 
+    def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
+        """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it names
+        nothing: as `git rev-parse --verify` finds it, but only if the repository has that
+        object (not for a full id it lacks, nor for a submodule's commit). Raises
+        CorruptObjectError if an object git reads for it is damaged, MissingObjectError if it's
+        in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives None), and
+        GitError for another failure (e.g. NotARepositoryError). It takes one process; for many
+        names, a CatFile takes one for all of them."""
+        line = batch_line(name)
+        if line is None:
+            return None
+        args = ("cat-file", "--batch-check")
+        result = self._process(
+            *args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout
+        )
+        answered, _, reply = result.stdout.partition(b"\n")
+        if answered != _PROBE_LINE[:-1] + b" missing":
+            if not answered and result.returncode != 0:
+                # It exited as it started, as it does when it can't read the repository.
+                raise error_from(args, result)
+            # Not git's answer (e.g. a FakeGit's, made before resolve sent the name first).
+            raise GitError(
+                args,
+                result.returncode,
+                f"cat-file answered {decode(answered)!r} for the name of all zeros sent first,"
+                " not that it's missing",
+            )
+        header = object_header(reply)
+        if header is None:
+            # Unless an object git read for it was damaged, as CatFile tells it.
+            if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
+                raise CorruptObjectError(args, result.returncode, stderr)
+            if MISSING_OBJECT.search(stderr):
+                raise MissingObjectError(args, result.returncode, stderr)
+            return None  # if it exited, it was on the name, which names nothing
+        return header[0]
+
+    def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
+        """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None
+        if no identity is set for it. Raises GitError for an unknown variable, or another
+        failure (e.g. a broken config)."""
+        result = self._process("var", name, capture_output=True, timeout=timeout)
+        if result.returncode == FATAL and _NO_IDENTITY.search(decode(result.stderr)):
+            return None
+        return decode(stdout_of(("var", name), result)).strip()
+
+    def _process(
+        self,
+        *args: Arg,
+        capture_output: bool = False,
+        input: bytes | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run one of the library's reads (see read_process), as Git.process runs a command,
+        with ReadOnlyGit's environment and `-c` (see the class)."""
+        command = args if args[0] == "config" else (*_NO_FSMONITOR, *args)
+        return start_process(
+            self,
+            args,
+            command_line(self, command),
+            environment_for(self, None, english=capture_output, read_only=True),
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            timeout=timeout,
+        )
+
+    def _popen(
+        self, *args: Arg, stderr: int | IO[bytes] = subprocess.DEVNULL
+    ) -> subprocess.Popen[bytes]:
+        """Start one of the library's long-lived reads (see read_popen), as Git.popen starts a
+        command, with ReadOnlyGit's environment and `-c` (see the class)."""
+        return start_popen(
+            self,
+            args,
+            command_line(self, (*_NO_FSMONITOR, *args)),
+            environment_for(self, None, english=True, read_only=True),
+            stderr,
+        )
+
+
+class Git(ReadOnlyGit):
+    """Runs any git command in `directory`, as `git -C <directory>` does: a ReadOnlyGit, with
+    the commands of the caller's (`run`, `run_bytes`, `ok`, `succeeds`, `passthrough`,
+    `process` and `popen`) and writes, and without the variables and `-c` a ReadOnlyGit gives
+    git. How it finds git, and stops one past its timeout, is ReadOnlyGit's (see there).
+
+    Every process it starts, its reads' too (`resolve`, `refs`, `config`, `CatFile`, ...),
+    starts through its `process` or `popen`, so a subclass that overrides them (e.g. to time
+    each) sees them all; but not those of the ReadOnlyGit its `read_only()` gives, a client of
+    its own."""
+
+    def read_only(self) -> ReadOnlyGit:
+        """A ReadOnlyGit with the client's settings, as they are now (`directory`, `program`,
+        `env`, `timeout`, `stopping`, `process_groups`, `remember_for` and a given
+        `object_id_length`), for a tool's paths that only read. It shares what git told the
+        client about where things are (`prefix()`, `cdup()`, `object_id_length()`,
+        `git_paths`, `git_dir`, `git_common_dir`), so it asks no question the client asked,
+        nor the client one it asked, and `forget()` on either forgets for both. It's a plain
+        ReadOnlyGit, not of the client's class, and not a Git: a subclass's own `process` and
+        `popen` don't see its processes, so a tool that times every process gives its reads
+        the Git itself. A new one each call."""
+        reader = ReadOnlyGit(
+            self.directory,
+            program=self.program,
+            env=self.env,
+            timeout=self.timeout,
+            stopping=self.stopping,
+            object_id_length=self._object_id_length,
+            process_groups=self.process_groups,
+            remember_for=self.remember_for,
+        )
+        reader._memory = self._memory
+        return reader
+
+    def _process(
+        self,
+        *args: Arg,
+        capture_output: bool = False,
+        input: bytes | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """One of the library's reads, through `process`, which a subclass may override."""
+        return self.process(
+            *args, capture_output=capture_output, input=input, stdout=stdout, timeout=timeout
+        )
+
+    def _popen(
+        self, *args: Arg, stderr: int | IO[bytes] = subprocess.DEVNULL
+    ) -> subprocess.Popen[bytes]:
+        """One of the library's long-lived reads, through `popen`, which a subclass may
+        override."""
+        return self.popen(*args, stderr=stderr)
+
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
         text as git wrote it (whatever the locale's encoding, which in the C locale can't hold
-        a name that isn't ASCII), and paths in the filesystem's encoding. Raises ReadOnlyError
-        for a command a ReadOnlyGit doesn't run."""
-        if self._read_only:
-            args = tuple(_read_only_args(args))
-        if sys.platform == "win32":
-            return [self.program, "-C", self.directory, *map(os.fsdecode, args)]
-        return [
-            os.fsencode(self.program),
-            b"-C",
-            os.fsencode(self.directory),
-            *(arg if isinstance(arg, bytes) else encode(arg) for arg in args),
-        ]
+        a name that isn't ASCII), and paths in the filesystem's encoding."""
+        return command_line(self, args)
 
     def environment(
         self, env: Mapping[str, EnvValue] | None = None, *, english: bool = False
@@ -1030,32 +1129,9 @@ class ReadOnlyGit:
         locale), then this client's `env`, then `env`. Off Windows, git gets each value as
         bytes, like `command`: text as UTF-8 (whatever the locale's encoding), and a path
         given as bytes as it is. Each is given here as the str that os.fsdecode makes of
-        those bytes, which Python turns back into them as it starts git. A ReadOnlyGit's sets
-        GIT_OPTIONAL_LOCKS=0 and GIT_NO_LAZY_FETCH=1 last, and raises ReadOnlyError for a
-        variable in `env` (or the client's) that it doesn't take. What it builds is kept, for
-        the next command given the same, until os.environ changes."""
-        added = {**self.env, **(env or {})}
-        if self._read_only:
-            _refuse_environment(added)
-        read_only = self._read_only
-
-        def build() -> dict[str, str]:
-            return {
-                **os.environ,
-                **(_ENGLISH if english else {}),
-                **{key: self._environment_value(value) for key, value in added.items()},
-                **(_READ_ONLY_ENVIRONMENT if read_only else {}),
-            }
-
-        # A copy of the one kept (see _Environments), which costs little: a dict's, not
-        # os.environ's, which decodes each variable.
-        return dict(_environments.get((english, read_only, tuple(added.items())), build))
-
-    @staticmethod
-    def _environment_value(value: EnvValue) -> str:
-        if isinstance(value, bytes):
-            return os.fsdecode(value)
-        return value if sys.platform == "win32" else os.fsdecode(encode(value))
+        those bytes, which Python turns back into them as it starts git. What it builds is
+        kept, for the next command given the same, until os.environ changes."""
+        return environment_for(self, env, english=english, read_only=False)
 
     def process(
         self,
@@ -1075,39 +1151,24 @@ class ReadOnlyGit:
         LC_CTYPE from git 2.39 (`log --grep`, `--author`, `-G`, `-i`, `git grep`), and C's
         before, and `-P` patterns are UTF-8 on every version. Otherwise its output is the
         user's to read, in theirs. Raises NotStartedError, starting nothing, once `stopping`
-        says so. Every git process but `popen`'s starts here, so a subclass can override this
-        to change how each runs, calling `super().process`.
+        says so. Every git process the client starts but `popen`'s, its reads' too, starts
+        here, so a subclass can override this to change how each runs, calling
+        `super().process`.
 
         git reads `input`, if given; else, with `capture_output`, nothing (as from
         /dev/null), so a command that reads stdin when given no input (e.g. `shortlog` with no
         revision) neither waits on the tool's stdin nor takes it; without, the tool's stdin, as
         from a shell."""
-        command = self.command(*args)
-        refuse_if_stopping(self, args)
-        seconds = self.timeout if timeout is CLIENT_TIMEOUT else timeout
-        own_group = _own_process_group(seconds, self.process_groups)
-        with subprocess.Popen(
-            command,
-            stdin=_stdin(input, capture_output),
-            stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
-            stderr=subprocess.PIPE if capture_output else None,
-            env=self.environment(env, english=capture_output),
-            close_fds=CLOSE_FDS,
-            process_group=0 if own_group else None,
-        ) as process:
-            try:
-                output, errors = process.communicate(input, timeout=seconds)
-            except subprocess.TimeoutExpired:
-                _stop(process, own_group, interrupted=False)
-                output, errors = _remaining_output(process)
-                raise GitTimeoutError(
-                    args, None, decode(errors or b""), decode(output or b"")
-                ) from None
-            except BaseException:  # e.g. KeyboardInterrupt
-                _stop(process, own_group, interrupted=True)
-                _let_go_of_output(process)
-                raise
-        return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
+        return start_process(
+            self,
+            args,
+            self.command(*args),
+            self.environment(env, english=capture_output),
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            timeout=timeout,
+        )
 
     def popen(
         self,
@@ -1122,19 +1183,8 @@ class ReadOnlyGit:
         NotStartedError, starting nothing, once `stopping` says so. A subclass that overrides
         it must take `stderr` and pass it on to `super().popen`: CatFile reads git's reasons
         there."""
-        command = self.command(*args)
-        refuse_if_stopping(self, args)
-        return subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=stderr,
-            env=self.environment(env, english=True),
-            # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
-            # non-inheritable, so a process that lives as long as the tool could hold the pipe
-            # another thread is making, and that thread's process would never see EOF. One
-            # process a session doesn't need posix_spawn's speed.
-            close_fds=True,
+        return start_popen(
+            self, args, self.command(*args), self.environment(env, english=True), stderr
         )
 
     def run_bytes(
@@ -1148,14 +1198,7 @@ class ReadOnlyGit:
         Raises GitError if it fails: a subclass (e.g. UnknownRevisionError) for a failure the
         library knows from what git said."""
         result = self.process(*args, capture_output=True, input=input, env=env, timeout=timeout)
-        return self._stdout(args, result)
-
-    @staticmethod
-    def _stdout(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
-        """What git printed to stdout, if it succeeded. Raises GitError if it failed."""
-        if result.returncode != 0:
-            raise error_from(args, result)
-        return result.stdout
+        return stdout_of(args, result)
 
     def run(
         self,
@@ -1206,56 +1249,12 @@ class ReadOnlyGit:
         0, False for any other (e.g. a revision that names nothing, or no repository). For a
         check where any failure of git's means no; where 1 is git's no and anything else a
         failure to report, use `ok`. It still raises when git gives no answer: GitTimeoutError
-        past its timeout, an OSError if git can't be started, and a ReadOnlyGit's
-        ReadOnlyError for a command it refuses."""
+        past its timeout, NotStartedError once `stopping` says so, and an OSError if git can't
+        be started."""
         result = self.process(
             *args, capture_output=True, stdout=subprocess.DEVNULL, env=env, timeout=timeout
         )
         return result.returncode == 0
-
-    def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
-        """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it names
-        nothing: as `git rev-parse --verify` finds it, but only if the repository has that
-        object (not for a full id it lacks, nor for a submodule's commit). Raises
-        CorruptObjectError if an object git reads for it is damaged, MissingObjectError if it's
-        in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives None), and
-        GitError for another failure (e.g. NotARepositoryError). It takes one process; for many
-        names, a CatFile takes one for all of them."""
-        line = batch_line(name)
-        if line is None:
-            return None
-        args = ("cat-file", "--batch-check")
-        result = self.process(*args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout)
-        answered, _, reply = result.stdout.partition(b"\n")
-        if answered != _PROBE_LINE[:-1] + b" missing":
-            if not answered and result.returncode != 0:
-                # It exited as it started, as it does when it can't read the repository.
-                raise error_from(args, result)
-            # Not git's answer (e.g. a FakeGit's, made before resolve sent the name first).
-            raise GitError(
-                args,
-                result.returncode,
-                f"cat-file answered {decode(answered)!r} for the name of all zeros sent first,"
-                " not that it's missing",
-            )
-        header = object_header(reply)
-        if header is None:
-            # Unless an object git read for it was damaged, as CatFile tells it.
-            if CORRUPT_OBJECT.search(stderr := decode(result.stderr)):
-                raise CorruptObjectError(args, result.returncode, stderr)
-            if MISSING_OBJECT.search(stderr):
-                raise MissingObjectError(args, result.returncode, stderr)
-            return None  # if it exited, it was on the name, which names nothing
-        return header[0]
-
-    def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
-        """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None
-        if no identity is set for it. Raises GitError for an unknown variable, or another
-        failure (e.g. a broken config)."""
-        result = self.process("var", name, capture_output=True, timeout=timeout)
-        if result.returncode == FATAL and _NO_IDENTITY.search(decode(result.stderr)):
-            return None
-        return decode(self._stdout(("var", name), result)).strip()
 
     def passthrough(
         self,
@@ -1268,15 +1267,6 @@ class ReadOnlyGit:
         when ours is for JSON), and say whether it succeeded. Raises GitTimeoutError, rather
         than say no, if it runs past its timeout."""
         return self.process(*args, stdout=stdout, env=env, timeout=timeout).returncode == 0
-
-
-class Git(ReadOnlyGit):
-    """Runs any git command in `directory`, as `git -C <directory>` does: a ReadOnlyGit
-    without its limits on commands and their environment, nor the variables it sets for git
-    (GIT_OPTIONAL_LOCKS, GIT_NO_LAZY_FETCH). How it runs them, finds git and stops one past
-    its timeout is ReadOnlyGit's (see there)."""
-
-    _read_only = False
 
     def write_configs(self, *changes: ConfigChange, wait: float = 5.0) -> list[ConfigResult]:
         """Make each change (a ConfigSet or ConfigUnset) to the config file `git config`

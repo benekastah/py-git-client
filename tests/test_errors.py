@@ -321,17 +321,6 @@ def unfetchable(partial_clone: Git) -> Git:
 NEEDS_NO_LAZY_FETCH = pytest.mark.needs_git(2, 45, reason="for GIT_NO_LAZY_FETCH")
 
 
-@NEEDS_NO_LAZY_FETCH
-@pytest.mark.parametrize(
-    "args", [("log", "-p", "-1"), ("show", "HEAD"), ("diff-tree", "-p", "HEAD")]
-)
-def test_an_object_a_read_only_client_doesnt_fetch(
-    partial_clone: Git, args: tuple[str, ...]
-) -> None:
-    with pytest.raises(MissingObjectError):
-        partial_clone.read_only().run(*args)
-
-
 # Older git says only why the fetch failed, not which object it couldn't fetch.
 @pytest.mark.needs_git(2, 39, reason="for its 'could not fetch <id> from promisor remote'")
 def test_an_object_a_partial_clone_cant_fetch(unfetchable: Git) -> None:
@@ -355,23 +344,10 @@ def test_a_read_only_client_takes_a_blob_a_partial_clone_lacks_as_naming_nothing
     # cat-file says only that it's missing, as of a name that names nothing: git doesn't say
     # why, so neither can the library, short of a process of its own per name.
     reader = partial_clone.read_only()
-    blob = reader.run("rev-parse", "HEAD:a")  # which reads only the tree
+    blob = partial_clone.run("rev-parse", "HEAD:a")  # which reads only the tree
 
     assert reader.resolve(blob) is None
     with CatFile(reader) as cat_file:
         assert cat_file.info("HEAD:a") is None
         with pytest.raises(UnknownRevisionError):
             cat_file.read(blob)
-    for args in [("cat-file", "-p", "HEAD:a"), ("show", "HEAD:a")]:
-        with pytest.raises(UnknownRevisionError):
-            reader.run(*args)
-    for args in [
-        ("blame", "HEAD", "--", "a"),
-        ("cat-file", "blob", blob),
-        ("cat-file", "-s", blob),
-    ]:
-        with pytest.raises(GitError) as raised:
-            reader.run(*args)
-        assert type(raised.value) is GitError
-    # No error at all: its size is unknown.
-    assert reader.run("ls-tree", "-l", "HEAD").split()[3] == "BAD"

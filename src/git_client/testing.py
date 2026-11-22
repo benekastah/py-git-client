@@ -26,6 +26,7 @@ from typing import IO, Any
 
 import pytest
 
+import git_client.client
 from git_client.client import (
     CLIENT_TIMEOUT,
     Arg,
@@ -401,33 +402,35 @@ class GitCall(list[str]):
 
 @pytest.fixture
 def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
-    """Each git process a `Git` or `ReadOnlyGit` starts during the test (through `process` or
-    `popen`), in order, while git runs as it would: to count a tool's processes, or check the
-    ones it starts. Each is a GitCall: git's arguments (without `git -C <directory>`), and the
-    git it ran in `program`. It leaves out the plugin's own, building and copying templates
-    (see RepoTemplates), whichever fixture is set up first."""
+    """Each git process a client (a `Git`, a `ReadOnlyGit`, or a subclass of either) starts
+    during the test, in order, while git runs as it would: to count a tool's processes, or
+    check the ones it starts. Each is a GitCall: git's arguments as the client was given them
+    (without `git -C <directory>`, or a ReadOnlyGit's `-c`), and the git it ran in `program`.
+    It leaves out the plugin's own, building and copying templates (see RepoTemplates),
+    whichever fixture is set up first."""
     calls: list[GitCall] = []
-    process, popen = ReadOnlyGit.process, ReadOnlyGit.popen
+    start_process, start_popen = git_client.client.start_process, git_client.client.start_popen
 
-    def record(git: ReadOnlyGit, args: tuple[Arg, ...]) -> None:
-        # Each raises, starting nothing: for a command a ReadOnlyGit refuses, then once stopping.
-        git.command(*args)
-        refuse_if_stopping(git, args)
+    def record(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
+        refuse_if_stopping(git, args)  # which starts nothing
         if not _setting_up.get():
             calls.append(GitCall([os.fsdecode(arg) for arg in args], git.program))
 
     def recording_process(
-        self: ReadOnlyGit, *args: Arg, **kwargs: Any
+        git: ReadOnlyGit, args: Sequence[Arg], *rest: Any, **kwargs: Any
     ) -> subprocess.CompletedProcess[bytes]:
-        record(self, args)
-        return process(self, *args, **kwargs)
+        record(git, args)
+        return start_process(git, args, *rest, **kwargs)
 
-    def recording_popen(self: ReadOnlyGit, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
-        record(self, args)
-        return popen(self, *args, **kwargs)
+    def recording_popen(
+        git: ReadOnlyGit, args: Sequence[Arg], *rest: Any
+    ) -> subprocess.Popen[bytes]:
+        record(git, args)
+        return start_popen(git, args, *rest)
 
-    monkeypatch.setattr(ReadOnlyGit, "process", recording_process)
-    monkeypatch.setattr(ReadOnlyGit, "popen", recording_popen)
+    # Where every git process of every client starts.
+    monkeypatch.setattr(git_client.client, "start_process", recording_process)
+    monkeypatch.setattr(git_client.client, "start_popen", recording_popen)
     return calls
 
 
@@ -461,9 +464,10 @@ class FakeGit(Git):
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git. Like Git, it raises NotStartedError, recording nothing,
-    once its `stopping` says so. Its `read_only()`, which shares its responses and records in
-    its `calls`, raises ReadOnlyError for what a ReadOnlyGit refuses, recording nothing: give
-    that to code that only reads, to check that it stays read-only.
+    once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not a FakeGit) that
+    answers from the fake's responses and records in its `calls` (through FakeGit's own
+    `process`, not a faked subclass's, as with a real Git): give that to code that only reads,
+    so it has no public way to run a command of its own.
 
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
@@ -533,10 +537,7 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
-        # As a git process would: for what its read_only() refuses, then once stopping.
-        self.command(*args)
-        self.environment(env)
-        refuse_if_stopping(self, args)
+        refuse_if_stopping(self, args)  # as a git process would
         command = [os.fsdecode(arg) for arg in args]
         self.calls.append(Call(command, input, {**self.env, **(env or {})}))
         for prefix, completed in self._responses:
@@ -550,9 +551,57 @@ class FakeGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
-        self.command(*args)
-        self.environment(env)
         refuse_if_stopping(self, args)
         raise UnexpectedCommand(
             f"FakeGit can't start a long-lived git {' '.join(map(os.fsdecode, args))}"
         )
+
+    def read_only(self) -> ReadOnlyGit:
+        """A ReadOnlyGit whose processes are the fake's, sharing what it was told of where
+        things are (see Git.read_only)."""
+        return _FakeReadOnlyGit(self)
+
+
+class _FakeReadOnlyGit(ReadOnlyGit):
+    """A FakeGit's `read_only()`: a ReadOnlyGit with the fake's settings and memory (as
+    Git.read_only gives them) that answers each read through FakeGit's own `process` and
+    `popen`, recording it in the fake's `calls`, but not through a faked subclass's override
+    of them, as a real Git's subclass doesn't see what its read_only() starts."""
+
+    def __init__(self, fake: FakeGit) -> None:
+        super().__init__(
+            fake.directory,
+            program=fake.program,
+            env=fake.env,
+            timeout=fake.timeout,
+            stopping=fake.stopping,
+            object_id_length=fake._object_id_length,
+            process_groups=fake.process_groups,
+            remember_for=fake.remember_for,
+        )
+        self._memory = fake._memory
+        self._fake = fake
+
+    def _process(
+        self,
+        *args: Arg,
+        capture_output: bool = False,
+        input: bytes | None = None,
+        stdout: int | IO[bytes] | IO[str] | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> subprocess.CompletedProcess[bytes]:
+        # FakeGit's own, not a faked subclass's override, which a real Git's read_only() doesn't
+        # reach either.
+        return FakeGit.process(
+            self._fake,
+            *args,
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            timeout=timeout,
+        )
+
+    def _popen(
+        self, *args: Arg, stderr: int | IO[bytes] = subprocess.DEVNULL
+    ) -> subprocess.Popen[bytes]:
+        return FakeGit.popen(self._fake, *args, stderr=stderr)

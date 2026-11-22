@@ -352,7 +352,7 @@ def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(repo_from: RepoFrom) -> None
 def test_patch_ids_takes_no_read_only_client(repo: Git, git_calls: list[GitCall]) -> None:
     # It runs whatever command it's given, which a function taking a read-only client mustn't.
     for reader in (ReadOnlyGit(repo.directory), repo.read_only()):
-        with pytest.raises(TypeError, match="patch_ids takes a Git, not a read-only client"):
+        with pytest.raises(TypeError, match="patch_ids takes a Git, not a ReadOnlyGit"):
             patch_ids(reader, ["log", "-p", "HEAD"])  # pyright: ignore[reportArgumentType]
 
     assert git_calls == []

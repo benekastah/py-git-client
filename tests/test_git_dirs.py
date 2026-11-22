@@ -22,7 +22,9 @@ RepoFrom = Callable[[str, Callable[[Git], None]], Git]
 
 def git_says(git: ReadOnlyGit, option: str) -> Path:
     """What git prints for one rev-parse option, asked on its own, as a path."""
-    output = git.run_bytes("rev-parse", "--path-format=absolute", option)
+    output = Git(git.directory, env=git.env).run_bytes(
+        "rev-parse", "--path-format=absolute", option
+    )
     # Not run's, which would strip a trailing space from the path.
     return Path(os.fsdecode(output.removesuffix(b"\n")))
 

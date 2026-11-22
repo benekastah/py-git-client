@@ -22,6 +22,8 @@ from git_client.client import (
     error_from,
     git_path_question,
     location,
+    read_output,
+    read_process,
     read_where,
     recall_where,
     remember_where,
@@ -78,7 +80,7 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     keeps `Topic`. For a key a user typed, a tool runs `git config --get <key>` (one process),
     so git reads it and says what's wrong with it."""
     entries: dict[str, list[str | None]] = {}
-    for entry in decode(git.run_bytes("config", "--list", "-z")).split("\0"):
+    for entry in decode(read_output(git, "config", "--list", "-z")).split("\0"):
         if entry:
             # A key, then its value after a newline; a key with no value has no newline.
             key, newline, value = entry.partition("\n")
@@ -110,7 +112,8 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
     full ref names or object ids rather than short names."""
     extra = "".join(f"%00%({name})" for name in fields)
-    listing = git.run_bytes(
+    listing = read_output(
+        git,
         "for-each-ref",
         f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
         "--end-of-options",
@@ -162,7 +165,7 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
         asked = asking(git)
         questions = where_questions(git, where)
         args = [arg for name in new for arg in ("--git-path", name)]
-        output = git.run_bytes(*where_command(questions), *args)
+        output = read_output(git, *where_command(questions), *args)
         try:
             answers, lines = read_where(questions, rev_parse_lines(output), len(new))
         except LinesUnfit:  # a path with a newline: each in a process of its own
@@ -209,7 +212,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     # taken for a path and printed as "HEAD", which a detached HEAD prints too.
     command = [*where_command(questions), *args]
     command += ["--verify", "--quiet", "--symbolic-full-name", "HEAD"]
-    result = git.process(*command, capture_output=True)
+    result = read_process(git, *command, capture_output=True)
     stderr = decode(result.stderr)
     if result.returncode == 0:
         # No HEAD line where git can't say which ref "HEAD" is (a branch named HEAD).
@@ -279,7 +282,7 @@ _AMBIGUOUS_HEAD = re.compile(r"refname 'HEAD' is ambiguous")
 def _git_path_alone(git: ReadOnlyGit, name: str) -> bytes:
     """Where git keeps `name`, from a `rev-parse` of its own: its whole output but the newline
     that ends it, for a path with a newline in it."""
-    output = git.run_bytes("rev-parse", "--path-format=absolute", "--git-path", name)
+    output = read_output(git, "rev-parse", "--path-format=absolute", "--git-path", name)
     return output.removesuffix(b"\n")
 
 
@@ -288,7 +291,7 @@ def _head_alone(git: ReadOnlyGit) -> list[bytes]:
     where git can't say (an unborn branch, a branch named HEAD). A ref's name holds no
     newline."""
     args = ("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "HEAD")
-    result = git.process(*args, capture_output=True)
+    result = read_process(git, *args, capture_output=True)
     if result.returncode not in (0, 1):  # 1: unborn, whatever git warned of
         raise error_from(args, result)
     return rev_parse_lines(result.stdout)
@@ -306,14 +309,15 @@ def patch_ids(
     "main..topic"]`, `["diff-tree", "-p", "a", "b"]` or `["diff", "a", "b"]`), the (patch id,
     commit) of each patch it prints, in order, as `git patch-id --stable` gives them. A diff's
     commit is all zeros. Each command runs as it's given, with the options below added: so
-    patch_ids takes a Git, and raises TypeError, running nothing, for a read-only client (a
-    ReadOnlyGit, or a Git's `read_only()`). Whatever the user's config says, each command shows
-    changes in the whole repository (not only under `git.directory`, as diff.relative would) and
-    in every submodule (each as the commit it moves from and to, as diff.submodule's default
-    shows it), none through a textconv, with git's usual a/ and b/ prefixes, renames, 3 lines
-    of context (and none more between hunks) and the myers algorithm, and checks no
-    signatures; and `log` and `show` print each commit's full id, as patch-id needs (a
-    command's own `--format` still wins), and a root commit's patch too.
+    patch_ids takes a Git, and raises TypeError, running nothing, for a ReadOnlyGit (e.g. a
+    Git's `read_only()`), which has no public way to run a command of the caller's. Whatever
+    the user's config says, each command shows changes in the whole repository (not only
+    under `git.directory`, as diff.relative would) and in every submodule (each as the commit
+    it moves from and to, as diff.submodule's default shows it), none through a textconv,
+    with git's usual a/ and b/ prefixes, renames, 3 lines of context (and none more between
+    hunks) and the myers algorithm, and checks no signatures; and `log` and `show` print each
+    commit's full id, as patch-id needs (a command's own `--format` still wins), and a root
+    commit's patch too.
 
     Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff
@@ -325,12 +329,9 @@ def patch_ids(
     Each command runs, but one `git patch-id` reads them all: after each command's output
     comes a patch of ours, whose commit (1, 2, ...) can't be a real one's, marking its end.
     """
-    # A function that runs any command it's given isn't for a client that promises to read.
-    if (
-        not isinstance(git, Git)  # pyright: ignore[reportUnnecessaryIsInstance]
-        or git._read_only  # pyright: ignore[reportPrivateUsage]
-    ):
-        raise TypeError("patch_ids takes a Git, not a read-only client")
+    # Clearer than the AttributeError for run, after object_id_length() may have run git.
+    if not isinstance(git, Git):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise TypeError("patch_ids takes a Git, not a ReadOnlyGit")
     if not commands:
         return []
     length = git.object_id_length()

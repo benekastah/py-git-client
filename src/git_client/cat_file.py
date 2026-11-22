@@ -25,6 +25,7 @@ from git_client.client import (
     check_names_nothing,
     decode,
     object_header,
+    read_popen,
 )
 from git_client.errors import (
     CORRUPT_OBJECT,
@@ -250,7 +251,7 @@ class CatFile:
                 process = None
                 stopper: _Stopper | None = None
                 try:
-                    process = self.git.popen(*_COMMAND, stderr=file)
+                    process = read_popen(self.git, *_COMMAND, stderr=file)
                     assert process.stdout is not None
                     output = _Output(process.stdout)
                     stopper = weakref.finalize(self, _end, process, output, file)

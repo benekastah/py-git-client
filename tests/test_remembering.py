@@ -1,6 +1,7 @@
 import copy
 import inspect
 import pickle
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -253,9 +254,9 @@ def test_threads_asking_object_id_length_at_once_take_one_gits_answer(
     class SlowGit(Git):
         """Takes long enough to answer that the threads all ask before it does."""
 
-        def run(self, *args: Arg, **kwargs: Any) -> str:
+        def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
             time.sleep(0.05)
-            return super().run(*args, **kwargs)
+            return super().process(*args, **kwargs)
 
     git = SlowGit(repo.directory, remember_for=0)  # expired before a waiter could read it
     asking = threading.Barrier(4)
@@ -296,8 +297,8 @@ def test_object_id_length_after_forget_takes_no_answer_git_gave_before(
         """Holds the first answer a moment once git has given it, so that forget() comes
         after git answered and another thread can join the ask before it ends."""
 
-        def run(self, *args: Arg, **kwargs: Any) -> str:
-            output = super().run(*args, **kwargs)
+        def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            output = super().process(*args, **kwargs)
             if not answered.is_set():
                 answered.set()
                 time.sleep(0.1)
