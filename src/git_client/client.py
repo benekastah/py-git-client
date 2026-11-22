@@ -915,8 +915,9 @@ class ReadOnlyGit:
         change) and remembered (see the class: it expires too, for simplicity, though a
         repository's can't change), or told by the `rev-parse` of `prefix()`, `git_paths`,
         `git_paths_and_head`, `git_dir` or `git_common_dir`, which asks it too while it isn't
-        known. Not the length of an id git printed: in a repository with `extensions.compatObjectFormat`, git
-        gives a SHA-1 id back for one, whatever the repository's format. Threads that ask at
+        known. Not the length of an id git printed: in a repository with
+        `extensions.compatObjectFormat`, git gives a SHA-1 id back for one, whatever the
+        repository's format. Threads that ask at
         once wait for one git's answer, and take it however soon it expires (but not across a
         `forget()`: a thread that joins after one asks again); if it fails, the next asks."""
         if self._object_id_length is not None:
