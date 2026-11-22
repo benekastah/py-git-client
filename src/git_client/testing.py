@@ -465,8 +465,9 @@ class FakeGit(Git):
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git. Like Git, it raises NotStartedError, recording nothing,
     once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not a FakeGit) that
-    answers from the fake's responses and records in its `calls`: give that to code that only
-    reads, so it can't run any command of its own.
+    answers from the fake's responses and records in its `calls` (through FakeGit's own
+    `process`, not a faked subclass's, as with a real Git): give that to code that only reads,
+    so it has no public way to run a command of its own.
 
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
@@ -563,8 +564,9 @@ class FakeGit(Git):
 
 class _FakeReadOnlyGit(ReadOnlyGit):
     """A FakeGit's `read_only()`: a ReadOnlyGit with the fake's settings and memory (as
-    Git.read_only gives them) that answers each read through the fake's `process` and
-    `popen`."""
+    Git.read_only gives them) that answers each read through FakeGit's own `process` and
+    `popen`, recording it in the fake's `calls`, but not through a faked subclass's override
+    of them, as a real Git's subclass doesn't see what its read_only() starts."""
 
     def __init__(self, fake: FakeGit) -> None:
         super().__init__(
@@ -588,11 +590,18 @@ class _FakeReadOnlyGit(ReadOnlyGit):
         stdout: int | IO[bytes] | IO[str] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
-        return self._fake.process(
-            *args, capture_output=capture_output, input=input, stdout=stdout, timeout=timeout
+        # FakeGit's own, not a faked subclass's override, which a real Git's read_only() doesn't
+        # reach either.
+        return FakeGit.process(
+            self._fake,
+            *args,
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            timeout=timeout,
         )
 
     def _popen(
         self, *args: Arg, stderr: int | IO[bytes] = subprocess.DEVNULL
     ) -> subprocess.Popen[bytes]:
-        return self._fake.popen(*args, stderr=stderr)
+        return FakeGit.popen(self._fake, *args, stderr=stderr)

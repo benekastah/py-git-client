@@ -4,7 +4,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import pytest
 
@@ -664,6 +664,39 @@ def test_a_fake_gits_read_only_one_answers_from_its_responses_and_records_in_its
         ["rev-parse", "--path-format=absolute", "--show-prefix", "--show-cdup"]
         + ["--is-inside-work-tree", "--git-dir", "--git-common-dir"],
     ]
+    with CatFile(reader) as cat_file, pytest.raises(UnexpectedCommand, match="cat-file"):
+        cat_file.resolve("HEAD")
+
+
+class FakeTimedGit(FakeGit):
+    """A faked tool's Git whose `process` and `popen` note each command, as one that times
+    them would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timed: list[str] = []
+
+    def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        self.timed.append(os.fsdecode(args[0]))
+        return super().process(*args, **kwargs)
+
+    def popen(self, *args: Arg, **kwargs: Any) -> subprocess.Popen[bytes]:
+        self.timed.append(os.fsdecode(args[0]))
+        return super().popen(*args, **kwargs)
+
+
+def test_a_faked_subclass_doesnt_see_its_read_only_ones_reads() -> None:
+    # As a real Git's subclass doesn't see those of the plain ReadOnlyGit its read_only() gives.
+    git = FakeTimedGit()
+    git.respond(["var"], stdout="A U Thor <a@example.com> 1 +0000\n")
+    reader = git.read_only()
+
+    reader.var("GIT_AUTHOR_IDENT")
+    with CatFile(reader) as cat_file, pytest.raises(UnexpectedCommand):
+        cat_file.resolve("HEAD")
+
+    assert git.timed == []
+    assert git.commands == [["var", "GIT_AUTHOR_IDENT"]]
 
 
 def test_fake_git_answers_from_its_responses_and_records_each_command() -> None:

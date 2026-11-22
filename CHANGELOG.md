@@ -184,7 +184,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   what git told the client about where things are, for a tool's paths that only read; a
   `ReadOnlyGit`'s gives itself (#55, #70).
 - `FakeGit().read_only()`: a `ReadOnlyGit` that answers from the fake's responses and records
-  in its `calls`, for a unit test of code that only reads (#55, #70).
+  in its `calls` (through `FakeGit`'s own `process`, not a faked subclass's, as with a real
+  `Git`), for a unit test of code that only reads (#55, #70).
 - A `ReadOnlyGit`'s reads run with `-c core.fsmonitor=false` (but `config()`'s), so no
   `core.fsmonitor` hook runs as git reads the index for a name such as `:path` (in
   `resolve` and `CatFile`); `git_calls` records the command without it (#55, #70).

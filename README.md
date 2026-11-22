@@ -452,7 +452,9 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
   ```
 
   For code that only reads, give it the fake's `read_only()`: a `ReadOnlyGit` that answers
-  from the fake's responses and records in its `calls`, and offers no command of the caller's.
+  from the fake's responses and records in its `calls`, and offers no public way to run a
+  command of the caller's. As with a real `Git`, your subclass's own `process` (below) doesn't
+  see its reads.
 
   If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
   so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which
