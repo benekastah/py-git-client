@@ -215,6 +215,7 @@ def test_a_deep_copy_remembers_nothing_and_forgets_alone(
 
     assert twin.remember_for == 10
     twin.prefix()  # its own question
+    assert len(git_calls) == 2
     twin.forget()
     git.prefix()  # still the client's answer
     assert len(git_calls) == 2
