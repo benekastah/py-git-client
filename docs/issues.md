@@ -9,3 +9,17 @@ fixes one, remove it in the same change; when a change leaves something wrong, a
   `tests/test_timeouts.py` kill some (the tools and hooks under a timeout or a signal) before
   they write their data, leaving an empty `.coverage.*` file. `coverage combine` skips it, so
   the report and the check are right, but the warning is noise in the output and CI's log.
+- **`location()` keys Memory by a lexically normalized path.** `os.path.abspath` collapses
+  `..` without resolving symlinks, so with `link` a symlink, `link/../x` becomes `<cwd>/x`
+  though `git -C` goes to `link`'s target's parent: two different directories can share one
+  key, so one's answers (git dir, object format) are served for the other, until they
+  expire or `forget()`. Fix: join the directory to `os.getcwd()` without normalizing.
+- **The testing plugin lists git's environment variables itself.** `GIT_ENVIRONMENT_VARIABLES`
+  hard-codes the variables `git rev-parse --local-env-vars` lists (among others it must
+  clear), so one a later git adds isn't cleared, and leaks from a hook into the tests. Fix:
+  clear what that command prints, and list only the rest (identity, editor, askpass, ...).
+- **The testing plugin finds repositories by their layout.** `_repositories` decides in
+  Python that a directory is one (a `.git` directory, or `HEAD`, `config` and `objects` for a
+  bare one), which `PROJECT_AGENTS.md` says not to do (git decides). Fix: keep the walk (git
+  can't list repositories), but ask git of each candidate directory (`rev-parse --git-dir`)
+  rather than guess from its files.

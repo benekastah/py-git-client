@@ -338,6 +338,17 @@ def test_patch_ids_gives_a_diff_and_a_log_the_same_ids_whatever_the_config_says(
     assert diff == (log[0], "0" * 40)
 
 
+def test_patch_ids_runs_diff_tree_as_given(repo_from: RepoFrom) -> None:
+    repo = topic_changing(repo_from, "b")
+
+    [diff_tree, diff] = [
+        patches[0] for patches in patch_ids(repo, ["diff-tree", "-p", "main", "topic"], *TOPIC[1:])
+    ]
+
+    assert diff_tree == diff
+    assert diff_tree[1] == "0" * 40
+
+
 def test_patch_ids_runs_a_diff_of_two_blobs_as_diff(repo_from: RepoFrom) -> None:
     # Blobs' ids, which `git diff` takes, but `git diff-tree -p` doesn't. (The patch names
     # each file by its id, so its id isn't the commit's.)
