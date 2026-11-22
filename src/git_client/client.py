@@ -548,8 +548,7 @@ class Memory:
     `where_questions` lists, and `--git-path`'s), by location and option, as git printed
     each, but the newline that ends it, with when git gave it. A client, the ReadOnlyGit its
     `read_only()` gives, and any shallow copy of it share one, so forget() on any forgets for
-    all; a deep copy
-    or a pickled one is empty."""
+    all; a deep copy or a pickled one is empty."""
 
     def __init__(self) -> None:
         # Held only to read or change what's here, never while git runs.
