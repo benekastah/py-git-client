@@ -359,10 +359,11 @@ def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) 
     return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
 
 
-# What a ReadOnlyGit's git gets, last: no optional locks, and no fetching a missing object in a
-# partial clone (which writes a pack; git before 2.45 ignores this, and fetches, but for the
-# security releases 2.39.4 to 2.44.1).
-_READ_ONLY_ENVIRONMENT = {"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
+# What a ReadOnlyGit's git gets, last: no fetching a missing object in a partial clone (which
+# writes a pack; git before 2.45 ignores this, and fetches, but for the security releases
+# 2.39.4 to 2.44.1). Not GIT_OPTIONAL_LOCKS=0: none of its reads (rev-parse, cat-file,
+# for-each-ref, var, config --list) refreshes the index, as status and diff do.
+_READ_ONLY_ENVIRONMENT = {"GIT_NO_LAZY_FETCH": "1"}
 
 # What a ReadOnlyGit gives git before each command but `config --list` (whose entries it would
 # join): no core.fsmonitor hook, a program the repository's config names, which git runs as it
@@ -792,13 +793,13 @@ class ReadOnlyGit:
     ReadOnlyGit, and is given either; a Git's `read_only()` gives a ReadOnlyGit of its own. A
     tool that reads with other commands (`log`, `status`, ...) runs them through a Git.
 
-    Its git gets GIT_OPTIONAL_LOCKS=0, so none of its reads takes an optional lock, and
-    GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git 2.45 and
-    newer, and 2.39.4 to 2.44.1; older git fetches it): `resolve` and CatFile take it as a name
-    that names nothing. Each command but `config --list` gets `-c core.fsmonitor=false`, so no
-    core.fsmonitor hook runs as git reads the index for a name such as `:path`. They keep its
-    reads from writing; they're not a promise that git writes nothing: the tool's environment
-    reaches git as it is (e.g. GIT_TRACE*, which write where they name).
+    Its git gets GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
+    2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it): `resolve` and CatFile take it
+    as a name that names nothing. Each command but `config --list` gets `-c
+    core.fsmonitor=false`, so no core.fsmonitor hook runs as git reads the index for a name
+    such as `:path`. They keep its reads from writing; they're not a promise that git writes
+    nothing: the tool's environment reaches git as it is (e.g. GIT_TRACE*, which write where
+    they name).
 
     `program` is the git to run, or else `find_git(env_var)`'s: a project names its own
     variable (e.g. `GIT_STACK_GIT`) so its users can choose. Without `program`, it raises

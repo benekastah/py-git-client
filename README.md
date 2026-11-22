@@ -293,10 +293,9 @@ refs(git.read_only(), "refs/heads/")
 A `ReadOnlyGit`'s git gets `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't
 fetched (git before 2.45 ignores it, but for the security releases 2.39.4 to 2.44.1):
 `resolve` and `CatFile` take it as a name that names nothing (None, and `verify` and `read`
-raise `UnknownRevisionError`). It also gets `GIT_OPTIONAL_LOCKS=0`, and `-c
-core.fsmonitor=false` before each command but `config --list`, so no `core.fsmonitor` hook
-runs as git reads the index for a name such as `:path`. They keep its reads from writing; they
-aren't a promise that git writes nothing: the tool's environment reaches git as it is (e.g.
+raise `UnknownRevisionError`). It also gets `-c core.fsmonitor=false` before each command but
+`config --list`, so no `core.fsmonitor` hook runs as git reads the index for a name such as
+`:path`. They keep its reads from writing; they aren't a promise that git writes nothing: the tool's environment reaches git as it is (e.g.
 `GIT_TRACE*`, which write where they name).
 
 ### Errors
