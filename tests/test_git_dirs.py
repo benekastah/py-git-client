@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from git_client import Git, NotARepositoryError, ReadOnlyGit, git_common_dir, git_dir
+from git_client import (
+    Git,
+    NotARepositoryError,
+    ReadOnlyGit,
+    git_common_dir,
+    git_dir,
+    git_paths,
+    git_paths_and_head,
+)
 from git_client.testing import GitCall
 
 # The repo_from fixture's type (see conftest.py).
@@ -121,6 +129,41 @@ def test_one_process_answers_both_once(
     git_common_dir(repo)
 
     assert len(git_calls) == 1
+
+
+@pytest.mark.parametrize("first", [Git.prefix, git_paths, git_paths_and_head])
+def test_the_rev_parse_of_where_things_are_tells_both(
+    repo: Git, git_calls: list[GitCall], first: Callable[..., object]
+) -> None:
+    first(repo, "HEAD") if first is not Git.prefix else repo.prefix()
+    started = len(git_calls)
+
+    assert git_dir(repo) == git_common_dir(repo) == Path(repo.directory) / ".git"
+    assert len(git_calls) == started
+
+
+def test_git_dir_tells_where_things_are_in_the_same_process(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    git_dir(repo)
+
+    assert (repo.prefix(), repo.cdup(), repo.object_id_length()) == ("", "", 40)
+    assert git_paths(repo, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
+    assert len(git_calls) == 2  # and the path, which git_dir doesn't ask
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' file names can't hold a newline")
+@pytest.mark.parametrize("first", [git_dir, git_common_dir])
+def test_a_git_directory_whose_path_holds_a_newline(
+    repo: Git, tmp_path: Path, first: Callable[[ReadOnlyGit], Path]
+) -> None:
+    checkout = Git(tmp_path / "checkout")
+    separate = tmp_path / "g\ntrue"
+    repo.run("init", "--quiet", "--separate-git-dir", str(separate), checkout.directory)
+
+    first(checkout)
+    assert (git_dir(checkout), git_common_dir(checkout)) == (separate, separate)
+    assert (checkout.prefix(), checkout.cdup()) == ("", "")
 
 
 def test_a_client_asks_again_once_it_points_elsewhere(

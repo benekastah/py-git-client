@@ -21,15 +21,16 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   renames, mode changes, binary files and a merge against its parents too (#68).
 - `git_common_dir(directory)` takes a client (`Git` or `ReadOnlyGit`), not a directory, and
   runs git, where it read the repository's files: `git_common_dir("path/to/repo")` becomes
-  `git_common_dir(git)`, from one `git rev-parse --path-format=absolute --git-dir
-  --git-common-dir` (a `FakeGit` answering it gives two lines: the git directory, then the
-  common one), remembered per client and location, as `git_paths` and `prefix()` are. It
-  raises `NotARepositoryError` where it returned None, and gives a subdirectory's repository,
-  as git does, where it gave None. As git does, it follows `GIT_DIR`, `GIT_COMMON_DIR` and
-  `GIT_WORK_TREE`, from the client's `env` and the process's environment, which it ignored:
-  a tool run from a git hook (where git sets `GIT_DIR`) that asks of another repository
-  removes them from `os.environ` first (a client's `env` can set a variable, not remove
-  one), or gets the hook's repository (#65).
+  `git_common_dir(git)`, asked (`--git-common-dir`, with `git_dir`'s `--git-dir`) in the
+  `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head` run, so it costs no
+  process once any of them has run, nor they once it has (a `FakeGit` answering it gives the
+  lines the `cdup()` entry below lists), and remembered per client and location, as they
+  are. It raises `NotARepositoryError` where it returned None, and gives a subdirectory's
+  repository, as git does, where it gave None. As git does, it follows `GIT_DIR`,
+  `GIT_COMMON_DIR` and `GIT_WORK_TREE`, from the client's `env` and the process's
+  environment, which it ignored: a tool run from a git hook (where git sets `GIT_DIR`) that
+  asks of another repository removes them from `os.environ` first (a client's `env` can set
+  a variable, not remove one), or gets the hook's repository (#65, #69).
 - `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
   one back unchanged, so a lookup found nothing where git says "key does not contain a
   section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
@@ -56,16 +57,19 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `ReadOnlyGit.cdup()` gives the path up to the top of the worktree, as `git rev-parse
   --show-cdup` prints it, where a tool built it from the prefix (`"../" *
   prefix().count("/")`, which outside a worktree git knows the top of is wrong). It's asked
-  with `prefix()`. The `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head`
-  run starts with what isn't known yet: `--show-prefix --show-cdup --is-inside-work-tree`
-  while the prefix isn't, then `--show-object-format` while the object id length isn't. A
-  `FakeGit` answering it gives, in this order: the prefix's line (empty at the top), the
-  cdup's (none at all where git knows no worktree: a bare repository, a git directory),
-  `true` or `false`, then `sha1` or `sha256`; then the paths and HEAD (none where git exits
-  1 for an unborn branch, or 0 saying "refname 'HEAD' is ambiguous"). Where a path holds a
-  newline, so that the lines can't be told apart, each question is asked alone. One still
-  answering the old way (the prefix's line alone, or then the format's) gets too few lines:
-  `ValueError: rev-parse printed N lines, too few for M` (#67).
+  with `prefix()`. The `rev-parse` that `prefix()`, `git_paths`, `git_paths_and_head`,
+  `git_dir` and `git_common_dir` run starts `rev-parse --path-format=absolute`, then asks
+  what isn't known yet: `--show-prefix --show-cdup --is-inside-work-tree` while the prefix
+  isn't, `--show-object-format` while the object id length isn't, then `--git-dir
+  --git-common-dir` while the git directories aren't. A `FakeGit` answering it gives, in
+  this order: the prefix's line (empty at the top), the cdup's (none at all where git knows
+  no worktree: a bare repository, a git directory), `true` or `false`, `sha1` or `sha256`,
+  the git directory and the common one (absolute paths); then the paths and HEAD (none
+  where git exits 1 for an unborn branch, or 0 saying "refname 'HEAD' is ambiguous"). Where
+  a path holds a newline, so that the lines can't be told apart, each question is asked
+  alone. One still answering the old way (without the git directories, or the prefix's line
+  alone) gets too few lines: `ValueError: rev-parse printed N lines, too few for M` (#67,
+  #69).
 - `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
   arguments, and returns what each did (a list of `ConfigResult`), not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
@@ -81,7 +85,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   that cached them itself can drop its cache (and its cdup is `cdup()`'s, remembered with
   the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
   gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
-  client that keeps its directory isn't noticed; make a new client (#50).
+  client that keeps its directory isn't noticed, unless the client's `remember_for` has
+  passed or `forget()` was called (see "Added") (#50, #69).
 - A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
   where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
   `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
@@ -146,6 +151,18 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `remember_for=` (seconds, from when git gave each answer; `None`, the default, keeps them
+  as long as the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a
+  client remembers of where things are (`prefix()`, `cdup()`, `object_id_length()`,
+  `git_paths`, `git_dir`, `git_common_dir`): once its time is past, or after `forget()`, the
+  next call asks git again, in one process, and what one `rev-parse` told expires together.
+  A client and its `read_only()` copies share them, `forget()` too, as any shallow copy
+  (`copy.copy`) of a client does; a deep copy or a pickled client starts with none (a client
+  can be deep-copied or pickled only if its `stopping` and a subclass's attributes can be: a
+  `threading.Event`'s `is_set` or a lambda can't). A long-lived tool (e.g. move-forward)
+  keeps a client per repository and gives it `remember_for=` a few seconds, or calls
+  `forget()` after each refresh, rather than make a new client. A given `object_id_length=`
+  never expires (#69).
 - `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
   the same process and remembered with it (#67).
 - Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
