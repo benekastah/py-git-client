@@ -546,8 +546,9 @@ _clock = time.monotonic
 class Memory:
     """What git told a client about where things are (the answers of the `rev-parse` options
     `where_questions` lists, and `--git-path`'s), by location and option, as git printed
-    each, but the newline that ends it, with when git gave it. A client and its `read_only()`
-    copies (or any shallow copy) share one, so forget() on any forgets for all; a deep copy
+    each, but the newline that ends it, with when git gave it. A client, the ReadOnlyGit its
+    `read_only()` gives, and any shallow copy of it share one, so forget() on any forgets for
+    all; a deep copy
     or a pickled one is empty."""
 
     def __init__(self) -> None:
@@ -787,9 +788,10 @@ class ReadOnlyGit:
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
     `cdup` and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`,
     `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and `CatFile`).
-    It has no way to run a command of the caller's (no `run`, `process` and the like), so a
-    tool that only reads can show that it does by making one: what it doesn't offer, it can't
-    be asked to run. Git extends it with those, so a function that only reads takes a
+    It has no public way to run a command of the caller's (no `run`, `process` and the like),
+    so a tool that only reads can show that it does by making one: what it doesn't offer, it
+    can't be asked to run (the library's private helpers can, as anything private can be
+    misused). Git extends it with those, so a function that only reads takes a
     ReadOnlyGit, and is given either; a Git's `read_only()` gives a ReadOnlyGit of its own. A
     tool that reads with other commands (`log`, `status`, ...) runs them through a Git.
 
@@ -820,8 +822,8 @@ class ReadOnlyGit:
 
     What git tells a client about where things are (`prefix()`, `cdup()`, `object_id_length()`,
     `git_paths`, `git_dir` and `git_common_dir`) is remembered, per `location` (the directory
-    and `env`), and shared with its `read_only()` copies, as with any shallow copy
-    (`copy.copy`); a deep copy or a pickled client starts remembering nothing, keeping its
+    and `env`), and shared with the ReadOnlyGit its `read_only()` gives, and with any shallow
+    copy (`copy.copy`); a deep copy or a pickled client starts remembering nothing, keeping its
     `remember_for`. `remember_for`, if given, is how many seconds an answer is kept, from when
     git gave it (`time.monotonic()`; 0 keeps none): after that it's asked again, with everything
     else the same `rev-parse` told that has expired too, as answers one `rev-parse` gave expire
@@ -899,7 +901,7 @@ class ReadOnlyGit:
         return self
 
     def forget(self) -> None:
-        """Forget what git told the client (and its `read_only()` copies) about where things
+        """Forget what git told the client (and what its `read_only()` gave) about where things
         are, everywhere (see the class), and any answer git is giving now in another thread,
         so that each is asked of git again the next time it's wanted: one process, the
         `rev-parse` that asks them all. For a long-lived tool to call after each request or

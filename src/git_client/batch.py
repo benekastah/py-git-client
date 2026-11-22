@@ -310,13 +310,14 @@ def patch_ids(
     commit) of each patch it prints, in order, as `git patch-id --stable` gives them. A diff's
     commit is all zeros. Each command runs as it's given, with the options below added: so
     patch_ids takes a Git, and raises TypeError, running nothing, for a ReadOnlyGit (e.g. a
-    Git's `read_only()`), which runs no command of the caller's. Whatever the user's config
-    says, each command shows changes in the whole repository (not only under `git.directory`,
-    as diff.relative would) and in every submodule (each as the commit it moves from and to,
-    as diff.submodule's default shows it), none through a textconv, with git's usual a/ and b/
-    prefixes, renames, 3 lines of context (and none more between hunks) and the myers
-    algorithm, and checks no signatures; and `log` and `show` print each commit's full id, as patch-id needs (a
-    command's own `--format` still wins), and a root commit's patch too.
+    Git's `read_only()`), which has no public way to run a command of the caller's. Whatever
+    the user's config says, each command shows changes in the whole repository (not only
+    under `git.directory`, as diff.relative would) and in every submodule (each as the commit
+    it moves from and to, as diff.submodule's default shows it), none through a textconv,
+    with git's usual a/ and b/ prefixes, renames, 3 lines of context (and none more between
+    hunks) and the myers algorithm, and checks no signatures; and `log` and `show` print each
+    commit's full id, as patch-id needs (a command's own `--format` still wins), and a root
+    commit's patch too.
 
     Paths after `--` are pathspecs, relative to `git.directory`. With `paths_from_top`, each
     is instead a path from the top of the worktree, as git reports one (e.g. `git diff

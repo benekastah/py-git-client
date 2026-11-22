@@ -137,10 +137,11 @@ class CorruptObjectError(GitError):
 class MissingObjectError(GitError):
     """An object a partial clone lacks, which git couldn't fetch from its promisor remote: it
     couldn't be reached, or lacks it (its `stderr` says why), so trying again fails the same
-    way. (A ReadOnlyGit fetches none: its `resolve` and CatFile take a missing object as a name
-    that names nothing.) It's raised where a failed fetch raised RemoteError before, so a tool
-    that catches RemoteError around a partial clone's commands should catch this too. Only
-    from git 2.39, which says which object it couldn't fetch: older git says only why the
+    way. (A ReadOnlyGit fetches none with git 2.45 and newer, and 2.39.4 to 2.44.1, which take its
+    GIT_NO_LAZY_FETCH=1: its `resolve` and CatFile then take a missing object as a name that names
+    nothing. Older git fetches it.) It's raised where a failed fetch raised RemoteError before, so a
+    tool that catches RemoteError around a partial clone's commands should catch this too. Only from
+    git 2.39, which says which object it couldn't fetch: older git says only why the
     fetch failed, so its failure raises what that says (e.g. RemoteError)."""
 
 

@@ -10,7 +10,7 @@ the shape of the code or a rule here changes.
   it fixes), `Git`, which extends it with the commands of the caller's (`run`, `process`,
   ...), and `find_git`; `start_process` and `start_popen`, where every git process starts,
   and `read_process`, `read_popen` and `read_output`, which the reads run through; and
-  `Memory`, what git told a client (and its `read_only()` copies) about where things are,
+  `Memory`, what git told a client (and what its `read_only()` gave) about where things are,
   which one `rev-parse` asks while any is unknown (`where_questions`, `read_where`,
   `ask_where`), with when git told it, for `remember_for` and `forget()`.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
@@ -59,9 +59,9 @@ the shape of the code or a rule here changes.
   saying what a tool must change for it (e.g. an override's new signature). Before
   `dev.py release`, a PR puts the date in place of "unreleased"; the release's PR to the next
   version adds that version's section.
-- **A ReadOnlyGit offers no command of the caller's**: it can't be asked to write because it
-  takes no command line, not because the library judges one. A function that takes a
-  ReadOnlyGit runs only commands the library fixes, through `read_process`, `read_popen` or
+- **A ReadOnlyGit offers no public way to run a command of the caller's**: it can't be asked
+  to write because it takes no command line, not because the library judges one. A function that
+  takes a ReadOnlyGit runs only commands the library fixes, through `read_process`, `read_popen` or
   `read_output` (a ReadOnlyGit's private `_process` and `_popen`, which on a Git call its
   public `process` and `popen`, so a subclass's override sees every process); one that runs
   a command it's given takes a Git.

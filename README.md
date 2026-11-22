@@ -231,7 +231,7 @@ it's closed, though one that has to start (again) raises. `FakeGit` takes it too
 
 A client asks git where things are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
 `git_dir`, `git_common_dir`) once per directory and `env`, all in one `git rev-parse` while
-any is unknown, and remembers the answers, shared with its `read_only()` copies. By default
+any is unknown, and remembers the answers, shared with what its `read_only()` gives. By default
 they're kept as long as the client, which suits a command that runs and exits, but a
 repository moved or replaced under the client isn't noticed. A long-lived tool (an editor's
 helper, a daemon such as move-forward) asks git, but remembers it for a while: it keeps a
@@ -247,10 +247,10 @@ git.forget()  # every answer, so the next call asks git again (one process)
 What one `rev-parse` told expires together, and is asked again together. An
 `object_id_length=` given to the client never expires. Threads may share a client: each gets
 git's answer, and threads that ask at once what isn't known may each start a process. A
-shallow copy of a client (`copy.copy`) shares its answers and `forget()`, as `read_only()`
-does; a deep copy, or a pickled client (e.g. sent to a process pool), starts remembering
-nothing, with the same `remember_for`. A client can be deep-copied or pickled only if its
-`stopping` (and a subclass's attributes) can be: a `threading.Event`'s `is_set` or a lambda
+shallow copy of a client (`copy.copy`) shares its answers and `forget()`, as the `ReadOnlyGit` its
+`read_only()` gives does; a deep copy, or a pickled client (e.g. sent to a process pool), starts
+remembering nothing, with the same `remember_for`. A client can be deep-copied or pickled only if
+its `stopping` (and a subclass's attributes) can be: a `threading.Event`'s `is_set` or a lambda
 can't, so give a worker process a client of its own.
 
 ### Reading only
@@ -259,8 +259,8 @@ A tool that only reads can show that it does with a `ReadOnlyGit`, which takes t
 arguments as `Git`, and offers the library's reads alone, each a command the library fixes:
 `resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
 one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
-`CatFile`. It has no way to run a command of the caller's: no `run`, `run_bytes`, `ok`,
-`succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
+`CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`,
+`ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
 write: the library doesn't try to tell from a command line whether git would write (that's
 git's to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends
 it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
@@ -294,9 +294,9 @@ A `ReadOnlyGit`'s git gets `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missin
 fetched (git before 2.45 ignores it, but for the security releases 2.39.4 to 2.44.1):
 `resolve` and `CatFile` take it as a name that names nothing (None, and `verify` and `read`
 raise `UnknownRevisionError`). It also gets `-c core.fsmonitor=false` before each command but
-`config --list`, so no `core.fsmonitor` hook runs as git reads the index for a name such as
-`:path`. They keep its reads from writing; they aren't a promise that git writes nothing: the tool's environment reaches git as it is (e.g.
-`GIT_TRACE*`, which write where they name).
+`config --list`, so no `core.fsmonitor` hook runs as git reads the index for a name such as `:path`.
+They keep its reads from writing; they aren't a promise that git writes nothing: the tool's
+environment reaches git as it is (e.g. `GIT_TRACE*`, which write where they name).
 
 ### Errors
 
