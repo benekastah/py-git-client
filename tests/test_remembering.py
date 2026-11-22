@@ -1,4 +1,5 @@
 import copy
+import inspect
 import pickle
 import threading
 import time
@@ -311,3 +312,28 @@ def test_object_id_length_after_forget_takes_no_answer_git_gave_before(
         assert first.result() == 40
 
     assert git_calls == [["rev-parse", "--show-object-format"]] * 2
+
+
+def test_forget_while_answers_are_written_keeps_none(
+    repo: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = Git(repo.directory)
+    forgetting: list[threading.Thread] = []
+
+    def clock() -> float:
+        """Calls forget() from another thread as remember() writes git's answers, between
+        its check of the forget count and its write."""
+        caller = inspect.currentframe()
+        caller = caller.f_back if caller else None
+        if caller and caller.f_code.co_name == "remember" and not forgetting:
+            forgetting.append(threading.Thread(target=git.forget))
+            forgetting[0].start()
+            forgetting[0].join(0.2)  # which returns at once, if forget() doesn't wait
+        return time.monotonic()
+
+    monkeypatch.setattr("git_client.client._clock", clock)
+    git.prefix()
+    forgetting[0].join()
+
+    git.prefix()  # forgotten: asked again
+    assert len(git_calls) == 2
