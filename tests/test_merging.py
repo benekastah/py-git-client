@@ -12,7 +12,6 @@ from git_client import (
     MergeResult,
     MissingObjectError,
     NotARepositoryError,
-    ReadOnlyError,
     UnknownRevisionError,
     WrongTypeError,
     hash_blobs,
@@ -426,16 +425,6 @@ def test_anything_but_a_full_object_id_is_refused_before_git_starts(
 def test_outside_a_repository_it_raises() -> None:
     with pytest.raises(NotARepositoryError):
         merge_trees(Git("."), [("a" * 40, "b" * 40)] * 3)
-
-
-def test_a_read_only_client_is_refused(repo: Git, git_calls: list[GitCall]) -> None:
-    head = repo.run("rev-parse", "HEAD")
-    git_calls.clear()
-
-    with pytest.raises(ReadOnlyError):
-        merge_trees(repo.read_only(), [(head, head)])  # pyright: ignore[reportArgumentType]
-
-    assert git_calls == []
 
 
 def test_no_pairs_start_no_git(repo: Git, git_calls: list[GitCall]) -> None:

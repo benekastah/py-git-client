@@ -17,7 +17,6 @@ from git_client import (
     Git,
     GitError,
     NotStartedError,
-    ReadOnlyError,
     ReadOnlyGit,
     Timeout,
     config,
@@ -311,15 +310,15 @@ def test_git_calls_records_each_git_process_and_lets_it_run(
     ]
 
 
-def test_git_calls_records_a_read_only_clients_processes_but_not_what_it_refuses(
+def test_git_calls_records_a_read_only_clients_processes(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
     git = ReadOnlyGit(repo.directory)
-    git.run("log", "-1")
-    with pytest.raises(ReadOnlyError):
-        git.run("commit", "--allow-empty", "-m", "x")
+    git.resolve("HEAD")
+    with CatFile(git) as cat_file:
+        cat_file.resolve("HEAD")
 
-    assert git_calls == [["log", "-1"]]
+    assert git_calls == [["cat-file", "--batch-check"], ["cat-file", "--batch-command"]]
 
 
 def test_git_calls_records_no_process_a_stopping_client_doesnt_start(
@@ -330,8 +329,8 @@ def test_git_calls_records_no_process_a_stopping_client_doesnt_start(
         git.run("log", "-1")
     with CatFile(git) as cat_file, pytest.raises(NotStartedError):
         cat_file.resolve("HEAD")
-    with pytest.raises(ReadOnlyError):  # not NotStartedError: a programming error
-        ReadOnlyGit(repo.directory, stopping=lambda: True).run("commit", "-m", "x")
+    with pytest.raises(NotStartedError):
+        ReadOnlyGit(repo.directory, stopping=lambda: True).resolve("HEAD")
 
     assert git_calls == []
 
@@ -650,19 +649,21 @@ def test_a_build_that_fails_leaves_nothing_behind(repo_templates: RepoTemplates)
             repo_templates.build("fails", fails)
 
 
-def test_a_fake_gits_read_only_one_refuses_what_writes_and_records_what_it_runs() -> None:
-    git = FakeGit()
-    git.respond([])
+def test_a_fake_gits_read_only_one_answers_from_its_responses_and_records_in_its_calls() -> None:
+    git = FakeGit(object_id_length=40, timeout=3)
+    git.respond(["var"], stdout="A U Thor <a@example.com> 1 +0000\n")
+    git.respond(["rev-parse"], stdout="sub/\n../\ntrue\n/r/.git\n/r/.git\n")
     reader = git.read_only()
 
-    reader.run("log", "-1")
-    with pytest.raises(ReadOnlyError):
-        reader.run("commit", "-m", "x")
-    with pytest.raises(ReadOnlyError):
-        reader.run("log", env={"GIT_DIR": "elsewhere"})
-    git.run("commit", "-m", "x")  # the fake itself still runs anything
-
-    assert git.commands == [["log", "-1"], ["commit", "-m", "x"]]
+    assert reader.var("GIT_AUTHOR_IDENT") == "A U Thor <a@example.com> 1 +0000"
+    assert reader.prefix() == "sub/"
+    assert (git.cdup(), reader.timeout) == ("../", 3)  # what the reader was told
+    assert not isinstance(reader, FakeGit)
+    assert git.commands == [
+        ["var", "GIT_AUTHOR_IDENT"],
+        ["rev-parse", "--path-format=absolute", "--show-prefix", "--show-cdup"]
+        + ["--is-inside-work-tree", "--git-dir", "--git-common-dir"],
+    ]
 
 
 def test_fake_git_answers_from_its_responses_and_records_each_command() -> None:

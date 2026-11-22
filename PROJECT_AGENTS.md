@@ -6,12 +6,13 @@ the shape of the code or a rule here changes.
 
 ## Shape of the code
 
-- `src/git_client/client.py`: `ReadOnlyGit`, which runs every git process (only commands that
-  read), `Git`, which extends it to run any, and `find_git`; and `Memory`, what git told a
-  client (and its `read_only()` copies) about where things are, which one `rev-parse` asks
-  while any is unknown (`where_questions`, `read_where`, `ask_where`), with when git told
-  it, for `remember_for` and `forget()`.
-- `src/git_client/reading.py`: which commands only read, which a ReadOnlyGit runs.
+- `src/git_client/client.py`: `ReadOnlyGit`, which offers only the library's reads (commands
+  it fixes), `Git`, which extends it with the commands of the caller's (`run`, `process`,
+  ...), and `find_git`; `start_process` and `start_popen`, where every git process starts,
+  and `read_process`, `read_popen` and `read_output`, which the reads run through; and
+  `Memory`, what git told a client (and its `read_only()` copies) about where things are,
+  which one `rev-parse` asks while any is unknown (`where_questions`, `read_where`,
+  `ask_where`), with when git told it, for `remember_for` and `forget()`.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
@@ -58,11 +59,18 @@ the shape of the code or a rule here changes.
   saying what a tool must change for it (e.g. an override's new signature). Before
   `dev.py release`, a PR puts the date in place of "unreleased"; the release's PR to the next
   version adds that version's section.
-- **Every git process starts through `ReadOnlyGit`** (`process`, or `popen` for one that
-  answers requests; `Git` inherits both), so the way git is started stays the quickest each
-  system allows, a ReadOnlyGit refuses what could write, a client whose `stopping` says
-  so starts nothing (`FakeGit` and `git_calls` replace both, so they ask too). Never pass
-  a working directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
+- **A ReadOnlyGit offers no command of the caller's**: it can't be asked to write because it
+  takes no command line, not because the library judges one. A function that takes a
+  ReadOnlyGit runs only commands the library fixes, through `read_process`, `read_popen` or
+  `read_output` (a ReadOnlyGit's private `_process` and `_popen`, which on a Git call its
+  public `process` and `popen`, so a subclass's override sees every process); one that runs
+  a command it's given takes a Git.
+- **Every git process starts in `start_process`** (or `start_popen` for one that answers
+  requests), which `Git.process`, `Git.popen` and a ReadOnlyGit's reads call, so the way git
+  is started stays the quickest each system allows, a client whose `stopping` says so starts
+  nothing, and `git_calls` (which wraps both) sees every process (`FakeGit` replaces
+  `process` and `popen`, and asks `stopping` too). Never pass a working directory (`cwd=`):
+  it keeps Python from using `posix_spawn`; use `-C`.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.

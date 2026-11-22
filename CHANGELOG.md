@@ -8,6 +8,21 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- A `ReadOnlyGit` runs no command of the caller's: `run`, `run_bytes`, `ok`, `succeeds`,
+  `passthrough`, `process`, `popen`, `command` and `environment` are `Git`'s alone. It offers
+  the library's reads, each a command the library fixes: `resolve`, `var`, `prefix()`,
+  `cdup()`, `object_id_length()`, and `refs`, `config`, `git_paths`, `git_paths_and_head`,
+  `git_dir`, `git_common_dir` and `CatFile`, which take one. A tool that ran a command through
+  a `ReadOnlyGit` (e.g. `reader.run("log", ...)`) runs it through a `Git`; a type checker
+  flags each such call (#70).
+- `ReadOnlyError` is gone: nothing is refused any more, so a tool drops its `except
+  ReadOnlyError`, and a `ReadOnlyGit` takes any `env`, as a `Git` does (#70).
+- `process` and `popen` are `Git`'s, so a tool (or its tests) that patched
+  `ReadOnlyGit.process` or `ReadOnlyGit.popen` to count or time git's processes, as
+  git-stack's test hook does, patches `Git.process` and `Git.popen`, which every process of a
+  `Git` (and of a subclass that doesn't override them), the library's reads' too, starts
+  through, but not a `ReadOnlyGit`'s; or, in tests, uses `git_calls`, which counts every
+  process of every client (#70).
 - `patch_ids` takes a `Git`, not a `ReadOnlyGit`: it runs whatever commands it's given, which
   a function that takes a read-only client mustn't. Given a read-only client (a `ReadOnlyGit`,
   or a `Git`'s `read_only()`), it raises `TypeError`, running nothing. A tool that passed one
@@ -111,13 +126,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   a diff and a log give a change the same id whatever `diff.renames`, `diff.context`,
   `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones
   git gives by default (#55).
-- A `ReadOnlyGit` keeps what the repository's config or the tool's environment tells git to run
-  from writing: its `log`, `show` and `blame` run with `--no-textconv` (a textconv whose driver
-  has `cachetextconv` wrote its cache), so a file a textconv showed shows as git's own diff;
-  every command but `config` runs with `-c core.fsmonitor=false -c diff.submodule=short`, so
-  whatever a repository's `diff.submodule` (`log` or `diff`) says, `log -p` and `show` show a
-  submodule's change as its commits' ids. It refuses `range-diff`, `--textconv`, `status -v`,
-  `--ext-diff` and `--submodule=diff`; a tool that needs them uses a `Git` (#55).
 - An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
   `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor
   remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
@@ -169,18 +177,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
   `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
   with several values unset without the one to remove), which raise nothing (#61).
-- `MissingObjectError`, for an object a partial clone lacks and couldn't fetch: a tool that
-  reads through a `ReadOnlyGit` can catch it and try again with a `Git` (#55). It needs git
-  2.39 (and a `ReadOnlyGit` fetches nothing only from 2.45, and in 2.39.4 to 2.44.1) (#52).
-- `ReadOnlyGit.read_only()`: a `Git`'s copy that refuses what a `ReadOnlyGit` refuses, of the
-  client's own class (a subclass's `process` still runs), sharing what git told the client
-  about where things are, for a tool's paths that never write (#55).
-- `FakeGit().read_only()` refuses what a `ReadOnlyGit` refuses, while sharing the fake's
-  responses and `calls`, so a unit test can check that code stays read-only (#55).
-- A `ReadOnlyGit` runs more reads: `config` with options before its action (`--global`,
-  `-f <file>`, `--type=bool`, `--default`, `-z`, ...) or with a lone key, `branch
-  --show-current`, `symbolic-ref --quiet --short <name>`, `remote` and `remote get-url`
-  (#55).
+- `MissingObjectError`, for an object a partial clone lacks and couldn't fetch (#55). It
+  needs git 2.39 (#52).
+- `Git.read_only()`: a `ReadOnlyGit` (not a `Git`, nor of the client's class, so a
+  subclass's own `process` doesn't see its processes) with the client's settings, sharing
+  what git told the client about where things are, for a tool's paths that only read; a
+  `ReadOnlyGit`'s gives itself (#55, #70).
+- `FakeGit().read_only()`: a `ReadOnlyGit` that answers from the fake's responses and records
+  in its `calls`, for a unit test of code that only reads (#55, #70).
+- A `ReadOnlyGit`'s reads run with `-c core.fsmonitor=false` (but `config()`'s), so no
+  `core.fsmonitor` hook runs as git reads the index for a name such as `:path` (in
+  `resolve` and `CatFile`); `git_calls` records the command without it (#55, #70).
 - `Git(process_groups=False)`, and `ReadOnlyGit`'s and `FakeGit`'s: git never gets a
   process group of its own, so a command with a timeout starts faster without a terminal,
   but what git started isn't stopped with it (#52).

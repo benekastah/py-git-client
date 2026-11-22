@@ -256,87 +256,48 @@ can't, so give a worker process a client of its own.
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
-arguments as `Git`, and runs only commands that read. Anything else raises `ReadOnlyError`
-before git starts. `Git` extends it, so a function that only reads can take a `ReadOnlyGit`,
-and be given either; `CatFile`, `config`, `refs` and `git_paths` do. A parameter typed
-`ReadOnlyGit` says what the function asks of git, not that the client can't write: the
-promise is the client's, so make a `ReadOnlyGit` to have it. `patch_ids` runs the commands it's
-given, so it takes a `Git`, and raises `TypeError` for a read-only client.
+arguments as `Git`, and offers the library's reads alone, each a command the library fixes:
+`resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
+one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
+`CatFile`. It has no way to run a command of the caller's: no `run`, `run_bytes`, `ok`,
+`succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
+write: the library doesn't try to tell from a command line whether git would write (that's
+git's to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends
+it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
+flags a call of `run` on one. A tool that reads with other commands (`log`, `status`,
+`diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a
+`Git`, and raises `TypeError` for a `ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
-reader.run("log", "-1", "--format=%s")
-reader.run("status", "--porcelain")  # with GIT_OPTIONAL_LOCKS=0, so it doesn't write the index
+reader.resolve("HEAD")
 refs(reader, "refs/heads/")
-try:
-    reader.run("commit", "-m", "never")
-except ReadOnlyError:
-    pass
+with CatFile(reader) as cat_file:
+    cat_file.resolve("main@{upstream}")
 ```
 
 A tool with a `Git` for the commands that write gives the paths that only read its
-`read_only()`: a copy of the client, as it is then, that refuses what a `ReadOnlyGit` refuses.
-It's of the client's own class, so a subclass's own `process` and other methods still run, and
-it shares what git told the client about where things are (`prefix()`, `cdup()`,
+`read_only()`: a `ReadOnlyGit` (not a `Git`) with the client's settings as they are then,
+which shares what git told the client about where things are (`prefix()`, `cdup()`,
 `object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`; see "What a client
-remembers"). It raises `ReadOnlyError` if the client's `env` holds a variable a
-`ReadOnlyGit` doesn't take.
+remembers"). A `Git` subclass that overrides `process` and `popen` (e.g. to time each) sees
+every process the client starts, the library's reads' too; but `read_only()` gives a plain
+`ReadOnlyGit`, not of the client's class, whose processes it doesn't see: a tool that times
+every process gives its reads the `Git` itself.
 
 ```python
 git = Git("path/to/repo")
 refs(git.read_only(), "refs/heads/")
 ```
 
-It runs `blame`, `cat-file`, `check-attr`, `check-ignore`, `check-ref-format`, `count-objects`,
-`describe`, `diff-files`, `diff-index`, `diff-tree`, `for-each-ref`, `log`, `ls-files`,
-`ls-tree`, `merge-base`, `name-rev`, `patch-id`, `rev-list`, `rev-parse`, `shortlog`, `show`,
-`show-ref`, `status`, `var`, `config` with an action that reads (`--get`, `--list`, `get`, ...)
-or a lone key, after options that say which files it reads and how it gives values (`--global`,
-`-f <file>`, `--type=bool`, `--default <value>`, `-z`, ...), `branch --show-current`,
-`symbolic-ref` naming one ref (`--quiet`, `--short`), `remote` (`-v`), `remote get-url` and
-`worktree list`. It doesn't run `diff`, which writes the index when it compares the worktree
-(`diff-index`, `diff-files` and `diff-tree` don't), `range-diff`, whose log runs a textconv
-whatever it's told, `merge-tree`, which writes the merge's objects (with `--quiet`, from git
-2.50, still those of the merge it makes of several merge bases), nor `ls-remote`, which runs
-ssh or credential helpers that may store what they're given. It doesn't take options that write:
-`--output`, describe's `--dirty` and `--broken`, `--textconv` and status's `-v` (a textconv's
-cache), `--ext-diff`, and `--submodule=diff` (which runs a `git diff` in each submodule, which
-does all of that). It checks every argument, after `--` too (which can be another option's
-value), and `config`'s action must come first. Of git's options before the command, it takes
-only those that name no config, repository or program (e.g. `--no-pager`, not `-c`), and `env`
-may set only the locale, `TZ`, and which index and paths git reads (e.g. `GIT_INDEX_FILE`).
-
-What it runs, it runs so that what the repository's config or the tool's environment tells
-git to run doesn't write:
-
-- `log`, `show` and `blame` get `--no-textconv`: a diff driver's textconv with
-  `cachetextconv` writes its cache (`refs/notes/textconv/<driver>`). They show git's own diff
-  of a file a textconv would show otherwise.
-- Every command but `config` gets `-c core.fsmonitor=false -c diff.submodule=short`, which
-  win over the config git inherits too, so no `core.fsmonitor` hook runs, and
-  `diff.submodule` can't ask for a submodule's `git diff`: `log -p` and `show` show a
-  submodule's change as its commits' ids, whatever `diff.submodule` (`log` or `diff`) says.
-- `GIT_OPTIONAL_LOCKS=0`, so `status` doesn't write the index.
-- `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't fetched (git before
-  2.45 ignores it, but for the security releases 2.39.4 to 2.44.1), and a command that needs
-  one fails. The commands that read a blob's content to diff or search it (`log -p`, `show
-  <commit>`, `diff-tree -p`, `log --stat`, ...) raise `MissingObjectError`, which a tool can
-  catch to try again with a `Git`. Those given a blob's name don't: `show <rev>:<path>` and
-  `cat-file -p` raise `UnknownRevisionError`, `cat-file blob` and `cat-file -s` a plain
-  `GitError`, and `blame` says the path isn't there (a plain `GitError`). `ls-tree -l`
-  succeeds, with `BAD` as the blob's size. And cat-file's batch modes say only that the
-  object is missing, as of a name that names nothing: `resolve` and `CatFile` give None for
-  it (and `verify` and `read` raise `UnknownRevisionError`).
-
-What git still runs can write: a filter (git-lfs's smudge, run by `cat-file --filters`, or its
-clean, which `status` runs on a file whose stat information changed), a merge driver
-(`merge.<driver>.driver`, which `log --remerge-diff` runs, as does `log -m` under
-`log.diffMerges=remerge`), the program `gpg.program` or `gpg.ssh.program` names (`log
---show-signature`, or `log.showSignature`), and, through `passthrough`, the pager. The rest of
-the tool's environment reaches git as it is: `GIT_DIR` (which a `Git` follows too),
-`GIT_TRACE*` (which write where they name), `GIT_EXTERNAL_DIFF` (which git runs only for
-`--ext-diff`, and in a submodule's `git diff`, both refused), and config from
-`GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_COUNT`, which can't get past the above.
+A `ReadOnlyGit`'s git gets `GIT_NO_LAZY_FETCH=1`, so in a partial clone a missing object isn't
+fetched (git before 2.45 ignores it, but for the security releases 2.39.4 to 2.44.1):
+`resolve` and `CatFile` take it as a name that names nothing (None, and `verify` and `read`
+raise `UnknownRevisionError`). It also gets `GIT_OPTIONAL_LOCKS=0`, and `-c
+core.fsmonitor=false` before each command but `config --list`, so no `core.fsmonitor` hook
+runs as git reads the index for a name such as `:path`. They keep its reads from writing; they
+aren't a promise that git writes nothing: the tool's environment reaches git as it is (e.g.
+`GIT_TRACE*`, which write where they name).
 
 ### Errors
 
@@ -351,7 +312,7 @@ said and raises a subclass:
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
 | `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_configs` does). |
-| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. From a `ReadOnlyGit`, which fetches none, try again with a `Git`. From a `Git`, the promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
+| `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. The promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
 | `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
@@ -359,10 +320,10 @@ said and raises a subclass:
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
 `succeeds` and `passthrough` say whether git succeeded instead (exit status 0, not any
-other). They still raise when git gives no answer: `GitTimeoutError` past a timeout, an
-`OSError` if git can't be started, and a `ReadOnlyGit`'s `ReadOnlyError` for a command it
-refuses. Use `succeeds` where any failure of git's means no, and `ok` where a failure other
-than git's no should be reported.
+other). They still raise when git gives no answer: `GitTimeoutError` past a timeout,
+`NotStartedError` once `stopping` says so, and an `OSError` if git can't be started. Use
+`succeeds` where any failure of git's means no, and `ok` where a failure other than git's no
+should be reported.
 
 When git gives no answer, every call raises a `NoAnswerError`, which isn't a `GitError`, so
 `except GitError` never takes "git didn't answer" for "git said no" (catch
@@ -447,11 +408,12 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
   ```python
   os.environ["MY_TOOL_GIT"] = real_git()
   ```
-- **`git_calls`**: each git process a `Git` or `ReadOnlyGit` starts during the test, while
-  real git runs, to count a tool's processes or check the ones it starts. It leaves out the
-  plugin's own, building and copying templates, whatever order the fixtures come in. Each is
-  a `GitCall`: git's arguments, as a list (equal to a plain list of them), and in `program`
-  the git it ran, e.g. to check that your tool's variable is honored:
+- **`git_calls`**: each git process any client (a `Git`, a `ReadOnlyGit`, or a subclass of
+  either) starts during the test, while real git runs, to count a tool's processes or check
+  the ones it starts. It leaves out the plugin's own, building and copying templates, whatever
+  order the fixtures come in. Each is a `GitCall`: git's arguments as the client was given
+  them, as a list (equal to a plain list of them), and in `program` the git it ran, e.g. to
+  check that your tool's variable is honored:
 
   ```python
   def test_status_takes_one_process(clone: Git, git_calls: list[GitCall]) -> None:
@@ -489,9 +451,8 @@ without one, `timed out` for a `GitTimeoutError`, `not started` for a `NotStarte
   assert git.commands[-1] == ["push", "origin", "main"]
   ```
 
-  For code that only reads, give it the fake's `read_only()`: it shares the fake's responses
-  and records in its `calls`, but raises `ReadOnlyError` for what a `ReadOnlyGit` refuses, so
-  the test fails if the code writes.
+  For code that only reads, give it the fake's `read_only()`: a `ReadOnlyGit` that answers
+  from the fake's responses and records in its `calls`, and offers no command of the caller's.
 
   If your code takes your own subclass of `Git`, fake it with a class that puts yours first,
   so `FakeGit` stands where `Git` was beneath it: your methods, and your own `process` (which

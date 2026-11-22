@@ -26,7 +26,6 @@ from git_client import (
     NoAnswerError,
     NotARepositoryError,
     NotStartedError,
-    ReadOnlyError,
     ReadOnlyGit,
     UnknownRevisionError,
     decode,
@@ -356,16 +355,6 @@ def test_stopping_starts_no_cat_file_but_leaves_a_running_one(repo: Git) -> None
             new.resolve("HEAD")
 
 
-def test_a_stopping_read_only_git_still_refuses_what_it_wont_run(repo: Git) -> None:
-    # A programming error, which a tool's shutdown mustn't pass off as stopping.
-    git = ReadOnlyGit(repo.directory, stopping=lambda: True)
-
-    with pytest.raises(ReadOnlyError):
-        git.run("commit", "--allow-empty", "-m", "x")
-    with pytest.raises(ReadOnlyError):
-        git.popen("commit", "--allow-empty", "-m", "x")
-
-
 def test_resolve_gives_the_object_a_name_names_or_none(repo: Git) -> None:
     assert repo.resolve("main") == repo.run("rev-parse", "HEAD")
     assert repo.resolve("no-such-branch") is None
@@ -529,7 +518,7 @@ def test_succeeds_answers_yes_for_exit_0_and_no_for_any_other(
     assert not repo.succeeds("config", "--get", "no.such-key")  # exit 1
     assert not repo.succeeds("merge-base", "--is-ancestor", "no-such-branch", "HEAD")  # 128
     assert capfd.readouterr() == ("", "")  # git's output, and its fatal: line, discarded
-    assert not ReadOnlyGit(tmp_path / "no-such-directory").succeeds("status")
+    assert not Git(tmp_path / "no-such-directory").succeeds("status")
 
 
 def locked_config(repo: Git) -> Path:
@@ -1024,12 +1013,12 @@ def test_object_id_length_asks_git_once_for_threads_asking_at_once(
         """Takes long enough to answer that the threads all ask before it does, and fails the
         first time."""
 
-        def run(self, *args: Arg, **kwargs: Any) -> str:
+        def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
             time.sleep(0.05)
             if failures:
                 failures.pop()
                 raise GitError(args, 1, "failed")
-            return super().run(*args, **kwargs)
+            return super().process(*args, **kwargs)
 
     git = SlowGit(repo.directory)
 
