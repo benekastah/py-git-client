@@ -8,254 +8,190 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
-- A `ReadOnlyGit` has no public way to run a command of the caller's: `run`, `run_bytes`, `ok`,
-  `succeeds`, `passthrough`, `process`, `popen`, `command` and `environment` are `Git`'s alone. It
-  offers the library's reads, each a command the library fixes: `resolve`, `var`, `prefix()`,
-  `cdup()`, `object_id_length()`, and `refs`, `config`, `git_paths`, `git_paths_and_head`,
-  `git_dir`, `git_common_dir` and `CatFile`, which take one. A tool that ran a command through a
-  `ReadOnlyGit` (e.g. `reader.run("log", ...)`) runs it through a `Git`; a type checker flags each
-  such call (#70).
-- `ReadOnlyError` is gone: nothing is refused any more, so a tool drops its `except
-  ReadOnlyError`, and a `ReadOnlyGit` takes any `env`, as a `Git` does (#70).
-- `process` and `popen` are `Git`'s, so a tool (or its tests) that patched
-  `ReadOnlyGit.process` or `ReadOnlyGit.popen` to count or time git's processes, as
-  git-stack's test hook does, patches `Git.process` and `Git.popen`, which every process of a
-  `Git` (and of a subclass that doesn't override them), the library's reads' too, starts
-  through, but not a `ReadOnlyGit`'s; or, in tests, uses `git_calls`, which counts every
-  process of every client (#70).
-- On a `Git`, the library's reads (`config`, `refs`, `git_paths`, `git_paths_and_head`,
-  `git_dir`, `git_common_dir`, `prefix()`, `cdup()`, `object_id_length()`) start git through
-  its `process`, as `resolve`, `var` and `CatFile` (through `popen`) did, no longer through
-  `run` or `run_bytes`: a subclass that overrode `run` or `run_bytes` to observe or change
-  them overrides `process` and `popen` instead (#70).
-- `patch_ids` takes a `Git`, not a `ReadOnlyGit`: it runs whatever commands it's given, which
-  a function that takes a read-only client mustn't. Given a read-only client (a `ReadOnlyGit`,
-  or a `Git`'s `read_only()`), it raises `TypeError`, running nothing. A tool that passed one
-  passes its `Git` (#68).
-- `patch_ids` runs each command as it's given (with its pinned options), as 0.0.2 did: a
-  `diff` of two revisions runs as `git diff`, no longer as `git diff-tree -p`, which failed
-  for what `git diff` takes and `diff-tree` doesn't (two blobs' ids, or two paths without
-  `--`). A tool that ran such a diff through a `ReadOnlyGit` (which refuses `diff`), or whose
-  `FakeGit` answers `diff-tree` for it, passes `["diff-tree", "-p", a, b]` itself, to
-  `patch_ids` with its `Git`: of two trees, it gives the same ids as `["diff", a, b]`,
-  renames, mode changes, binary files and a merge against its parents too (#68).
-- `git_common_dir(directory)` takes a client (`Git` or `ReadOnlyGit`), not a directory, and
-  runs git, where it read the repository's files: `git_common_dir("path/to/repo")` becomes
-  `git_common_dir(git)`, asked (`--git-common-dir`, with `git_dir`'s `--git-dir`) in the
-  `rev-parse` that `prefix()`, `git_paths` and `git_paths_and_head` run, so it costs no
-  process once any of them has run, nor they once it has (a `FakeGit` answering it gives the
-  lines the `cdup()` entry below lists), and remembered per client and location, as they
-  are. It raises `NotARepositoryError` where it returned None, and gives a subdirectory's
-  repository, as git does, where it gave None. As git does, it follows `GIT_DIR`,
-  `GIT_COMMON_DIR` and `GIT_WORK_TREE`, from the client's `env` and the process's
-  environment, which it ignored: a tool run from a git hook (where git sets `GIT_DIR`) that
-  asks of another repository removes them from `os.environ` first (a client's `env` can set
-  a variable, not remove one), or gets the hook's repository (#65, #69).
-- `config_key` is gone: it redid in Python git's reading of a key (and gave a key that isn't
-  one back unchanged, so a lookup found nothing where git says "key does not contain a
-  section"). `config()`'s keys are exactly what `git config --list -z` prints: section and
-  name in lower case, the subsection as written. A lookup must use that form: one written
-  in camelCase, as `config(git).get("init.defaultBranch")`, now finds nothing, with no
-  error; write `"init.defaultbranch"` (`branch.Topic.pushremote` keeps `Topic`). So a tool
-  that dropped `config_key` lower-cases the section and name of each key (keeping the
-  subsection) before it looks it up in `config()`'s result, or writes its constant keys that
-  way (e.g. `f"branch.{name}.pushremote"`). Two tools must: git-stack, which calls
-  `config_key` in `git_stack/git.py` and looks up `stack.perfLog`, `stack.perfLogMaxBytes`
-  and `core.sshCommand`, and move-forward, whose `RepoConfig.get` is given camelCase keys.
-  For a key a user typed, a tool runs `git config --get <key>` (one process; `git config
-  get` from git 2.46): git takes the key however it's written and canonicalizes it itself.
-  It exits 1 both for a key that isn't set and for one that isn't a key (`nosection`, `a.b
-  c`), saying why only on stderr (e.g. "key does not contain a section"), so a tool that reads
-  exit 1 as "not set" reads a mistyped key as unset: one that must tell them apart checks
-  stderr (#67).
-- `object_id_length()` is only ever git's answer (`rev-parse --show-object-format`), never
-  the length of an id git printed, which in a SHA-256 repository with
-  `extensions.compatObjectFormat=sha1` can be a SHA-1 id. The `rev-parse` of `prefix()`,
-  `git_paths` and `git_paths_and_head` asks it too while it isn't known, so it usually costs
-  no process: a `FakeGit` answering them gives the lines the `cdup()` entry below lists, or
-  is made with `object_id_length=40`, which asks no format (#67).
-- `ReadOnlyGit.cdup()` gives the path up to the top of the worktree, as `git rev-parse
-  --show-cdup` prints it, where a tool built it from the prefix (`"../" *
-  prefix().count("/")`, which outside a worktree git knows the top of is wrong). It's asked
-  with `prefix()`. The `rev-parse` that `prefix()`, `git_paths`, `git_paths_and_head`,
-  `git_dir` and `git_common_dir` run starts `rev-parse --path-format=absolute`, then asks
-  what isn't known yet: `--show-prefix --show-cdup --is-inside-work-tree` while the prefix
-  isn't, `--show-object-format` while the object id length isn't, then `--git-dir
-  --git-common-dir` while the git directories aren't. A `FakeGit` answering it gives, in
-  this order: the prefix's line (empty at the top), the cdup's (none at all where git knows
-  no worktree: a bare repository, a git directory), `true` or `false`, `sha1` or `sha256`,
-  the git directory and the common one (absolute paths); then the paths and HEAD (none
-  where git exits 1 for an unborn branch, or 0 saying "refname 'HEAD' is ambiguous"). Where
-  a path holds a newline, so that the lines can't be told apart, each question is asked
-  alone. One still answering the old way (without the git directories, or the prefix's line
-  alone) gets too few lines: `ValueError: rev-parse printed N lines, too few for M` (#67,
-  #69).
-- `Git.write_config` is now `Git.write_configs`, which takes changes, not `git config`'s
-  arguments, and returns what each did (a list of `ConfigResult`), not git's output:
+- A `ReadOnlyGit` offers only the library's reads, each a command the library fixes:
+  `resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and `refs`, `config`,
+  `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and `CatFile`, which take one.
+  `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process`, `popen`, `command` and
+  `environment` are `Git`'s alone: a tool that ran a command through a `ReadOnlyGit` (e.g.
+  `reader.run("log", ...)`) runs it through a `Git`. A type checker flags each such call (#70).
+- `ReadOnlyError` is gone, as nothing is refused: a tool drops its `except ReadOnlyError`. A
+  `ReadOnlyGit` takes any `env`, as a `Git` does (#70).
+- A tool (or its tests) that patched `ReadOnlyGit.process` or `popen` to count or time git's
+  processes, as git-stack's tests do, patches `Git.process` and `Git.popen`, or in tests uses
+  `git_calls`, which sees every client's. Every process of a `Git` starts through them, the
+  library's reads' too (`config`, `refs`, `git_paths`, `prefix()`, `object_id_length()`, ...),
+  which went through `run` or `run_bytes`: a subclass that overrode those to see the reads
+  overrides `process` and `popen` instead. A `ReadOnlyGit`'s processes (a `read_only()`'s too)
+  go through neither (#70).
+- `patch_ids` takes a `Git`, not a `ReadOnlyGit`, as it runs whatever commands it's given.
+  Given a `ReadOnlyGit` (e.g. a `Git`'s `read_only()`), it raises `TypeError`, running nothing
+  (#68).
+- `patch_ids` gives every command `-M -U3 --inter-hunk-context=0 --diff-algorithm=myers
+  --submodule=short`, and `log` and `show` `--root`, so `diff.renames`, `diff.context`,
+  `diff.interHunkContext`, `diff.algorithm`, `diff.submodule` and `log.showRoot` no longer
+  change its ids: under such config, its ids become those git gives by default (a commit that
+  only moves a submodule, or a root commit, is no longer dropped). A `FakeGit` test that checks
+  its exact commands sees the new options (#52, #55).
+- `git_common_dir` takes a client, not a directory, and asks git, where it read the
+  repository's files: `git_common_dir("path/to/repo")` becomes
+  `git_common_dir(Git("path/to/repo"))`. It raises `NotARepositoryError` where it returned
+  None, finds a subdirectory's repository, and follows `GIT_DIR`, `GIT_COMMON_DIR` and
+  `GIT_WORK_TREE` (the client's `env`'s and `os.environ`'s), as git does: a tool run from a git
+  hook (whose environment can name the hook's repository) that asks of another repository
+  removes them from `os.environ` first (#65, #69).
+- `config_key` is gone. `config()`'s keys are exactly what `git config --list -z` prints:
+  section and name in lower case, the subsection as written. So `config(git).get(
+  "init.defaultBranch")` finds nothing, with no error: a tool looks up `"init.defaultbranch"`
+  (`branch.Topic.pushremote` keeps `Topic`), lower-casing the section and name of each key it
+  looks up, or writing its constant keys that way. git-stack (`config_key` in
+  `git_stack/git.py`, for `stack.perfLog`, `stack.perfLogMaxBytes` and `core.sshCommand`) and
+  move-forward (`RepoConfig.get`, given camelCase keys) must. For a key a user typed, a tool
+  runs `git config --get <key>`, which takes it in any case; it exits 1 both for a key that
+  isn't set and for one that isn't valid, which it says only on stderr (#67).
+- `Git.write_config` is `Git.write_configs`, which takes changes, not `git config`'s
+  arguments, and returns a `ConfigResult` for each, not git's output:
   `git.write_config("k", "v")` becomes `git.write_configs(ConfigSet("k", "v"))`, and
-  `git.write_config("--unset", k)` becomes `git.write_configs(ConfigUnset(k))`: where git
-  failed with exit 5, its result says so, rather than raise, as `NOT_FOUND` for a key that
-  isn't set, and `SEVERAL_VALUES` for one with several values (`ConfigUnset(k, v)` removes
-  only the value `v`, as `--unset --fixed-value`, and a key with no value whatever `v` says,
-  as git does from 2.46.1, where older git crashes). Other `git config` writes (`--add`,
-  `--rename-section`, `--worktree`, ...) go through `git.run("config", ...)`, which doesn't
-  try again while the file is locked (#61).
-- `ReadOnlyGit.prefix()`, `object_id_length()` and `git_paths` (except "hooks" and what's
-  under it) ask git once per client, directory and `env`, and remember the answer: a tool
-  that cached them itself can drop its cache (and its cdup is `cdup()`'s, remembered with
-  the prefix). `git_paths` learns `prefix()` in its own process: a `FakeGit` answering it
-  gives the lines #67's `cdup()` entry above lists. A repository moved or replaced under a
-  client that keeps its directory isn't noticed, unless the client's `remember_for` has
-  passed or `forget()` was called (see "Added") (#50, #69).
-- A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`
-  where it raised a plain `GitError`, from `run` and the like, and from `CatFile.verify` and
-  `CatFile.read`: `except GitError` still catches it, but a test of `type(error) is
-  GitError` no longer holds, and a tool that told it apart by git's message can catch
-  `WrongTypeError` instead (#50).
-- An object git finds damaged as it reads a name (e.g. a corrupt loose object) raises
-  `CorruptObjectError` from `CatFile`, where the name resolved to None (or `verify` and
-  `read` raised `UnknownRevisionError`): a missing name is still None. `run` and the like
-  raise it too, for git's own words of a corrupt object, where they raised a plain
-  `GitError` (#50).
-- `CatFile.verify` (and `read`) word a name cat-file says only "<name> missing" of as
-  rev-parse does, `fatal: bad revision '<name>'`, adding ": git exited without saying why"
-  where cat-file exited saying nothing: a tool that compared `stderr` with
-  `f"{name} missing"` (as git-recommit does) tests `reason == ""` instead (#53).
-- A `CatFile` whose client has a `timeout` holds each request to it: one its process doesn't
-  answer in time (e.g. waiting on a lazy fetch in a partial clone) kills the process and
-  raises `GitTimeoutError` (a `NoAnswerError`, which `except GitError` doesn't catch), where
-  it waited as long as it took. Its `stderr` is what git said of the request, and a note
-  names the request. A tool whose requests may take longer gives its CatFile a client with a
-  longer timeout, or none (#53).
-- `patch_ids` runs every command with `-M -U3 --inter-hunk-context=0 --diff-algorithm=myers`, so
-  a diff and a log give a change the same id whatever `diff.renames`, `diff.context`,
-  `diff.interHunkContext` or `diff.algorithm` say: under such config its ids change to the ones
-  git gives by default (#55).
-- An object a partial clone lacks and couldn't fetch raises `MissingObjectError` (a
-  `GitError`), from `run` and the like, `resolve` and `CatFile`: a `Git` whose promisor
-  remote can't be reached raised `RemoteError` from `run`, and a plain `GitError` (or None)
-  from `resolve` and `CatFile`. A tool that catches `RemoteError` around a partial clone's
-  commands (e.g. a `checkout` that needs a blob) catches `MissingObjectError` too (#55).
-  Only with git 2.39 and newer, which says which object it couldn't fetch: older git's
-  failure raises `RemoteError` from `run`, as before (#52).
-
-- `object_id_length()`: threads that ask at once wait for one git's answer, where each could
-  start its own (#54).
-- `Git.resolve` takes one process for every name, where a name `git cat-file` exits on (e.g.
-  `main@{upstream}` with no upstream) took a second, a `rev-parse`: it sends cat-file a name
-  of all zeros first, as `CatFile` does, so a `FakeGit` answering `cat-file --batch-check`
-  prints `0000000000000000000000000000000000000000 missing` as its first line (else resolve
-  raises `GitError`, rather than give None). It raises `CorruptObjectError` for a damaged
-  object cat-file reads for the name, as `CatFile.resolve` does, where it gave None for a
-  loose one (#54).
-- `GitTimeoutError` and `NotStartedError` are no longer `GitError`s, but `NoAnswerError`s,
-  so `except GitError` no longer takes "git didn't answer" for "git said no" (e.g. a
-  timed-out `git rev-parse @{upstream}` read as "no upstream", or a hang as defaults). Their
-  attributes and messages are as before. A tool that catches `GitError` to handle git's no
-  needs no change, and now lets these through; one that catches it to report any failure
-  (e.g. at its top level) catches `(GitError, NoAnswerError)`; and one that caught
-  `GitTimeoutError` or `NotStartedError` by name still does (#54).
+  `git.write_config("--unset", "k")` becomes `git.write_configs(ConfigUnset("k"))`, which
+  returns `NOT_FOUND` (or `SEVERAL_VALUES`) where git exits 5, rather than raise. Raw
+  arguments raise `TypeError`, making no change. Other writes (`--add`, `--rename-section`,
+  ...) go through `git.run("config", ...)`, which doesn't try again while the file is locked
+  (#61, #64).
+- `prefix()`, `cdup()`, `git_paths`, `git_paths_and_head`, `git_dir` and `git_common_dir` ask
+  git in one `rev-parse`, which tells `object_id_length()` too, so a `FakeGit` answering them
+  answers that: `rev-parse --path-format=absolute`, then whichever the client doesn't know yet
+  of `--show-prefix --show-cdup --is-inside-work-tree`, `--show-object-format` (not with
+  `object_id_length=`) and `--git-dir --git-common-dir`, then the caller's `--git-path <name>`s
+  (and `git_paths_and_head`'s `--verify --quiet --symbolic-full-name HEAD`). git prints a line
+  for each, in that order: the prefix (empty at the top), the cdup (no line at all where git
+  knows no worktree: a bare repository, a git directory), `true` or `false`, `sha1` or
+  `sha256`, the git directory and the common one (absolute), then each path, then HEAD's full
+  name (`HEAD` when detached; none for an unborn branch, where git exits 1, or where it says
+  "refname 'HEAD' is ambiguous", exiting 0). An answer short of lines raises `ValueError:
+  rev-parse printed N lines, too few for M` (#50, #67, #69).
+- `prefix()`, `cdup()`, `git_paths` (but "hooks" and what's under it), `git_dir` and
+  `git_common_dir` are asked of git once per client, directory and `env`, and remembered, as
+  `object_id_length()` is: a tool that cached them can drop its cache. A repository moved or
+  replaced under a client that keeps its directory isn't noticed, until the client's
+  `remember_for` has passed or `forget()` is called (see "Added") (#50, #69).
+- `resolve` (a `ReadOnlyGit`'s too) sends cat-file a name of all zeros first, as `CatFile`
+  does: a `FakeGit` answering `cat-file --batch-check` prints
+  `0000000000000000000000000000000000000000 missing` as its first line, or `resolve` raises
+  `GitError` (#54).
+- `GitTimeoutError` and `NotStartedError` are `NoAnswerError`s, no longer `GitError`s, so
+  `except GitError` no longer takes "git didn't answer" for "git said no" (e.g. a timed-out
+  `rev-parse @{upstream}` for "no upstream"). A tool that catches `GitError` to report any
+  failure (e.g. at its top level) catches `(GitError, NoAnswerError)`; one that catches them by
+  name needs no change (#54).
+- A name of the wrong type (e.g. a tree where git wants a commit) raises `WrongTypeError`, a
+  `GitError`, from `run` and the like and from `CatFile.verify` and `read`, where it raised a
+  plain `GitError`: `type(error) is GitError` no longer holds for it (#50).
+- An object git finds damaged (e.g. a corrupt loose object) raises `CorruptObjectError`, a
+  `GitError`: from `CatFile` and `resolve`, where its name resolved to None (or `verify` and
+  `read` raised `UnknownRevisionError`), and from `run` and the like, where it raised a plain
+  `GitError` or `UnknownRevisionError`. A missing name still resolves to None (#50, #54).
+- An object a partial clone lacks and couldn't fetch (its promisor remote unreachable, say)
+  raises `MissingObjectError`, a `GitError` (with git 2.39 and newer, which names the object),
+  from a `Git`'s `run` and the like, `resolve` and `CatFile`: where `run` raised `RemoteError`,
+  `resolve` raised it for a name git reads an object for (e.g. `HEAD:path`, `HEAD^{tree}`) but
+  gave None for a bare full id, `CatFile`'s `info` and `resolve` gave None, its `verify` raised
+  `UnknownRevisionError` and its `read` a plain `GitError`. A tool catches `MissingObjectError`
+  around those calls too (it caught `RemoteError` around `run`), and in a partial clone, its
+  `is None` checks of a `Git`'s `resolve` and `CatFile` no longer see None for such a name:
+  they get the error (#52, #55).
+- For a name cat-file says only "<name> missing" of, `CatFile.verify` and `read` raise an
+  `UnknownRevisionError` whose `stderr` is rev-parse's `fatal: bad revision '<name>'` (with
+  ": git exited without saying why" where cat-file exited), not "<name> missing": a tool that
+  compared `stderr` with `f"{name} missing"` (as git-recommit does) tests `reason == ""` (#53).
+- A `CatFile` whose client has a `timeout` holds each request to it: one not answered in time
+  (e.g. waiting on a lazy fetch in a partial clone) kills the process and raises
+  `GitTimeoutError`, where it waited as long as it took. A tool whose requests may take longer
+  gives its CatFile a client with a longer timeout, or none (#53).
+- `ObjectInfo` has `warnings`, which its equality includes: `info(name) == ObjectInfo(id,
+  type, size)` is False when git warned of the name (e.g. an ambiguous one); compare `id`,
+  `type` and `size` (#53).
 - A command whose output the library reads (`run`, `run_bytes`, `ok`, `succeeds`,
-  `process(capture_output=True)`) reads nothing from stdin, as from /dev/null, unless given
-  `input`: it read the tool's, so `run("shortlog", "-s")` waited on it. A tool that has git
-  read its own stdin (e.g. `cat file | tool` running `hash-object -w --stdin` or `apply`)
-  now hashes or applies nothing, and must pass it on: `input=sys.stdin.buffer.read()` to
-  `run_bytes` (or to `run`, decoded), or run git with `passthrough` (#52).
+  `process(capture_output=True)`) reads nothing from stdin unless given `input`, where it read
+  the tool's: a tool that had git read its own stdin (e.g. `hash-object --stdin`) passes
+  `input=sys.stdin.buffer.read()`, or runs git with `passthrough` (#52).
 
 ### Added
 
-- `remember_for=` (seconds, from when git gave each answer; `None`, the default, keeps them
-  as long as the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a
-  client remembers of where things are (`prefix()`, `cdup()`, `object_id_length()`,
-  `git_paths`, `git_dir`, `git_common_dir`): once its time is past, or after `forget()`, the
-  next call asks git again, in one process, and what one `rev-parse` told expires together.
-  A client and the `ReadOnlyGit` its `read_only()` gives share them, `forget()` too, as any shallow
-  copy (`copy.copy`) of a client does; a deep copy or a pickled client starts with none (a client
-  can be deep-copied or pickled only if its `stopping` and a subclass's attributes can be: a
-  `threading.Event`'s `is_set` or a lambda can't). A long-lived tool (e.g. move-forward)
-  keeps a client per repository and gives it `remember_for=` a few seconds, or calls
-  `forget()` after each refresh, rather than make a new client. A given `object_id_length=`
-  never expires (#69).
-- `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` in
-  the same process and remembered with it (#67).
-- Many config changes in one `Git.write_configs` call, each a `ConfigSet` or `ConfigUnset`
-  (`ConfigChange` is their union, for a tool's annotations), with a `ConfigResult` for each:
-  `CHANGED`, or, for an unset that removes nothing, `NOT_FOUND` or `SEVERAL_VALUES` (a key
-  with several values unset without the one to remove), which raise nothing (#61).
-- `MissingObjectError`, for an object a partial clone lacks and couldn't fetch (#55). It
-  needs git 2.39 (#52).
-- `Git.read_only()`: a `ReadOnlyGit` (not a `Git`, nor of the client's class, so a
-  subclass's own `process` doesn't see its processes) with the client's settings, sharing
-  what git told the client about where things are, for a tool's paths that only read; a
-  `ReadOnlyGit`'s gives itself (#55, #70).
+- `remember_for=` (seconds from when git answered; None, the default, keeps answers as long as
+  the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a client
+  remembers of where things are: past it, or after `forget()`, the next call asks git again,
+  in one process. A client, its `read_only()` and its shallow copies share them; a deep copy or
+  a pickled client starts with none. A long-lived tool (e.g. move-forward) keeps a client per
+  repository with `remember_for=` a few seconds, or calls `forget()` after each refresh (#69).
+- `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` (#67).
+- `git_dir`, the client's own git directory (a linked worktree's own, not the main one), asked
+  with `git_common_dir` (#50, #65, #69).
+- `git_paths_and_head`: `git_paths`, and what HEAD points at (`Head`: a ref's full name,
+  detached, or unknown, as for an unborn branch), from one `git rev-parse` (#58).
+- `merge_trees` and `MergeResult`: many pairs of commits (full ids) merged as `git merge-tree
+  --write-tree` merges each (git 2.38 or newer, else `GitError`), with one `git merge-tree
+  --stdin` from 2.39 (on 2.38, one process each): whether each is clean, its tree and its
+  conflicted paths, or why git couldn't merge that pair. It takes a `Git`, as merge-tree
+  writes objects (#59).
+- `Git.write_configs`'s changes: `ConfigSet`, `ConfigUnset` (with a `value`, only that value,
+  as `--unset --fixed-value`) and their union `ConfigChange`, and `ConfigResult` (`CHANGED`,
+  `NOT_FOUND`, `SEVERAL_VALUES`) (#61, #64).
+- `Git.read_only()`: a `ReadOnlyGit` (not of the client's class, so a subclass's `process`
+  doesn't see its processes) with the client's settings, sharing what git told the client of
+  where things are; a `ReadOnlyGit`'s gives itself (#55, #70).
 - `FakeGit().read_only()`: a `ReadOnlyGit` that answers from the fake's responses and records
-  in its `calls` (through `FakeGit`'s own `process`, not a faked subclass's, as with a real
-  `Git`), for a unit test of code that only reads (#55, #70).
-- A `ReadOnlyGit`'s reads run with `-c core.fsmonitor=false` (but `config()`'s), so no
-  `core.fsmonitor` hook runs as git reads the index for a name such as `:path` (in
-  `resolve` and `CatFile`); `git_calls` records the command without it (#55, #70).
-- `Git(process_groups=False)`, and `ReadOnlyGit`'s and `FakeGit`'s: git never gets a
-  process group of its own, so a command with a timeout starts faster without a terminal,
-  but what git started isn't stopped with it (#52).
-- `Git(object_id_length=)` (40 or 64), and `ReadOnlyGit`'s and `FakeGit`'s: a tool that
-  knows the length some other way than asking git gives it, and `object_id_length()` starts
-  no `git rev-parse --show-object-format` (#50).
-- `hash_blob_at(..., paths_from_top=True)`, for a tool whose client runs in a subdirectory
-  but holds paths from the top of the worktree, as git reports them, as `patch_ids` has
-  (#50).
+  in its `calls` (through `FakeGit`'s own `process`, not a faked subclass's) (#55, #70).
+- `object_id_length=` (40 or 64) on `Git`, `ReadOnlyGit` and `FakeGit`: a tool that knows the
+  length gives it, and `object_id_length()` starts no git (#50).
+- `process_groups=False` on `Git`, `ReadOnlyGit` and `FakeGit`: git never gets a process group
+  of its own, so a command with a timeout starts faster without a terminal, but what git
+  started isn't stopped with it (#52).
+- `hash_blob_at(..., paths_from_top=True)`, for a path from the top of the worktree, as git
+  reports one, from a client in a subdirectory (going up by `cdup()`), as `patch_ids` has
+  (#50, #67).
+- `NoAnswerError`, the base of `GitTimeoutError` and `NotStartedError`: git gave no answer.
+  It isn't a `GitError` (#54).
 - `WrongTypeError`, a `GitError` whose `expected` and `found` say which type git wanted and
   which it found (#50).
 - `CorruptObjectError`, a `GitError` for an object git found damaged as it read it (#50).
-- `ObjectType`, the types `CatFile.read` takes, exported from `git_client` (#50).
-- `git_paths_and_head`: `git_paths`, and what HEAD points at (`Head`: a ref's full name,
-  detached, or unknown, as for an unborn branch), from the same one `git rev-parse` (#58).
-- `merge_trees` and `MergeResult`: many pairs of commits (full ids) merged as `git merge-tree
-  --write-tree` merges each, with one `git merge-tree --stdin` (git 2.39; on 2.38, one
-  process each): whether each is clean, its tree and its conflicted paths, or why git
-  couldn't merge that pair. It takes a `Git`, as merge-tree writes objects (#59).
-- `git_dir`, `git_common_dir`'s counterpart: the client's own git directory (a linked
-  worktree's own, not the main one) (#50, #65).
-- `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
-  refname 'main' is ambiguous.", so a tool needn't run `rev-parse` to learn it (#53).
+- `MissingObjectError`, a `GitError` for an object a partial clone lacks and couldn't fetch,
+  from git 2.39 (#52, #55).
 - `UnknownRevisionError.reason`: from `CatFile`, why the name names nothing, as git said it
   (without its warnings), or "" when it gave no reason (as for most names); from other
   commands, their `stderr` (#53).
-
-### Fixed
-
-- `repo_templates` copies repoint every remote URL as git reads it, which git now reads
-  for them (`git config --get-regexp`, once per repository as the template is built), where
-  the plugin's own reading of the config file missed an entry on its section's line and
-  misread a value continued on the next line. A copy still runs only the writes. A
-  repository git can't read is copied as it is (#67).
-- `hash_blob_at(..., paths_from_top=True)` from a client outside the worktree that git is
-  told of (e.g. by GIT_WORK_TREE) takes the path from the worktree's top, as `cdup()` says,
-  where it took it from the client's directory and so read the wrong attributes (#67).
-- A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
-  answer unread, to answer the next request: `resolve("HEAD")` could give another name's
-  id. The next request now kills that process, and starts another (#53).
-- `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever
-  for a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch in
-  a partial clone, or writing what nothing reads). It now closes the process's stdout too,
-  and kills it if it hasn't exited within a second (#53).
-- `patch_ids` keeps a commit that only moves a submodule, and gives a submodule's patches
-  the same ids, whatever diff.submodule says, and keeps a root commit's patch whatever
-  log.showRoot says (#52).
-- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the
-  Ctrl-C it got too, and remove its lock files (e.g. index.lock), before git and what it
-  started are killed; a timeout still kills them at once. What outlives git's own exit runs
-  on (#52).
-- A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git
-  (and its group or tree) at once, where it skipped the kill and left them running (#52).
+- `ObjectInfo.warnings`, from `CatFile.info`: what git warned of the name, e.g. "warning:
+  refname 'main' is ambiguous." (#53).
+- `ObjectType`, the types `CatFile.read` takes, exported from `git_client` (#50).
 
 ### Changed
 
+- A `ReadOnlyGit`'s reads but `config()` run with `-c core.fsmonitor=false`, so no
+  `core.fsmonitor` hook runs as git reads the index for a name such as `:path` (in `resolve`
+  and `CatFile`); `git_calls` records the command without it (#55, #70).
+- `resolve` (a `ReadOnlyGit`'s too) takes one process for every name, where a name cat-file
+  exits on (e.g. `main@{upstream}` with no upstream) took a second (#54).
+- `object_id_length()`: threads that ask at once wait for one git's answer, where each could
+  start its own (#54).
 - Starting git costs less, a command with a timeout most: the environment built for git is
-  kept until os.environ, the client's `env` or the command's changes, rather than copied
-  from os.environ every time, and whether the tool has a terminal is asked once per process
-  and session (#52).
-- `import git_client` takes about 3 ms less (of about 19): `tempfile` is imported only
-  where it's used (#52).
+  kept until `os.environ`, the client's `env` or the command's changes, and whether the tool
+  has a terminal is asked once per process and session (#52).
+
+### Fixed
+
+- `repo_templates` copies repoint every remote URL as git reads it (`git config
+  --get-regexp`, once per repository as the template is built), where the plugin's own
+  reading of the config file missed an entry on its section's line and misread a value
+  continued on the next line. A repository git can't read is copied as it is (#67).
+- A `CatFile` request interrupted once sent (e.g. by Ctrl-C's KeyboardInterrupt) left its
+  answer unread, to answer the next request: `resolve("HEAD")` could give another name's id.
+  The next request now kills that process, and starts another (#53).
+- `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever for
+  a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch). It now
+  closes the process's stdout too, and kills it if it hasn't exited within a second (#53).
+- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the Ctrl-C
+  it got too, and remove its lock files (e.g. index.lock), before git and what it started are
+  killed; a timeout still kills them at once (#52).
+- A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git (and
+  its group or tree) at once, where it skipped the kill and left them running (#52).
 
 ## 0.0.2 (2026-11-17)
 
