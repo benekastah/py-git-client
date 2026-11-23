@@ -99,6 +99,10 @@ def read_local_object(
             )
         ):
             return None
+        # A replacement ref can use any hex case. Peeling can encounter a
+        # replacement beyond the requested ID, for example at a commit's tree.
+        if any(ref.startswith(b"refs/replace/") for ref in repository.raw_listall_references()):
+            return None
         try:
             repository.lookup_reference_dwim(object_id)
         except KeyError:
@@ -107,19 +111,8 @@ def read_local_object(
         else:
             return None
         oid = pygit2.Oid(hex=object_id)
-        if repository.references.get(f"refs/replace/{oid}") is not None:
-            return None
         if requested_type is not None:
-            original_kind, _ = repository.odb.read_header(oid)
-            if requested_type != original_kind.name.lower():
-                # A tag chain can encounter replacements at intermediate objects.
-                if original_kind == pygit2.enums.ObjectType.TAG and any(
-                    ref.startswith(b"refs/replace/") for ref in repository.raw_listall_references()
-                ):
-                    return None
-                oid = repository.revparse_single(name).id
-                if repository.references.get(f"refs/replace/{oid}") is not None:
-                    return None
+            oid = repository.revparse_single(name).id
         if contents:
             kind, content = repository.odb.read(oid)
             size = len(content)

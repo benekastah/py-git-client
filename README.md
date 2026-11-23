@@ -306,7 +306,8 @@ Install the `pygit2` extra (`pip install 'py-git-client[pygit2]'`) and opt in wi
 `resolve` and `CatFile` can then use libgit2 for full SHA-1 object IDs, including
 typed peeling such as `<id>^{tree}`. The reader opens the repository afresh for each
 native read. Once a `CatFile` starts a subprocess, it uses that process until it
-closes or exits.
+closes or exits. For bulk lookups, a subprocess-backed `CatFile` reuses its
+repository setup across requests.
 
 Named revisions, config, refs, repository paths, requests with a timeout, and
 repositories with shallow history or partial clone metadata use Git subprocesses.

@@ -24,7 +24,7 @@ def native_config_paths(
     monkeypatch.delenv("GIT_CONFIG_GLOBAL")
     monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
     paths = pygit2.settings.search_path
-    levels = (ConfigLevel.SYSTEM, ConfigLevel.GLOBAL, ConfigLevel.XDG)
+    levels = (ConfigLevel.PROGRAMDATA, ConfigLevel.SYSTEM, ConfigLevel.GLOBAL, ConfigLevel.XDG)
     original = {level: paths[level] for level in levels}
     try:
         for level in levels:
@@ -160,3 +160,20 @@ def test_peeled_tree_with_packed_replacement_uses_git(repo: Git, git_calls: list
     with CatFile(repo.read_only(native=True)) as objects:
         assert objects.read(commit, "tree") == ("tree", b"")
     assert [call[:2] for call in git_calls] == [["cat-file", "--batch-command"]]
+
+
+def test_packed_uppercase_replacement_is_left_to_git(repo: Git) -> None:
+    original = repo.run("hash-object", "-w", "--stdin", input="original")
+    replacement = repo.run("hash-object", "-w", "--stdin", input="replacement")
+    repo.run("update-ref", f"refs/replace/{original.upper()}", replacement)
+    repo.run("pack-refs", "--all")
+    with CatFile(repo.read_only(native=True)) as objects:
+        assert objects.read(original) == ("blob", b"replacement")
+
+
+@pytest.mark.parametrize("kind", ["commit", "tag"])
+def test_type_suffix_requires_a_parseable_object(repo: Git, kind: str) -> None:
+    invalid = repo.run("hash-object", "--literally", "-t", kind, "-w", "--stdin", input="bad")
+    name = f"{invalid}^{{{kind}}}"
+    assert repo.resolve(name) is None
+    assert repo.read_only(native=True).resolve(name) is None
