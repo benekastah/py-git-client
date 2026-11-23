@@ -522,27 +522,29 @@ def read_output(
     return stdout_of(args, result)
 
 
-type Location = tuple[str, str, tuple[tuple[str, EnvValue], ...]]
+type Location = tuple[str, str, str, tuple[tuple[str, EnvValue], ...]]
 
 
 def location(git: ReadOnlyGit) -> Location:
     """The git program, directory and client environment that identify cached answers.
 
     Keep '..' in the absolute path so Git can resolve it after traversing symlinks.
+    Include the current directory for relative programs, which can resolve differently
+    even when the repository's path is absolute.
     """
     directory = git.directory
+    program_dir = os.getcwd() if git.cache is not None and not os.path.isabs(git.program) else ""
     if not os.path.isabs(directory):
-        directory = os.path.join(os.getcwd(), directory)
-    return git.program, directory, tuple(sorted(git.env.items()))
+        directory = os.path.join(program_dir or os.getcwd(), directory)
+    return git.program, program_dir, directory, tuple(sorted(git.env.items()))
 
 
 class AskingFormat:
     """One thread's request for the object format and the answer awaited by its peers."""
 
-    def __init__(self, asked: int) -> None:
+    def __init__(self) -> None:
         self.done = threading.Event()
         self.format: bytes | None = None
-        self.asked = asked
 
 
 class GitCache:
@@ -557,7 +559,7 @@ class GitCache:
         self._lock = threading.Lock()
         self._answers: dict[tuple[Location, str], bytes] = {}
         self._generation = 0
-        self._asking_format: dict[Location, AskingFormat] = {}
+        self._asking_format: dict[tuple[Location, int], AskingFormat] = {}
 
     def __deepcopy__(self, memo: dict[int, object]) -> GitCache:
         """Give a deep copy its own empty cache."""
@@ -618,22 +620,23 @@ class GitCache:
                 if known is not None:
                     return known[_FORMAT_QUESTION]
                 generation = self._generation
-                pending = self._asking_format.get(where)
+                key = where, generation
+                pending = self._asking_format.get(key)
                 mine = pending is None
                 if pending is None:
-                    pending = self._asking_format[where] = AskingFormat(generation)
+                    pending = self._asking_format[key] = AskingFormat()
             if not mine:
                 pending.done.wait()
-                if pending.format is not None and pending.asked == generation:
+                if pending.format is not None:
                     return pending.format
                 continue
             try:
                 pending.format = ask()
-                self._remember(where, {_FORMAT_QUESTION: pending.format}, pending.asked)
+                self._remember(where, {_FORMAT_QUESTION: pending.format}, generation)
                 return pending.format
             finally:
                 with self._lock:
-                    del self._asking_format[where]
+                    del self._asking_format[key]
                 pending.done.set()
 
 

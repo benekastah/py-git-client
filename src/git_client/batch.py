@@ -405,8 +405,7 @@ def hash_blob_at(
     `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
     `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
     (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
-    top (`git.cdup()`, asked of git once per client) and down to the path, taking it as it is,
-    with no magic."""
+    top using `git.cdup()`, then down to the path, taking it as it is."""
     if paths_from_top:
         path = os.path.join(encode(git.cdup()), os.fsencode(path))
     output = git.run_bytes(

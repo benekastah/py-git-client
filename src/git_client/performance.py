@@ -53,12 +53,12 @@ class PerformanceRecorder:
             return tuple(sorted(self._events, key=lambda event: event.start))
 
     @contextmanager
-    def _measure(self, kind: EventKind, name: str, read: _Read | None) -> Generator[None]:
+    def _measure(self, kind: EventKind, name: str, backend: _BackendUse | None) -> Generator[None]:
         start = monotonic()
         try:
             yield
         finally:
-            if read is None or read.consulted_backend:
+            if backend is None or backend.consulted:
                 event = PerformanceEvent(kind, name, start, monotonic())
                 with self._lock:
                     self._events.append(event)
@@ -101,12 +101,16 @@ class PerformanceRecorder:
 
 
 def measure(
-    recorder: PerformanceRecorder | None, kind: EventKind, name: str, *, read: _Read | None = None
+    recorder: PerformanceRecorder | None,
+    kind: EventKind,
+    name: str,
+    *,
+    backend: _BackendUse | None = None,
 ) -> AbstractContextManager[None]:
     """Time an operation when recording is enabled."""
     if recorder is None:
         return nullcontext()
-    return recorder._measure(kind, name, read)  # pyright: ignore[reportPrivateUsage]
+    return recorder._measure(kind, name, backend)  # pyright: ignore[reportPrivateUsage]
 
 
 class _Measured(Protocol):
@@ -115,18 +119,38 @@ class _Measured(Protocol):
 
 
 @dataclass
-class _Read:
-    owner: _Measured
-    consulted_backend: bool = False
+class _BackendUse:
+    owner: _Measured | None = None
+    consulted: bool = False
 
 
-_current_read: ContextVar[_Read | None] = ContextVar("git_client_current_read", default=None)
+_current_read: ContextVar[_BackendUse | None] = ContextVar("git_client_current_read", default=None)
+_current_request: ContextVar[_BackendUse | None] = ContextVar(
+    "git_client_current_request", default=None
+)
 
 
 def note_backend_read() -> None:
-    """Keep the current read's timing now that it has consulted a backend."""
+    """Mark that the current read or batch request reached a backend."""
     if (read := _current_read.get()) is not None:
-        read.consulted_backend = True
+        read.consulted = True
+    if (request := _current_request.get()) is not None:
+        request.consulted = True
+
+
+@contextmanager
+def measure_request(recorder: PerformanceRecorder | None) -> Generator[None]:
+    """Measure CatFile request work only if Git was contacted or a launch attempted."""
+    if recorder is None:
+        yield
+        return
+    request = _BackendUse()
+    token = _current_request.set(request)
+    try:
+        with measure(recorder, "process_work", "CatFile.request", backend=request):
+            yield
+    finally:
+        _current_request.reset(token)
 
 
 def record_read[**P, R](
@@ -146,10 +170,10 @@ def record_read[**P, R](
             current = _current_read.get()
             if recorder is None or (current is not None and current.owner is owner):
                 return function(*args, **kwargs)
-            read = _Read(owner)
+            read = _BackendUse(owner)
             token = _current_read.set(read)
             try:
-                with measure(recorder, "read", name, read=read):
+                with measure(recorder, "read", name, backend=read):
                     return function(*args, **kwargs)
             finally:
                 _current_read.reset(token)

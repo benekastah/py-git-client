@@ -118,6 +118,8 @@ def test_read_stopped_before_launch_records_no_events(repo: Git) -> None:
     reader = ReadOnlyGit(repo.directory, stopping=lambda: True, performance=recorder)
     with pytest.raises(NotStartedError):
         reader.resolve("HEAD")
+    with CatFile(reader) as objects, pytest.raises(NotStartedError):
+        objects.resolve("HEAD")
     assert recorder.events == ()
 
 

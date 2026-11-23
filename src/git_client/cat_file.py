@@ -39,7 +39,13 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
-from git_client.performance import PerformanceRecorder, measure, note_backend_read, record_read
+from git_client.performance import (
+    PerformanceRecorder,
+    measure,
+    measure_request,
+    note_backend_read,
+    record_read,
+)
 
 _COMMAND = ("cat-file", "--batch-command")
 
@@ -271,7 +277,7 @@ class CatFile:
         GitError if a new process exits before it has answered anything for another reason: a
         usage error, as a git older than 2.36 gives at --batch-command, or what's wrong with
         the repository (e.g. NotARepositoryError). Hold the lock."""
-        with measure(self.performance, "process_work", "CatFile.request"):
+        with measure_request(self.performance):
             return self._request_from_process(command, name, deadline)
 
     def _request_from_process(

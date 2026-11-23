@@ -69,6 +69,26 @@ def test_shared_cache_keeps_answers_from_distinct_git_programs_apart() -> None:
     assert sha256.object_id_length() == 64
 
 
+def test_shared_cache_distinguishes_relative_programs_after_chdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = GitCache()
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    repository = tmp_path / "repo"
+    first = FakeGit(repository, program="./git", cache=cache)
+    second = FakeGit(repository, program="./git", cache=cache)
+    first.respond(["rev-parse", "--show-object-format"], stdout="sha1")
+    second.respond(["rev-parse", "--show-object-format"], stdout="sha256")
+
+    monkeypatch.chdir(first_dir)
+    assert first.object_id_length() == 40
+    monkeypatch.chdir(second_dir)
+    assert second.object_id_length() == 64
+
+
 @pytest.mark.skipif(
     sys.platform == "win32", reason="directory symlinks may require elevated privileges"
 )
@@ -244,28 +264,33 @@ def test_what_another_thread_learns_mid_call_still_answers_the_caller(
     assert ask(git) == (Path(repo.directory) / ".git" if ask is git_dir else "")
 
 
-def test_object_id_length_after_forget_takes_no_answer_git_gave_before(
+def test_clearing_cache_does_not_block_new_reads_on_an_earlier_query(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    answered = threading.Event()
+    old_query_answered = threading.Event()
+    release_old_query = threading.Event()
 
     class SlowGit(Git):
-        """Holds the first answer a moment once git has given it, so that forget() comes
-        after git answered and another thread can join the ask before it ends."""
+        """Hold the first answer after Git has returned it."""
 
         def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
             output = super().process(*args, **kwargs)
-            if not answered.is_set():
-                answered.set()
-                time.sleep(0.1)
+            old_query_answered.set()
+            assert release_old_query.wait(10)
             return output
 
-    git = SlowGit(repo.directory, cache=GitCache())
-    with ThreadPoolExecutor(1) as pool:
-        first = pool.submit(git.object_id_length)
-        answered.wait()
-        git.forget()  # e.g. after the repository was replaced
-        assert git.object_id_length() == 40
-        assert first.result() == 40
+    cache = GitCache()
+    first = SlowGit(repo.directory, cache=cache)
+    second = Git(repo.directory, cache=cache)
+    with ThreadPoolExecutor(2) as pool:
+        earlier = pool.submit(first.object_id_length)
+        try:
+            assert old_query_answered.wait(5)
+            cache.clear()
+            assert pool.submit(second.object_id_length).result(timeout=2) == 40
+            assert not earlier.done()
+        finally:
+            release_old_query.set()
+        assert earlier.result() == 40
 
     assert git_calls == [["rev-parse", "--show-object-format"]] * 2
