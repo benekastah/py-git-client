@@ -7,7 +7,7 @@ import pygit2
 import pytest
 from pygit2.enums import ConfigLevel
 
-from git_client import CatFile, Git, ReadOnlyGit
+from git_client import CatFile, Git, NotARepositoryError, ReadOnlyGit
 from git_client.testing import GitCall
 
 
@@ -115,3 +115,11 @@ def test_hex_named_ref_is_left_to_git(repo: Git, git_calls: list[GitCall]) -> No
     with CatFile(repo.read_only(native=True)) as objects:
         assert objects.info(commit) == expected
     assert [call[:2] for call in git_calls] == [["cat-file", "--batch-command"]]
+
+
+def test_native_read_requires_a_directory(repo: Git) -> None:
+    commit = repo.resolve("HEAD")
+    assert commit is not None
+    reader = ReadOnlyGit(Path(repo.directory) / "a", native=True)
+    with pytest.raises(NotARepositoryError):
+        reader.resolve(commit)

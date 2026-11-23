@@ -47,6 +47,10 @@ def read_local_object(
         or not _GIT_OVERRIDES.isdisjoint(env)
     ):
         return None
+    directory = directory or "."
+    # libgit2 can discover a repository from a file; git -C requires a directory.
+    if not os.path.isdir(directory):
+        return None
     try:
         import pygit2
     except ImportError:
