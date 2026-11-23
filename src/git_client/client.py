@@ -26,6 +26,7 @@ from git_client.errors import (
     NotStartedError,
     error_for,
 )
+from git_client.native import NativeObject, read_local_object
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -782,6 +783,23 @@ def refuse_if_stopping(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
         raise NotStartedError(args, None, "the tool is stopping")
 
 
+def local_object(
+    git: ReadOnlyGit,
+    name: str,
+    args: Sequence[Arg],
+    *,
+    contents: bool = False,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> NativeObject | None:
+    """Try a read that can finish without invoking git."""
+    if not git.native or isinstance(git, Git):
+        return None
+    if (git.timeout if timeout is CLIENT_TIMEOUT else timeout) is not None:
+        return None
+    refuse_if_stopping(git, args)
+    return read_local_object(git.directory, git.env, name, contents=contents)
+
+
 class ReadOnlyGit:
     """Reads a repository with git in `directory`, as `git -C <directory>` does, offering the
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
@@ -863,6 +881,9 @@ class ReadOnlyGit:
     twentieth of what starting git costs). It suits a tool that runs many short commands
     with a timeout and without a terminal, whose git starts nothing that could outlive it.
 
+    With `native=True`, this reader can use the optional pygit2 backend for local SHA-1
+    objects addressed by their full ids. Git itself uses subprocesses for all operations.
+
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
     """
@@ -879,6 +900,7 @@ class ReadOnlyGit:
         object_id_length: int | None = None,
         process_groups: bool = True,
         remember_for: float | None = None,
+        native: bool = False,
     ) -> None:
         if object_id_length not in (None, 40, 64):
             raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
@@ -893,6 +915,7 @@ class ReadOnlyGit:
         self.remember_for = remember_for
         self._object_id_length = object_id_length
         self._memory = Memory()
+        self.native = native and not isinstance(self, Git)
 
     def read_only(self) -> ReadOnlyGit:
         """This client itself, which is read-only already (a Git's gives a ReadOnlyGit), so
@@ -986,12 +1009,15 @@ class ReadOnlyGit:
         object (not for a full id it lacks, nor for a submodule's commit). Raises
         CorruptObjectError if an object git reads for it is damaged, MissingObjectError if it's
         in a partial clone that couldn't fetch it (from a Git: a ReadOnlyGit's gives None), and
-        GitError for another failure (e.g. NotARepositoryError). It takes one process; for many
-        names, a CatFile takes one for all of them."""
+        GitError for another failure (e.g. NotARepositoryError). A native-enabled reader may
+        answer a full SHA-1 id in-process. Otherwise it takes one process; for many names,
+        a CatFile shares one process."""
         line = batch_line(name)
         if line is None:
             return None
         args = ("cat-file", "--batch-check")
+        if (found := local_object(self, name, args, timeout=timeout)) is not None:
+            return found.id
         result = self._process(
             *args, capture_output=True, input=_PROBE_LINE + line, timeout=timeout
         )
@@ -1073,7 +1099,7 @@ class Git(ReadOnlyGit):
     each) sees them all; but not those of the ReadOnlyGit its `read_only()` gives, a client of
     its own."""
 
-    def read_only(self) -> ReadOnlyGit:
+    def read_only(self, *, native: bool = False) -> ReadOnlyGit:
         """A ReadOnlyGit with the client's settings, as they are now (`directory`, `program`,
         `env`, `timeout`, `stopping`, `process_groups`, `remember_for` and a given
         `object_id_length`), for a tool's paths that only read. It shares what git told the
@@ -1082,7 +1108,8 @@ class Git(ReadOnlyGit):
         nor the client one it asked, and `forget()` on either forgets for both. It's a plain
         ReadOnlyGit, not of the client's class, and not a Git: a subclass's own `process` and
         `popen` don't see its processes, so a tool that times every process gives its reads
-        the Git itself. A new one each call."""
+        the Git itself. A new one each call. Pass `native=True` to enable pygit2 on the
+        returned reader."""
         reader = ReadOnlyGit(
             self.directory,
             program=self.program,
@@ -1092,6 +1119,7 @@ class Git(ReadOnlyGit):
             object_id_length=self._object_id_length,
             process_groups=self.process_groups,
             remember_for=self.remember_for,
+            native=native,
         )
         reader._memory = self._memory
         return reader

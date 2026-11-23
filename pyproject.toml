@@ -9,6 +9,11 @@ authors = [{ name = "Paul Harper", email = "benekastah@gmail.com" }]
 requires-python = ">=3.15"
 dependencies = []
 
+[project.optional-dependencies]
+pygit2 = [
+    "pygit2>=1.21.0,<2",
+]
+
 [dependency-groups]
 # The template's dev tools, kept current by `copier update`; the project's own go in `dev`
 # (`uv add --dev`), so the two never conflict.
@@ -22,7 +27,10 @@ template-dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.17.5",
 ]
-dev = [{ include-group = "template-dev" }]
+dev = [
+    { include-group = "template-dev" },
+    "pygit2>=1.21.0,<2",
+]
 
 [build-system]
 requires = ["hatchling>=1.33.0"]

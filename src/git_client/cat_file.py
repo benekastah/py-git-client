@@ -24,6 +24,7 @@ from git_client.client import (
     batch_line,
     check_names_nothing,
     decode,
+    local_object,
     object_header,
     read_popen,
 )
@@ -86,7 +87,8 @@ class CatFile:
     It sees refs and objects as they are when asked, even when other processes have changed them
     since it started, but for replace refs (`git replace`), which its process reads once, as it
     starts: after changing them, `close` it, and the next request starts a process that sees
-    them. Threads can share it. For some names (e.g. `@{u}` on a branch with no
+    them. With a native reader, eligible requests run in-process until a request starts cat-file.
+    Threads can share it. For some names (e.g. `@{u}` on a branch with no
     upstream), git cat-file exits rather than saying they name nothing; then that name resolves to
     nothing, and the next request starts another process. One that stopped between requests (killed,
     say) is started again for the request that finds it gone. A request interrupted before all its
@@ -155,6 +157,12 @@ class CatFile:
         if line is None:
             return None
         with self._lock:
+            # Keep using an open process so its view of replace refs stays consistent.
+            if (
+                self._process is None
+                and (found := local_object(self.git, name, _COMMAND)) is not None
+            ):
+                return ObjectInfo(found.id, found.kind, found.size)
             reply, said = self._request(b"info " + line, name, self._deadline())
             self._unanswered = False
         header = object_header(reply)
@@ -177,6 +185,11 @@ class CatFile:
         if line is None:
             raise _failure(name, "", exited=False)
         with self._lock:
+            if (
+                self._process is None
+                and (found := local_object(self.git, name, _COMMAND)) is not None
+            ):
+                return found.id
             reply, reason = self._request(b"info " + line, name, self._deadline())
             self._unanswered = False
         header = object_header(reply)
@@ -199,6 +212,11 @@ class CatFile:
             raise ValueError(f"{type!r} isn't a type of object")
         name = object_id if type is None else f"{object_id}^{{{type}}}"
         with self._lock:
+            if (
+                self._process is None
+                and (found := local_object(self.git, name, _COMMAND, contents=True)) is not None
+            ):
+                return found.kind, found.content
             deadline = self._deadline()
             reply, reason = self._request(b"contents " + name.encode() + b"\n", name, deadline)
             header = object_header(reply)

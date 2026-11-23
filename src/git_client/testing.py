@@ -556,9 +556,9 @@ class FakeGit(Git):
             f"FakeGit can't start a long-lived git {' '.join(map(os.fsdecode, args))}"
         )
 
-    def read_only(self) -> ReadOnlyGit:
+    def read_only(self, *, native: bool = False) -> ReadOnlyGit:
         """A ReadOnlyGit whose processes are the fake's, sharing what it was told of where
-        things are (see Git.read_only)."""
+        things are (see Git.read_only). The fake always uses its scripted responses."""
         return _FakeReadOnlyGit(self)
 
 

@@ -257,7 +257,7 @@ can't, so give a worker process a client of its own.
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
-arguments as `Git`, and offers the library's reads alone, each a command the library fixes:
+arguments as `Git` and offers the library's fixed read operations:
 `resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
 one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
 `CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`,
@@ -298,6 +298,21 @@ raise `UnknownRevisionError`). It also gets `-c core.fsmonitor=false` before eac
 `config --list`, so no `core.fsmonitor` hook runs as git reads the index for a name such as `:path`.
 They keep its reads from writing; they aren't a promise that git writes nothing: the tool's
 environment reaches git as it is (e.g. `GIT_TRACE*`, which write where they name).
+
+#### Native object reads
+
+Install the `pygit2` extra (`pip install 'py-git-client[pygit2]'`) and opt in with
+`ReadOnlyGit(directory, native=True)` or `git.read_only(native=True)`.
+`resolve` and `CatFile` can then use libgit2 for full SHA-1 object IDs, including
+typed peeling such as `<id>^{tree}`. The reader opens the repository afresh for each
+native read. Once a `CatFile` starts a subprocess, it uses that process until it
+closes or exits.
+
+Named revisions, config, refs, repository paths, requests with a timeout, and
+repositories with replacement refs, shallow history or partial clone metadata
+use Git subprocesses. The reader also falls back to Git if pygit2 is unavailable
+or can't answer a request. `Git` uses subprocesses for every operation.
+`git_calls` sees fallback subprocesses and all operations that start Git.
 
 ### Errors
 
