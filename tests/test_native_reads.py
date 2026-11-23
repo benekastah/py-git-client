@@ -7,13 +7,22 @@ import pygit2
 import pytest
 from pygit2.enums import ConfigLevel
 
-from git_client import CatFile, Git, NotARepositoryError, ReadOnlyGit
+from git_client import CatFile, Git, GitError, NotARepositoryError, ReadOnlyGit
 from git_client.testing import GitCall
 
 
 @pytest.fixture(autouse=True)
-def native_config_paths(tmp_path: Path) -> Iterator[None]:
+def native_config_paths(
+    tmp_path: Path, git_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
     """Keep libgit2's config lookups inside the test directory too."""
+    # The Git test plugin normally isolates global config with an explicit override.
+    # Use Git's default discovery with the same isolated config for native-path tests.
+    (tmp_path / ".gitconfig").write_bytes(git_config.read_bytes())
+    monkeypatch.setenv("HOME", os.fspath(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", os.fspath(tmp_path))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL")
+    monkeypatch.delenv("GIT_CONFIG_SYSTEM", raising=False)
     paths = pygit2.settings.search_path
     levels = (ConfigLevel.SYSTEM, ConfigLevel.GLOBAL, ConfigLevel.XDG)
     original = {level: paths[level] for level in levels}
@@ -123,3 +132,31 @@ def test_native_read_requires_a_directory(repo: Git) -> None:
     reader = ReadOnlyGit(Path(repo.directory) / "a", native=True)
     with pytest.raises(NotARepositoryError):
         reader.resolve(commit)
+
+
+@pytest.mark.parametrize("config_in_client", [False, True])
+def test_native_read_respects_alternate_global_config(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_in_client: bool
+) -> None:
+    commit = repo.resolve("HEAD")
+    assert commit is not None
+    config_path = tmp_path / "broken.gitconfig"
+    config_path.write_text("[section\n", encoding="utf-8")
+    env = {"GIT_CONFIG_GLOBAL": os.fspath(config_path)}
+    if not config_in_client:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.fspath(config_path))
+        env = {}
+    reader = ReadOnlyGit(repo.directory, env=env, native=True)
+    with pytest.raises(GitError, match="bad config"):
+        reader.resolve(commit)
+
+
+def test_peeled_tree_with_packed_replacement_uses_git(repo: Git, git_calls: list[GitCall]) -> None:
+    commit, tree = repo.run("rev-parse", "HEAD", "HEAD^{tree}").splitlines()
+    empty = repo.run("mktree", input="")
+    repo.run("replace", tree, empty)
+    repo.run("pack-refs", "--all")
+    git_calls.clear()
+    with CatFile(repo.read_only(native=True)) as objects:
+        assert objects.read(commit, "tree") == ("tree", b"")
+    assert [call[:2] for call in git_calls] == [["cat-file", "--batch-command"]]

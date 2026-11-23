@@ -99,7 +99,8 @@ class CatFile:
     NotARepositoryError, or a broken config), and CorruptObjectError if an object git reads for it
     is damaged (e.g. a corrupt loose object), rather than say the name names nothing: git can't tell
     what it would name. A ref git ignores as broken names nothing, as `git rev-parse --verify` finds
-    it.
+    it. Native reads validate the configuration libgit2 needs for each object;
+    a subprocess-backed reader reports Git's configuration errors.
 
     Its process stops when it's no longer used, as Python frees it (or, at exit, as its stdin
     closes). With `weak`, it holds `git` by a weak reference, for a CatFile the client keeps itself

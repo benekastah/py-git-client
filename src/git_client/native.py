@@ -12,7 +12,9 @@ _GIT_OVERRIDES = {
     "GIT_COMMON_DIR",
     "GIT_CONFIG",
     "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_GLOBAL",
     "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_SYSTEM",
     "GIT_DIR",
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
     "GIT_GRAFT_FILE",
@@ -23,6 +25,15 @@ _GIT_OVERRIDES = {
     "GIT_REPLACE_REF_BASE",
     "GIT_SHALLOW_FILE",
     "GIT_WORK_TREE",
+}
+
+
+_CLIENT_CONFIG_OVERRIDES = {
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "USERPROFILE",
+    "XDG_CONFIG_HOME",
 }
 
 
@@ -42,7 +53,7 @@ def read_local_object(
     match = _OBJECT_NAME.fullmatch(name)
     if (
         match is None
-        or "GIT_CEILING_DIRECTORIES" in env
+        or not _CLIENT_CONFIG_OVERRIDES.isdisjoint(env)
         or not _GIT_OVERRIDES.isdisjoint(os.environ)
         or not _GIT_OVERRIDES.isdisjoint(env)
     ):
@@ -65,6 +76,7 @@ def read_local_object(
             return None
         repository = pygit2.Repository(path)
         config = repository.config
+        skip_system = "GIT_CONFIG_NOSYSTEM" in os.environ
         if (
             repository.is_shallow
             or any(
@@ -77,12 +89,15 @@ def read_local_object(
                 )
             )
             or any(
-                entry.name.startswith("remote.") and entry.name.endswith(".promisor")
+                (entry.name.startswith("remote.") and entry.name.endswith(".promisor"))
+                or (
+                    skip_system
+                    and entry.level
+                    in {pygit2.enums.ConfigLevel.SYSTEM, pygit2.enums.ConfigLevel.PROGRAMDATA}
+                )
                 for entry in config
             )
         ):
-            return None
-        if any(ref.startswith(b"refs/replace/") for ref in repository.raw_listall_references()):
             return None
         try:
             repository.lookup_reference_dwim(object_id)
@@ -92,8 +107,19 @@ def read_local_object(
         else:
             return None
         oid = pygit2.Oid(hex=object_id)
+        if repository.references.get(f"refs/replace/{oid}") is not None:
+            return None
         if requested_type is not None:
-            oid = repository.revparse_single(name).id
+            original_kind, _ = repository.odb.read_header(oid)
+            if requested_type != original_kind.name.lower():
+                # A tag chain can encounter replacements at intermediate objects.
+                if original_kind == pygit2.enums.ObjectType.TAG and any(
+                    ref.startswith(b"refs/replace/") for ref in repository.raw_listall_references()
+                ):
+                    return None
+                oid = repository.revparse_single(name).id
+                if repository.references.get(f"refs/replace/{oid}") is not None:
+                    return None
         if contents:
             kind, content = repository.odb.read(oid)
             size = len(content)

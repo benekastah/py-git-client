@@ -309,9 +309,12 @@ native read. Once a `CatFile` starts a subprocess, it uses that process until it
 closes or exits.
 
 Named revisions, config, refs, repository paths, requests with a timeout, and
-repositories with replacement refs, shallow history or partial clone metadata
-use Git subprocesses. The reader also falls back to Git if pygit2 is unavailable
-or can't answer a request. `Git` uses subprocesses for every operation.
+repositories with shallow history or partial clone metadata use Git subprocesses.
+Git also handles replacement refs and explicit overrides to repository or config
+discovery. The reader falls back to Git if pygit2 is unavailable or can't answer a
+request. Native reads validate the configuration libgit2 needs to read an object.
+Use a subprocess-backed client when you need Git's diagnostics for invalid config
+values. `Git` uses subprocesses for every operation.
 `git_calls` sees fallback subprocesses and all operations that start Git.
 
 ### Errors
