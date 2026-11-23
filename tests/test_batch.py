@@ -7,6 +7,7 @@ import pytest
 
 from git_client import (
     Git,
+    GitCache,
     GitError,
     Head,
     NotARepositoryError,
@@ -454,8 +455,9 @@ def test_patch_ids_checks_no_signature(repo: Git, tmp_path: Path) -> None:
 def test_patch_ids_reads_the_object_format_once_per_client(
     repo: Git, git_calls: list[list[str]]
 ) -> None:
-    patch_ids(repo, ["log", "-p", "HEAD"])
-    patch_ids(repo, ["log", "-p", "HEAD"])
+    git = Git(repo.directory, cache=GitCache())
+    patch_ids(git, ["log", "-p", "HEAD"])
+    patch_ids(git, ["log", "-p", "HEAD"])
 
     assert [call[0] for call in git_calls] == [
         "rev-parse",
@@ -500,13 +502,14 @@ def test_git_paths_finds_each_name_where_git_keeps_it_with_one_git(
 
 
 def test_git_paths_asks_git_once_per_name(repo: Git, git_calls: list[list[str]]) -> None:
-    first = git_paths(repo, "HEAD", "index")
-    assert git_paths(repo, "index", "HEAD", "refs") == [
+    git = Git(repo.directory, cache=GitCache())
+    first = git_paths(git, "HEAD", "index")
+    assert git_paths(git, "index", "HEAD", "refs") == [
         first[1],
         first[0],
         first[1].parent / "refs",
     ]
-    git_paths(repo, "HEAD", "refs")
+    git_paths(git, "HEAD", "refs")
 
     assert [call[-2:] for call in git_calls] == [
         ["--git-path", "index"],
@@ -518,7 +521,7 @@ def test_git_paths_asks_git_once_per_name(repo: Git, git_calls: list[list[str]])
 def test_git_paths_follows_a_change_of_directory_or_environment(repo: Git, tmp_path: Path) -> None:
     linked = tmp_path / "linked"
     repo.run("worktree", "add", "--quiet", str(linked))
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
     [main] = git_paths(git, "HEAD")
 
     git.directory = str(linked)
@@ -531,12 +534,13 @@ def test_git_paths_follows_a_change_of_directory_or_environment(repo: Git, tmp_p
 
 
 def test_git_paths_asks_again_for_hooks_which_a_config_change_moves(repo: Git) -> None:
-    [before] = git_paths(repo, "hooks")
-    [hook_before] = git_paths(repo, "hooks/pre-commit")
+    git = Git(repo.directory, cache=GitCache())
+    [before] = git_paths(git, "hooks")
+    [hook_before] = git_paths(git, "hooks/pre-commit")
     repo.run("config", "core.hooksPath", str(Path(repo.directory) / "my-hooks"))
 
-    assert git_paths(repo, "hooks") != [before]
-    assert git_paths(repo, "hooks/pre-commit") != [hook_before]
+    assert git_paths(git, "hooks") != [before]
+    assert git_paths(git, "hooks/pre-commit") != [hook_before]
 
 
 def test_git_paths_refuses_a_name_with_a_line_ending(repo: Git) -> None:
@@ -728,7 +732,7 @@ def test_git_paths_learns_the_prefix_in_the_same_process(
     repo: Git, git_calls: list[list[str]], where: str, prefix: str
 ) -> None:
     (Path(repo.directory) / where).mkdir(parents=True, exist_ok=True)
-    git = Git(Path(repo.directory) / where)
+    git = Git(Path(repo.directory) / where, cache=GitCache())
     git_paths(git, "HEAD")
     assert git.prefix() == prefix
     assert git.cdup() == "../" * prefix.count("/")
@@ -740,7 +744,7 @@ def test_git_paths_learns_the_object_id_length_in_the_same_process(
     ask: Callable[[Git, str], object], tmp_path: Path, git_calls: list[list[str]]
 ) -> None:
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
-    git = Git(tmp_path / "sha256")
+    git = Git(tmp_path / "sha256", cache=GitCache())
     started = len(git_calls)
     ask(git, "HEAD")
     assert git.object_id_length() == 64
@@ -748,31 +752,29 @@ def test_git_paths_learns_the_object_id_length_in_the_same_process(
 
 
 def test_git_paths_asks_no_object_id_length_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
-    repo.object_id_length()
-    git_paths(repo, "HEAD")
+    git = Git(repo.directory, cache=GitCache())
+    git.object_id_length()
+    git_paths(git, "HEAD")
     assert "--show-object-format" not in git_calls[-1]
 
 
 def test_git_paths_asks_no_prefix_it_knows(repo: Git, git_calls: list[list[str]]) -> None:
-    repo.prefix()
-    git_paths(repo, "HEAD")
+    git = Git(repo.directory, cache=GitCache())
+    git.prefix()
+    git_paths(git, "HEAD")
     assert "--show-prefix" not in git_calls[-1]
 
 
 def test_git_paths_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit(object_id_length=40)  # so rev-parse is asked no object format
-    git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no prefix line
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="/repo/.git/HEAD\n")  # no index line
     with pytest.raises(ValueError):
-        git_paths(git, "HEAD")
+        git_paths(git, "HEAD", "index")
 
 
 def test_git_paths_refuses_an_empty_answer() -> None:
-    git = FakeGit(object_id_length=40)
-    git.respond(
-        ["rev-parse", "--path-format=absolute", "--show-prefix"], stdout="\n\ntrue\n/g\n/g\n"
-    )
-    git.prefix()
-    git.respond(["rev-parse", "--path-format=absolute"])  # nothing
+    git = FakeGit()
+    git.respond(["rev-parse"])
     with pytest.raises(ValueError):
         git_paths(git, "HEAD")
 
@@ -782,7 +784,7 @@ def test_git_paths_and_head_gives_the_paths_and_the_branch_in_one_git(
 ) -> None:
     paths, head = git_paths_and_head(repo, "HEAD", "index")
 
-    assert paths == git_paths(repo, "HEAD", "index")
+    assert paths == [Path(repo.directory) / ".git" / name for name in ("HEAD", "index")]
     assert head == Head(branch="refs/heads/main")
     assert len(git_calls) == 1
 
@@ -800,11 +802,12 @@ def test_git_paths_and_head_follows_a_detached_head(repo: Git) -> None:
 def test_git_paths_and_head_asks_git_each_time_since_head_moves(
     repo: Git, git_calls: list[list[str]]
 ) -> None:
-    assert git_paths_and_head(repo, "HEAD")[1].branch == "refs/heads/main"
+    git = Git(repo.directory, cache=GitCache())
+    assert git_paths_and_head(git, "HEAD")[1].branch == "refs/heads/main"
     repo.run("switch", "--quiet", "--create", "other")
     del git_calls[:]
 
-    assert git_paths_and_head(repo, "HEAD")[1].branch == "refs/heads/other"
+    assert git_paths_and_head(git, "HEAD")[1].branch == "refs/heads/other"
     assert len(git_calls) == 1
 
 
@@ -832,11 +835,12 @@ def test_git_paths_and_head_gives_a_linked_worktrees_own_paths(repo: Git, tmp_pa
 def test_git_paths_and_head_fills_what_git_paths_remembers(
     repo: Git, git_calls: list[list[str]]
 ) -> None:
-    git_paths_and_head(repo, "HEAD", "refs")
+    git = Git(repo.directory, cache=GitCache())
+    git_paths_and_head(git, "HEAD", "refs")
     del git_calls[:]
 
-    git_paths(repo, "HEAD", "refs")
-    repo.prefix()
+    git_paths(git, "HEAD", "refs")
+    git.prefix()
 
     assert git_calls == []
 
@@ -863,7 +867,7 @@ def test_git_paths_and_head_without_names_still_gives_the_head(repo: Git) -> Non
     ],
 )
 def test_git_paths_and_head_reads_a_fakes_answer(stdout: str, head: Head) -> None:
-    git = FakeGit(object_id_length=40)
+    git = FakeGit(object_id_length=40, cache=GitCache())
     # The prefix, cdup, inside and git directories first.
     git.respond(["rev-parse"], stdout=f"\n\ntrue\n/g\n/g\n{stdout}")
 
@@ -1017,16 +1021,16 @@ def test_git_paths_and_head_takes_an_unborn_branch_whatever_git_warns(tmp_path: 
 
 
 def test_git_paths_and_head_refuses_an_answer_a_line_short() -> None:
-    git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse"], stdout="\n\ntrue\n/g\n/g\n/g/HEAD\n")  # a path too few for two
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="/g/HEAD\nrefs/heads/main\n")  # a path too few for two
 
     with pytest.raises(ValueError):
         git_paths_and_head(git, "HEAD", "index")
 
 
 def test_git_paths_and_head_takes_a_quiet_exit_1_with_the_paths_for_an_unborn_head() -> None:
-    git = FakeGit(object_id_length=40)
-    git.respond(["rev-parse"], stdout="\n\ntrue\n/g\n/g\n/g/HEAD\n", returncode=1)
+    git = FakeGit()
+    git.respond(["rev-parse"], stdout="/g/HEAD\n", returncode=1)
 
     assert git_paths_and_head(git, "HEAD") == ([Path("/g/HEAD")], Head())
 

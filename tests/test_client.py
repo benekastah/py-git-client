@@ -20,6 +20,7 @@ from git_client import (
     ConfigUnset,
     CorruptObjectError,
     Git,
+    GitCache,
     GitError,
     GitTimeoutError,
     Head,
@@ -84,7 +85,7 @@ def test_prefix_is_asked_of_git_once_per_directory_and_environment(
 ) -> None:
     below = Path(repo.directory) / "sub"
     below.mkdir()
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
 
     assert git.prefix() == ""
     assert git.prefix(timeout=5) == ""
@@ -132,7 +133,7 @@ def test_cdup_and_prefix_are_what_git_prints_wherever_the_client_is(
     # Outside a worktree whose top it knows, git prints no cdup at all, not an empty line.
     cdup = Git(copy / where).run_bytes("rev-parse", "--show-cdup").removesuffix(b"\n")
     prefix = Git(copy / where).run_bytes("rev-parse", "--show-prefix").removesuffix(b"\n")
-    git = Git(copy / where)
+    git = Git(copy / where, cache=GitCache())
     started = len(git_calls)
 
     assert (git.cdup(), git.prefix()) == (decode(cdup), decode(prefix))
@@ -153,7 +154,7 @@ def test_prefix_tells_the_object_id_length_in_the_same_process(
     tmp_path: Path, git_calls: list[list[str]]
 ) -> None:
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
-    git = Git(tmp_path / "sha256")
+    git = Git(tmp_path / "sha256", cache=GitCache())
     started = len(git_calls)
 
     git.prefix()
@@ -210,7 +211,7 @@ def test_a_top_whose_path_ends_in_a_line_of_true_isnt_taken_for_the_marker(
 
 
 def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
-    git = Git(tmp_path / "later")
+    git = Git(tmp_path / "later", cache=GitCache())
     (tmp_path / "later").mkdir()
     with pytest.raises(GitError):
         git.prefix()
@@ -221,7 +222,7 @@ def test_a_failed_prefix_is_not_remembered(tmp_path: Path) -> None:
 
 def test_object_id_length_follows_a_change_of_directory(repo: Git, tmp_path: Path) -> None:
     Git(tmp_path).run("init", "--quiet", "--object-format=sha256", "sha256")
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
     assert git.object_id_length() == 40
 
     git.directory = str(tmp_path / "sha256")
@@ -1000,7 +1001,8 @@ def test_a_subclass_of_git_error_survives_pickling_with_its_notes() -> None:
 
 
 def test_object_id_length_is_read_from_git_once(repo: Git, git_calls: list[GitCall]) -> None:
-    assert [repo.object_id_length(), repo.object_id_length()] == [40, 40]
+    git = Git(repo.directory, cache=GitCache())
+    assert [git.object_id_length(), git.object_id_length()] == [40, 40]
     assert git_calls == [["rev-parse", "--show-object-format"]]
 
 
@@ -1020,7 +1022,7 @@ def test_object_id_length_asks_git_once_for_threads_asking_at_once(
                 raise GitError(args, 1, "failed")
             return super().process(*args, **kwargs)
 
-    git = SlowGit(repo.directory)
+    git = SlowGit(repo.directory, cache=GitCache())
 
     def length(_: int) -> int | None:
         try:
@@ -1072,7 +1074,7 @@ def test_object_id_length_is_the_repositorys_whatever_ids_were_read(
 
 
 def test_a_failed_object_id_length_is_not_remembered(tmp_path: Path) -> None:
-    git = Git(tmp_path / "later")
+    git = Git(tmp_path / "later", cache=GitCache())
     (tmp_path / "later").mkdir()
     with pytest.raises(GitError):
         git.object_id_length()

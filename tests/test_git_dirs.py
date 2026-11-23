@@ -7,6 +7,7 @@ import pytest
 
 from git_client import (
     Git,
+    GitCache,
     NotARepositoryError,
     ReadOnlyGit,
     git_common_dir,
@@ -126,9 +127,10 @@ def test_a_directory_that_isnt_a_repository_raises_gits_error(tmp_path: Path) ->
 def test_one_process_answers_both_once(
     repo: Git, git_calls: list[GitCall], first: Callable[[ReadOnlyGit], Path]
 ) -> None:
-    first(repo)
-    git_dir(repo)
-    git_common_dir(repo)
+    git = Git(repo.directory, cache=GitCache())
+    first(git)
+    git_dir(git)
+    git_common_dir(git)
 
     assert len(git_calls) == 1
 
@@ -137,20 +139,22 @@ def test_one_process_answers_both_once(
 def test_the_rev_parse_of_where_things_are_tells_both(
     repo: Git, git_calls: list[GitCall], first: Callable[..., object]
 ) -> None:
-    first(repo, "HEAD") if first is not Git.prefix else repo.prefix()
+    git = Git(repo.directory, cache=GitCache())
+    first(git, "HEAD") if first is not Git.prefix else git.prefix()
     started = len(git_calls)
 
-    assert git_dir(repo) == git_common_dir(repo) == Path(repo.directory) / ".git"
+    assert git_dir(git) == git_common_dir(git) == Path(git.directory) / ".git"
     assert len(git_calls) == started
 
 
 def test_git_dir_tells_where_things_are_in_the_same_process(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    git_dir(repo)
+    git = Git(repo.directory, cache=GitCache())
+    git_dir(git)
 
-    assert (repo.prefix(), repo.cdup(), repo.object_id_length()) == ("", "", 40)
-    assert git_paths(repo, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
+    assert (git.prefix(), git.cdup(), git.object_id_length()) == ("", "", 40)
+    assert git_paths(git, "HEAD") == [Path(git.directory) / ".git" / "HEAD"]
     assert len(git_calls) == 2  # and the path, which git_dir doesn't ask
 
 
@@ -172,16 +176,18 @@ def test_a_client_asks_again_once_it_points_elsewhere(
     repo: Git, tmp_path: Path, git_calls: list[GitCall]
 ) -> None:
     repo.run("worktree", "add", "--quiet", str(tmp_path / "linked"))
-    main = git_dir(repo)
+    git = Git(repo.directory, cache=GitCache())
+    main = git_dir(git)
     git_calls.clear()
-    repo.directory = str(tmp_path / "linked")
+    git.directory = str(tmp_path / "linked")
 
-    assert git_dir(repo) != main
+    assert git_dir(git) != main
     assert len(git_calls) == 1
 
 
 def test_a_read_only_copy_shares_the_answers(repo: Git, git_calls: list[GitCall]) -> None:
-    common = git_common_dir(repo)
+    git = Git(repo.directory, cache=GitCache())
+    common = git_common_dir(git)
 
-    assert git_common_dir(repo.read_only()) == common
+    assert git_common_dir(git.read_only()) == common
     assert len(git_calls) == 1

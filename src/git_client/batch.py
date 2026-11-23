@@ -32,6 +32,7 @@ from git_client.client import (
     where_questions,
 )
 from git_client.errors import GitError
+from git_client.performance import record_read
 
 # What patch_ids gives every command, against the user's config, which would drop patches
 # (diff.relative, submodule.<name>.ignore, diff.submodule) or change them (color, an external
@@ -68,6 +69,7 @@ _MOST_CONFLICTS = 127
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
 
 
+@record_read("git")
 def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
     included files), from one `git config --list -z`, with each key's values in the order git
@@ -102,6 +104,7 @@ class Ref:
     fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
 
 
+@record_read("git")
 def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
     refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
@@ -132,6 +135,7 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
+@record_read("git")
 def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
     "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
@@ -142,13 +146,9 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     whose path couldn't be told from the next one's, and GitError if git fails (e.g.
     NotARepositoryError).
 
-    Each name is asked of git once per client and location (its directory and
-    `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
-    may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()` and `cdup()`, `object_id_length()`, `git_dir` and
-    `git_common_dir`, if they aren't known yet. Where a path git prints holds a newline,
-    which makes its answers' lines impossible to tell apart, each is asked in a process of its
-    own."""
+    With a cache, names are kept for the current location. Git always answers for "hooks"
+    and paths below it because core.hooksPath can move them. A path containing a newline
+    can make batched output ambiguous; in that case Git answers each question separately."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -188,12 +188,12 @@ class Head:
     detached: bool = False
 
 
+@record_read("git")
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse` (so
     a tool that wants both pays for one process). The paths are as `git_paths` gives them, and
-    remembered for `git_paths` (which asks git again for hooks, whatever is kept),
-    `git.prefix()`, `git.cdup()`, `git.object_id_length()`, `git_dir` and `git_common_dir`; HEAD
-    is read afresh each time, since it moves. Raises what `git_paths` does: ValueError for a
+    cached for `git_paths` when the client has a cache. HEAD is read afresh each time,
+    since it moves. Raises what `git_paths` does: ValueError for a
     name with a line ending, and GitError if git fails before it has printed the paths (e.g.
     NotARepositoryError).
 
@@ -244,6 +244,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     return [Path(os.fsdecode(found[name])) for name in names], head
 
 
+@record_read("git")
 def git_dir(git: ReadOnlyGit) -> Path:
     """The client's own git directory, as `git rev-parse --path-format=absolute --git-dir`
     prints it: a checkout's (from any directory in it), a git directory itself, or, for a
@@ -251,14 +252,12 @@ def git_dir(git: ReadOnlyGit) -> Path:
     (see `git_common_dir`). Raises GitError if git fails (e.g. NotARepositoryError for a
     directory in no repository).
 
-    Asked of git once per client and location (its directory and `env`) and remembered, with
-    `git_common_dir`, in the `rev-parse` that asks where things are: the one `prefix()`,
-    `git_paths` and `git_paths_and_head` run, which tells this too while it isn't known, as
-    this tells them. Where a path git prints holds a newline, which makes its answers' lines
-    impossible to tell apart, each is asked in a process of its own."""
+    Asked of Git with `git_common_dir`. With a cache, other metadata queries can
+    fill in both directories in the same process."""
     return _git_dirs(git)[0]
 
 
+@record_read("git")
 def git_common_dir(git: ReadOnlyGit) -> Path:
     """The directory with the client's repository's refs, objects and config, as `git
     rev-parse --path-format=absolute --git-common-dir` prints it: `git_dir`'s, but for a
@@ -406,8 +405,7 @@ def hash_blob_at(
     `path` is relative to `git.directory`, and takes no pathspec magic (e.g. ":(top)"). With
     `paths_from_top`, it is instead a path from the top of the worktree, as git reports one
     (e.g. `git diff --name-only`), for a client in a subdirectory: hash_blob_at goes up to the
-    top (`git.cdup()`, asked of git once per client) and down to the path, taking it as it is,
-    with no magic."""
+    top using `git.cdup()`, then down to the path, taking it as it is."""
     if paths_from_top:
         path = os.path.join(encode(git.cdup()), os.fsencode(path))
     output = git.run_bytes(

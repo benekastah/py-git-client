@@ -10,6 +10,7 @@ from git_client import (
     Arg,
     CatFile,
     Git,
+    GitCache,
     ReadOnlyGit,
     config,
     git_common_dir,
@@ -135,7 +136,7 @@ def test_a_clients_read_only_one_has_its_settings_and_answers(
         stopping=stopping,
         env={"TZ": "UTC"},
         process_groups=False,
-        remember_for=60,
+        cache=GitCache(),
         object_id_length=64,
     )
     git.prefix()
@@ -144,7 +145,7 @@ def test_a_clients_read_only_one_has_its_settings_and_answers(
     reader = git.read_only()
     git.env["TZ"] = "CET"  # a reader already given out stays as it was
 
-    settings = ("directory", "program", "timeout", "stopping", "process_groups", "remember_for")
+    settings = ("directory", "program", "timeout", "stopping", "process_groups", "cache")
     assert [getattr(reader, name) for name in settings] == [getattr(git, name) for name in settings]
     assert reader.env == {"TZ": "UTC"}
     assert (reader.prefix(), reader.cdup(), reader.object_id_length()) == ("", "", 64)

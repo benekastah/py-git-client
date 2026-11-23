@@ -1,7 +1,7 @@
 import copy
-import inspect
 import pickle
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -12,120 +12,99 @@ from typing import Any
 import pytest
 
 import git_client.client
-from git_client import Arg, Git, ReadOnlyGit, git_common_dir, git_dir, git_paths
+from git_client import Arg, Git, GitCache, ReadOnlyGit, git_dir, git_paths
 from git_client.testing import FakeGit, GitCall
 
 
-@pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """The time a client remembers answers by (seconds, as time.monotonic counts them): set
-    `clock[0]`, rather than sleep."""
-    now = [1000.0]
-    monkeypatch.setattr("git_client.client._clock", lambda: now[0])
-    return now
-
-
-def test_an_answer_is_kept_for_remember_for_seconds(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
-    git = Git(repo.directory, remember_for=10)
-    git.prefix()
-    clock[0] += 9.9
-
-    assert git.prefix() == ""
-    assert len(git_calls) == 1
-
-
-def test_an_answer_is_asked_again_once_remember_for_is_past(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
-    git = Git(repo.directory, remember_for=10)
-    git.prefix()
-    clock[0] += 10
-
-    assert git.prefix() == ""
-    assert len(git_calls) == 2
-    git.prefix()  # and the new answer is kept
-    assert len(git_calls) == 2
-
-
-def test_the_answers_of_one_rev_parse_are_asked_again_together(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
-    git = Git(repo.directory, remember_for=10)
-    git_paths(git, "HEAD")
-    clock[0] += 10
-
-    assert git.prefix() == ""
-    assert git_calls[-1] == [
-        "rev-parse",
-        "--path-format=absolute",
-        "--show-prefix",
-        "--show-cdup",
-        "--is-inside-work-tree",
-        "--show-object-format",
-        "--git-dir",
-        "--git-common-dir",
-    ]
-    assert (git.cdup(), git.object_id_length(), git_dir(git)) == ("", 40, git_common_dir(git))
-    assert len(git_calls) == 2
-    # A path is asked again when it's asked for.
-    assert git_paths(git, "HEAD") == [Path(repo.directory) / ".git" / "HEAD"]
-    assert git_calls[-1] == ["rev-parse", "--path-format=absolute", "--git-path", "HEAD"]
-
-
-def test_object_id_length_asked_alone_expires_too(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
-    git = Git(repo.directory, remember_for=10)
-    git.object_id_length()
-    clock[0] += 10
-
-    assert git.object_id_length() == 40
-    assert git_calls == [["rev-parse", "--show-object-format"]] * 2
-
-
-def test_a_given_object_id_length_never_expires(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
-    git = Git(repo.directory, remember_for=10, object_id_length=40)
-    git.prefix()
-    clock[0] += 10
-
-    assert git.object_id_length() == 40
-    git.prefix()
-    assert all("--show-object-format" not in call for call in git_calls)
-
-
-def test_by_default_an_answer_never_expires(
-    repo: Git, clock: list[float], git_calls: list[GitCall]
-) -> None:
+def test_metadata_is_read_fresh_without_a_cache(repo: Git, git_calls: list[GitCall]) -> None:
     git = Git(repo.directory)
-    git_paths(git, "HEAD")
-    clock[0] += 1e9
+    assert git.prefix() == git.prefix() == ""
+    assert len(git_calls) == 2
 
-    git.prefix()
-    git.object_id_length()
-    git_dir(git)
-    git_paths(git, "HEAD")
-    assert len(git_calls) == 1
+    git_calls.clear()
+    assert git_paths(git, "HEAD") == git_paths(git, "HEAD")
+    assert git_calls == [["rev-parse", "--path-format=absolute", "--git-path", "HEAD"]] * 2
 
 
-def test_remember_for_0_asks_each_time(repo: Git, git_calls: list[GitCall]) -> None:
-    git = Git(repo.directory, remember_for=0)
-    git.prefix()
-    git.prefix()
+def test_discarding_a_cache_reads_a_replaced_repository_afresh(
+    repo: Git, tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    directory = Path(repo.directory)
+    cache = GitCache()
+    assert git_dir(Git(directory, cache=cache)) == directory / ".git"
 
+    # Replace the checkout with a bare repository at the same pathname.
+    directory.rename(tmp_path / "old")
+    Git(tmp_path).run("init", "--bare", "--quiet", str(directory))
+    git_calls.clear()
+
+    assert git_dir(Git(directory, cache=cache)) == directory / ".git"
+    assert git_dir(Git(directory, cache=GitCache())) == directory
+    assert git_dir(Git(directory)) == directory
     assert len(git_calls) == 2
 
 
-def test_remember_for_isnt_negative() -> None:
-    with pytest.raises(ValueError):
-        Git(remember_for=-1)
+def test_shared_cache_reuses_answers_across_fresh_clients(
+    repo: Git, git_calls: list[GitCall]
+) -> None:
+    cache = GitCache()
+    first = Git(repo.directory, cache=cache)
+    second = ReadOnlyGit(repo.directory, cache=cache)
+    assert git_paths(first, "HEAD") == git_paths(second, "HEAD")
+    assert second.prefix() == "" and second.object_id_length() == 40
+    assert len(git_calls) == 1
+    cache.clear()
+    assert second.prefix() == ""
+    assert len(git_calls) == 2
+
+
+def test_shared_cache_keeps_answers_from_distinct_git_programs_apart() -> None:
+    cache = GitCache()
+    sha1 = FakeGit(program="git-sha1", cache=cache)
+    sha256 = FakeGit(program="git-sha256", cache=cache)
+    sha1.respond(["rev-parse", "--show-object-format"], stdout="sha1")
+    sha256.respond(["rev-parse", "--show-object-format"], stdout="sha256")
+
+    assert sha1.object_id_length() == 40
+    assert sha256.object_id_length() == 64
+
+
+def test_shared_cache_distinguishes_relative_programs_after_chdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = GitCache()
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    repository = tmp_path / "repo"
+    first = FakeGit(repository, program="./git", cache=cache)
+    second = FakeGit(repository, program="./git", cache=cache)
+    first.respond(["rev-parse", "--show-object-format"], stdout="sha1")
+    second.respond(["rev-parse", "--show-object-format"], stdout="sha256")
+
+    monkeypatch.chdir(first_dir)
+    assert first.object_id_length() == 40
+    monkeypatch.chdir(second_dir)
+    assert second.object_id_length() == 64
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="directory symlinks may require elevated privileges"
+)
+def test_shared_cache_distinguishes_symlink_parent_traversal(repo: Git) -> None:
+    root = Path(repo.directory)
+    (root / "sub").mkdir()
+    (root / "sub" / "inside").mkdir()
+    (root / "link").symlink_to(root / "sub" / "inside", target_is_directory=True)
+
+    cache = GitCache()
+    assert Git(root, cache=cache).prefix() == ""
+    assert Git(root / "link" / "..", cache=cache).prefix() == "sub/"
 
 
 def test_forget_drops_every_answer(repo: Git, git_calls: list[GitCall]) -> None:
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
     git_paths(git, "HEAD")
     git.object_id_length()
     git.forget()
@@ -140,7 +119,7 @@ def test_forget_drops_every_answer(repo: Git, git_calls: list[GitCall]) -> None:
 def test_a_client_and_its_read_only_copy_forget_together(
     repo: Git, git_calls: list[GitCall], forgets: str
 ) -> None:
-    git = Git(repo.directory, remember_for=10)
+    git = Git(repo.directory, cache=GitCache())
     reader = git.read_only()
     git.prefix()
     (git if forgets == "client" else reader).forget()
@@ -148,7 +127,7 @@ def test_a_client_and_its_read_only_copy_forget_together(
     reader.prefix()
     git.prefix()  # the reader's answer
     assert len(git_calls) == 2
-    assert reader.remember_for == 10
+    assert reader.cache is git.cache
 
 
 def test_an_answer_git_gave_before_forget_is_not_kept(repo: Git, git_calls: list[GitCall]) -> None:
@@ -161,7 +140,7 @@ def test_an_answer_git_gave_before_forget_is_not_kept(repo: Git, git_calls: list
                 self.forget()
             return result
 
-    git = ForgettingGit(repo.directory)
+    git = ForgettingGit(repo.directory, cache=GitCache())
 
     assert git.prefix() == ""  # git's answer, for the caller who asked before forget
     git.prefix()
@@ -172,7 +151,7 @@ def test_threads_get_gits_answers_while_another_forgets(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
     (Path(repo.directory) / "sub").mkdir()
-    git = Git(Path(repo.directory) / "sub")
+    git = Git(Path(repo.directory) / "sub", cache=GitCache())
     asking = threading.Barrier(4)
     done = threading.Event()
 
@@ -198,24 +177,21 @@ def test_threads_get_gits_answers_while_another_forgets(
     assert len(git_calls) <= 27  # at most one process a call
 
 
-def test_a_fake_remembers_for_remember_for(clock: list[float]) -> None:
-    git = FakeGit(remember_for=10, object_id_length=40)
+def test_a_fake_can_share_an_explicit_cache() -> None:
+    git = FakeGit(cache=GitCache(), object_id_length=40)
     git.respond(["rev-parse"], stdout="\n\ntrue\n/g\n/g\n")
-    git.prefix()
-    clock[0] += 10
-
-    git.prefix()
-    assert len(git.calls) == 2
+    assert git.prefix() == git.read_only().cdup() == ""
+    assert len(git.calls) == 1
 
 
 def test_a_deep_copy_remembers_nothing_and_forgets_alone(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    git = Git(repo.directory, remember_for=10)
+    git = Git(repo.directory, cache=GitCache())
     git.prefix()
     twin = copy.deepcopy(git)
 
-    assert twin.remember_for == 10
+    assert isinstance(twin.cache, GitCache) and twin.cache is not git.cache
     twin.prefix()  # its own question
     assert len(git_calls) == 2
     twin.forget()
@@ -226,11 +202,11 @@ def test_a_deep_copy_remembers_nothing_and_forgets_alone(
 def test_a_pickled_client_comes_back_remembering_nothing(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    git = Git(repo.directory, remember_for=10)
+    git = Git(repo.directory, cache=GitCache())
     git_paths(git, "HEAD")
     back = pickle.loads(pickle.dumps(git))
 
-    assert back.remember_for == 10
+    assert isinstance(back, Git) and isinstance(back.cache, GitCache)
     assert back.prefix() == ""
     assert len(git_calls) == 2
 
@@ -241,7 +217,7 @@ def prefix_of(git: Git) -> str:
 
 
 def test_a_client_with_answers_goes_to_a_process_pool(repo: Git) -> None:
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
     git.prefix()
 
     with ProcessPoolExecutor(1) as pool:
@@ -258,7 +234,7 @@ def test_threads_asking_object_id_length_at_once_take_one_gits_answer(
             time.sleep(0.05)
             return super().process(*args, **kwargs)
 
-    git = SlowGit(repo.directory, remember_for=0)  # expired before a waiter could read it
+    git = SlowGit(repo.directory, cache=GitCache())
     asking = threading.Barrier(4)
 
     def length(_: int) -> int:
@@ -274,7 +250,7 @@ def test_threads_asking_object_id_length_at_once_take_one_gits_answer(
 def test_what_another_thread_learns_mid_call_still_answers_the_caller(
     repo: Git, monkeypatch: pytest.MonkeyPatch, ask: Callable[[Git], object]
 ) -> None:
-    git = Git(repo.directory)
+    git = Git(repo.directory, cache=GitCache())
     asking = git_client.client.asking
 
     def others_learn_it_meanwhile(client: ReadOnlyGit) -> int:
@@ -288,53 +264,33 @@ def test_what_another_thread_learns_mid_call_still_answers_the_caller(
     assert ask(git) == (Path(repo.directory) / ".git" if ask is git_dir else "")
 
 
-def test_object_id_length_after_forget_takes_no_answer_git_gave_before(
+def test_clearing_cache_does_not_block_new_reads_on_an_earlier_query(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    answered = threading.Event()
+    old_query_answered = threading.Event()
+    release_old_query = threading.Event()
 
     class SlowGit(Git):
-        """Holds the first answer a moment once git has given it, so that forget() comes
-        after git answered and another thread can join the ask before it ends."""
+        """Hold the first answer after Git has returned it."""
 
         def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
             output = super().process(*args, **kwargs)
-            if not answered.is_set():
-                answered.set()
-                time.sleep(0.1)
+            old_query_answered.set()
+            assert release_old_query.wait(10)
             return output
 
-    git = SlowGit(repo.directory)
-    with ThreadPoolExecutor(1) as pool:
-        first = pool.submit(git.object_id_length)
-        answered.wait()
-        git.forget()  # e.g. after the repository was replaced
-        assert git.object_id_length() == 40
-        assert first.result() == 40
+    cache = GitCache()
+    first = SlowGit(repo.directory, cache=cache)
+    second = Git(repo.directory, cache=cache)
+    with ThreadPoolExecutor(2) as pool:
+        earlier = pool.submit(first.object_id_length)
+        try:
+            assert old_query_answered.wait(5)
+            cache.clear()
+            assert pool.submit(second.object_id_length).result(timeout=2) == 40
+            assert not earlier.done()
+        finally:
+            release_old_query.set()
+        assert earlier.result() == 40
 
     assert git_calls == [["rev-parse", "--show-object-format"]] * 2
-
-
-def test_forget_while_answers_are_written_keeps_none(
-    repo: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    git = Git(repo.directory)
-    forgetting: list[threading.Thread] = []
-
-    def clock() -> float:
-        """Calls forget() from another thread as remember() writes git's answers, between
-        its check of the forget count and its write."""
-        caller = inspect.currentframe()
-        caller = caller.f_back if caller else None
-        if caller and caller.f_code.co_name == "remember" and not forgetting:
-            forgetting.append(threading.Thread(target=git.forget))
-            forgetting[0].start()
-            forgetting[0].join(0.2)  # which returns at once, if forget() doesn't wait
-        return time.monotonic()
-
-    monkeypatch.setattr("git_client.client._clock", clock)
-    git.prefix()
-    forgetting[0].join()
-
-    git.prefix()  # forgotten: asked again
-    assert len(git_calls) == 2
