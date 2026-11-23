@@ -4,45 +4,7 @@ What each version of py-git-client changes for a tool that uses it. Versions are
 as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the README's
 "Releasing". The version `main` carries, not yet released, says "(unreleased)".
 
-## 0.0.4 (unreleased)
-
-### What a tool may need to change
-
-- Repository metadata caching is opt-in. On `Git`, `ReadOnlyGit`, and `FakeGit`,
-  replace `remember_for=` with `cache=GitCache()` if the tool wants to reuse answers.
-  A cache keeps answers until it is cleared or discarded. Give a long-lived service
-  a fresh cache per refresh and share it among clients within that refresh.
-  `read_only()` shares the original client's cache. `cache.clear()` or `git.forget()`
-  invalidates the answers for every client sharing it.
-- The cache covers `prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
-  `git_dir`, and `git_common_dir`. An explicit `object_id_length=` still takes
-  precedence. Git reads HEAD, refs, config, objects, and the configured hooks path afresh.
-- Without a cache, metadata calls ask Git for the requested values without warming
-  unrelated metadata. Tests that script `FakeGit` must match the new arguments and
-  output. For example, `git_paths(git, "HEAD")` asks only
-  `rev-parse --path-format=absolute --git-path HEAD` and expects one path line.
-  Pass `cache=GitCache()` in tests that exercise the batched cache warm-up.
-
-### Added
-
-- Pass `performance=PerformanceRecorder()` to a client to collect in-memory events
-  with monotonic start and end times. Share a recorder across clients or threads.
-  `read_only()` carries it forward, and `recorder.events` gives an immutable snapshot
-  in start order. A typed read that consults Git or pygit2 records a `read` event.
-  A fully cached answer records nothing.
-- A `process` event records a Git launch, with a PID for a successful launch and
-  `end=None` until the exit is observed. A native pygit2 read has no subprocess
-  event. CatFile records active startup, exchanges, and shutdown as `process_work`
-  intervals. Use those intervals for CatFile wall time so idle gaps in the persistent
-  process's lifetime stay out of the total. Take the union of overlapping intervals
-  when combining read and subprocess times.
-
-### Fixed
-
-- Cache keys preserve `..` after symlinks in repository paths, so a lookup through
-  `link/..` cannot reuse the answer for its lexically normalized path.
-
-## 0.0.3 (2026-11-23)
+## 0.0.3 (unreleased)
 
 ### What a tool may need to change
 
@@ -94,23 +56,21 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   arguments raise `TypeError`, making no change. Other writes (`--add`, `--rename-section`,
   ...) go through `git.run("config", ...)`, which doesn't try again while the file is locked
   (#61, #64).
-- `prefix()`, `cdup()`, `git_paths`, `git_paths_and_head`, `git_dir` and `git_common_dir` ask
-  git in one `rev-parse`, which tells `object_id_length()` too, so a `FakeGit` answering them
-  answers that: `rev-parse --path-format=absolute`, then whichever the client doesn't know yet
-  of `--show-prefix --show-cdup --is-inside-work-tree`, `--show-object-format` (not with
-  `object_id_length=`) and `--git-dir --git-common-dir`, then the caller's `--git-path <name>`s
-  (and `git_paths_and_head`'s `--verify --quiet --symbolic-full-name HEAD`). git prints a line
-  for each, in that order: the prefix (empty at the top), the cdup (no line at all where git
-  knows no worktree: a bare repository, a git directory), `true` or `false`, `sha1` or
-  `sha256`, the git directory and the common one (absolute), then each path, then HEAD's full
-  name (`HEAD` when detached; none for an unborn branch, where git exits 1, or where it says
-  "refname 'HEAD' is ambiguous", exiting 0). An answer short of lines raises `ValueError:
-  rev-parse printed N lines, too few for M` (#50, #67, #69).
-- `prefix()`, `cdup()`, `git_paths` (but "hooks" and what's under it), `git_dir` and
-  `git_common_dir` are asked of git once per client, directory and `env`, and remembered, as
-  `object_id_length()` is: a tool that cached them can drop its cache. A repository moved or
-  replaced under a client that keeps its directory isn't noticed, until the client's
-  `remember_for` has passed or `forget()` is called (see "Added") (#50, #69).
+- Repository metadata caching is opt-in. On `Git`, `ReadOnlyGit`, and `FakeGit`,
+  pass `cache=GitCache()` to reuse answers. Callers pinned to a development commit
+  that used `remember_for=` should switch to the same cache argument.
+  A cache keeps answers until it is cleared or discarded. Give a long-lived service
+  a fresh cache per refresh and share it among clients within that refresh.
+  `read_only()` shares the original client's cache. `cache.clear()` or `git.forget()`
+  invalidates the answers for every client sharing it.
+- The cache covers `prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
+  `git_dir`, and `git_common_dir`. An explicit `object_id_length=` still takes
+  precedence. HEAD, refs, config, object lookups, and the configured hooks path are read afresh.
+- Without a cache, metadata calls ask Git for the requested values without warming
+  unrelated metadata. Tests that script `FakeGit` must match the new arguments and
+  output. For example, `git_paths(git, "HEAD")` asks only
+  `rev-parse --path-format=absolute --git-path HEAD` and expects one path line.
+  Pass `cache=GitCache()` in tests that exercise the batched cache warm-up.
 - `resolve` (a `ReadOnlyGit`'s too) sends cat-file a name of all zeros first, as `CatFile`
   does: a `FakeGit` answering `cat-file --batch-check` prints
   `0000000000000000000000000000000000000000 missing` as its first line, or `resolve` raises
@@ -156,14 +116,19 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 - Optional native object reads through the `pygit2` extra and
   `ReadOnlyGit(..., native=True)` or `Git.read_only(native=True)`. Full SHA-1
-  object IDs can be resolved and read in-process. Other reads and all `Git`
-  operations use Git subprocesses.
-- `remember_for=` (seconds from when git answered; None, the default, keeps answers as long as
-  the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a client
-  remembers of where things are: past it, or after `forget()`, the next call asks git again,
-  in one process. A client, its `read_only()` and its shallow copies share them; a deep copy or
-  a pickled client starts with none. A long-lived tool (e.g. move-forward) keeps a client per
-  repository with `remember_for=` a few seconds, or calls `forget()` after each refresh (#69).
+  object IDs can be resolved and read in-process. `Git` uses subprocesses when
+  it needs to consult Git.
+- Pass `performance=PerformanceRecorder()` to a client to collect in-memory events
+  with monotonic start and end times. Share a recorder across clients or threads.
+  `read_only()` carries it forward, and `recorder.events` gives an immutable snapshot
+  in start order. A typed read that consults Git or pygit2 records a `read` event.
+  A fully cached answer records nothing.
+- A `process` event records a Git launch, with a PID for a successful launch and
+  `end=None` until the exit is observed. A native pygit2 read has no subprocess
+  event. CatFile records active startup, exchanges, and shutdown as `process_work`
+  intervals. Use those intervals for CatFile wall time so idle gaps in the persistent
+  process's lifetime stay out of the total. Take the union of overlapping intervals
+  when combining read and subprocess times.
 - `ReadOnlyGit.cdup()`, as `git rev-parse --show-cdup` gives it, asked with `prefix()` (#67).
 - `git_dir`, the client's own git directory (a linked worktree's own, not the main one), asked
   with `git_common_dir` (#50, #65, #69).
@@ -209,16 +174,18 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - A `ReadOnlyGit`'s reads but `config()` run with `-c core.fsmonitor=false`, so no
   `core.fsmonitor` hook runs as git reads the index for a name such as `:path` (in `resolve`
   and `CatFile`); `git_calls` records the command without it (#55, #70).
-- `resolve` (a `ReadOnlyGit`'s too) takes one process for every name, where a name cat-file
+- The subprocess path of `resolve` takes one process per lookup, where a name cat-file
   exits on (e.g. `main@{upstream}` with no upstream) took a second (#54).
-- `object_id_length()`: threads that ask at once wait for one git's answer, where each could
-  start its own (#54).
+- With a shared cache, threads that ask `object_id_length()` at the same time
+  can reuse one Git process's answer (#54).
 - Starting git costs less, a command with a timeout most: the environment built for git is
   kept until `os.environ`, the client's `env` or the command's changes, and whether the tool
   has a terminal is asked once per process and session (#52).
 
 ### Fixed
 
+- Cache keys preserve `..` after symlinks in repository paths, so a lookup through
+  `link/..` cannot reuse the answer for its lexically normalized path.
 - `repo_templates` copies repoint every remote URL as git reads it (`git config
   --get-regexp`, once per repository as the template is built), where the plugin's own
   reading of the config file missed an entry on its section's line and misread a value
