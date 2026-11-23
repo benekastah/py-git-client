@@ -53,14 +53,15 @@ class PerformanceRecorder:
             return tuple(sorted(self._events, key=lambda event: event.start))
 
     @contextmanager
-    def _measure(self, kind: EventKind, name: str) -> Generator[None]:
+    def _measure(self, kind: EventKind, name: str, read: _Read | None) -> Generator[None]:
         start = monotonic()
         try:
             yield
         finally:
-            event = PerformanceEvent(kind, name, start, monotonic())
-            with self._lock:
-                self._events.append(event)
+            if read is None or read.consulted_backend:
+                event = PerformanceEvent(kind, name, start, monotonic())
+                with self._lock:
+                    self._events.append(event)
 
     def _register_process(self, process: _RecordedProcess) -> int:
         event = PerformanceEvent(
@@ -100,12 +101,12 @@ class PerformanceRecorder:
 
 
 def measure(
-    recorder: PerformanceRecorder | None, kind: EventKind, name: str
+    recorder: PerformanceRecorder | None, kind: EventKind, name: str, *, read: _Read | None = None
 ) -> AbstractContextManager[None]:
     """Time an operation when recording is enabled."""
     if recorder is None:
         return nullcontext()
-    return recorder._measure(kind, name)  # pyright: ignore[reportPrivateUsage]
+    return recorder._measure(kind, name, read)  # pyright: ignore[reportPrivateUsage]
 
 
 class _Measured(Protocol):
@@ -113,13 +114,25 @@ class _Measured(Protocol):
     def performance(self) -> PerformanceRecorder | None: ...
 
 
-_current_read: ContextVar[_Measured | None] = ContextVar("git_client_current_read", default=None)
+@dataclass
+class _Read:
+    owner: _Measured
+    consulted_backend: bool = False
+
+
+_current_read: ContextVar[_Read | None] = ContextVar("git_client_current_read", default=None)
+
+
+def note_backend_read() -> None:
+    """Keep the current read's timing now that it has consulted a backend."""
+    if (read := _current_read.get()) is not None:
+        read.consulted_backend = True
 
 
 def record_read[**P, R](
     parameter: str = "self",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Time a public read, counting calls it delegates on the same client once."""
+    """Time a public read that needs a backend, including same-client calls it delegates."""
 
     def decorate(function: Callable[P, R]) -> Callable[P, R]:
         name = function.__qualname__
@@ -130,11 +143,13 @@ def record_read[**P, R](
                 return function(*args, **kwargs)
             owner = cast(_Measured, args[0] if args else kwargs[parameter])
             recorder = owner.performance
-            if recorder is None or _current_read.get() is owner:
+            current = _current_read.get()
+            if recorder is None or (current is not None and current.owner is owner):
                 return function(*args, **kwargs)
-            token = _current_read.set(owner)
+            read = _Read(owner)
+            token = _current_read.set(read)
             try:
-                with measure(recorder, "read", name):
+                with measure(recorder, "read", name, read=read):
                     return function(*args, **kwargs)
             finally:
                 _current_read.reset(token)
@@ -204,4 +219,5 @@ def open_git_process(
     """Start a Git process, tracking launch and observed exit when requested."""
     if recorder is None:
         return subprocess.Popen(command, **options)
+    note_backend_read()
     return _RecordedProcess(command, recorder, args, persistent, **options)

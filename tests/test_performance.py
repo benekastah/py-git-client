@@ -13,11 +13,12 @@ from git_client import (
     PerformanceRecorder,
     ReadOnlyGit,
     config,
+    git_paths,
 )
 from git_client.testing import FakeGit
 
 
-def test_records_writes_and_reads_including_cached_reads(repo: Git) -> None:
+def test_records_writes_and_backend_reads_but_omits_a_cache_hit(repo: Git) -> None:
     recorder = PerformanceRecorder()
     git = Git(repo.directory, performance=recorder)
     reader = git.read_only()
@@ -30,7 +31,6 @@ def test_records_writes_and_reads_including_cached_reads(repo: Git) -> None:
         ("process", "git"),
         ("read", "ReadOnlyGit.prefix"),
         ("process", "git"),
-        ("read", "ReadOnlyGit.cdup"),
         ("read", "config"),
         ("process", "git"),
     ]
@@ -104,21 +104,20 @@ def test_shared_recorder_records_each_thread(repo: Git) -> None:
     assert sum(event.kind == "process" for event in recorder.events) == 8
 
 
-def test_fake_records_reads_without_a_subprocess() -> None:
+def test_fake_does_not_record_backend_work() -> None:
     recorder = PerformanceRecorder()
     fake = FakeGit(performance=recorder)
     fake.respond(["config"], stdout=b"test.value\nvalue\x00")
     assert config(fake.read_only()) == {"test.value": ["value"]}
-    assert [event.kind for event in recorder.events] == ["read"]
+    assert recorder.events == ()
 
 
-def test_skipped_read_has_no_launch_event(repo: Git) -> None:
+def test_read_stopped_before_launch_records_no_events(repo: Git) -> None:
     recorder = PerformanceRecorder()
     reader = ReadOnlyGit(repo.directory, stopping=lambda: True, performance=recorder)
     with pytest.raises(NotStartedError):
         reader.resolve("HEAD")
-    (read,) = recorder.events
-    assert read.kind == "read" and read.end is not None
+    assert recorder.events == ()
 
 
 def test_copy_keeps_recorder_but_unpickling_starts_a_new_one(repo: Git) -> None:
@@ -129,3 +128,19 @@ def test_copy_keeps_recorder_but_unpickling_starts_a_new_one(repo: Git) -> None:
     restored = pickle.loads(pickle.dumps(reader))
     assert isinstance(restored, ReadOnlyGit)
     assert restored.performance is not None and restored.performance.events == ()
+
+
+def test_fully_cached_paths_do_not_count_but_partial_cache_misses_do(repo: Git) -> None:
+    recorder = PerformanceRecorder()
+    reader = ReadOnlyGit(repo.directory, performance=recorder)
+
+    assert git_paths(reader) == []
+    (head,) = git_paths(reader, "HEAD")
+    assert git_paths(reader, "HEAD") == [head]
+    assert reader.object_id_length() == len(repo.run("rev-parse", "HEAD"))
+    assert len(git_paths(reader, "HEAD", "index")) == 2
+    reader.forget()
+    assert git_paths(reader, "HEAD") == [head]
+
+    assert [event.name for event in recorder.events if event.kind == "read"] == ["git_paths"] * 3
+    assert sum(event.kind == "process" for event in recorder.events) == 3

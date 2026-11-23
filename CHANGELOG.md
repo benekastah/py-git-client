@@ -9,8 +9,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 ### Added
 
 - Pass a shared `PerformanceRecorder` to `Git` or `ReadOnlyGit` for an in-memory
-  timeline with monotonic start and end times for typed reads, subprocesses and
-  CatFile work.
+  timeline with monotonic start and end times for typed reads that consult Git or
+  pygit2, subprocesses, and CatFile work.
 
 ## 0.0.3 (2026-11-23)
 

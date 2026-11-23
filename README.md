@@ -341,8 +341,9 @@ for event in recording.events:
 Each snapshot is ordered by start time. Timestamps are in monotonic seconds on the same
 clock as `time.monotonic()`. Events cover three kinds of work:
 
-- `read` records a public typed read, including reads served by pygit2 or from memory.
-  A read that invokes Git also produces separate subprocess or CatFile work events.
+- `read` records a public typed read that consults Git or pygit2. Cache hits and
+  other answers computed entirely in memory produce no events. A read that invokes Git also
+  produces separate subprocess or CatFile work events.
 - `process` records a Git launch with its command arguments and PID. A failed launch has
   no PID. The end time and return code are filled in when the client observes its exit,
   such as by waiting or polling. Subprocess input, output and environment data are excluded.

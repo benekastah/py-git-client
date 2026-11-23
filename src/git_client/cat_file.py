@@ -39,7 +39,7 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
-from git_client.performance import PerformanceRecorder, measure, record_read
+from git_client.performance import PerformanceRecorder, measure, note_backend_read, record_read
 
 _COMMAND = ("cat-file", "--batch-command")
 
@@ -321,6 +321,7 @@ class CatFile:
             # Whether it has answered a request: _PROBE, for a new process.
             answered = not new
             reply = b""
+            note_backend_read()
             self._unanswered = True
             with self._exchange(name), contextlib.suppress(OSError):
                 if new:

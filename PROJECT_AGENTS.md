@@ -77,8 +77,8 @@ the shape of the code or a rule here changes.
   `process` and `popen`, and asks `stopping` too). Never pass a working directory (`cwd=`):
   it keeps Python from using `posix_spawn`; use `-C`.
 - **Performance recording uses the launch boundary.** Count one Git process per successful
-  launch. Native reads and answers from memory record only the typed read. CatFile records
-  work separately so the lifetime of a persistent process can include idle time.
+  launch. Native reads record only the typed read, and cache hits record nothing. CatFile
+  records work separately so the lifetime of a persistent process can include idle time.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.

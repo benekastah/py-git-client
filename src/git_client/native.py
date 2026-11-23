@@ -5,6 +5,8 @@ import re
 from collections.abc import Mapping
 from typing import NamedTuple
 
+from git_client.performance import note_backend_read
+
 _OBJECT_NAME = re.compile(r"([0-9a-fA-F]{40})(?:\^\{(blob|commit|tag|tree)\})?")
 # These can change repository discovery, the object database, or revision interpretation.
 _GIT_OVERRIDES = {
@@ -68,6 +70,7 @@ def read_local_object(
         return None
 
     object_id, requested_type = match.groups()
+    note_backend_read()
     try:
         path = pygit2.discover_repository(
             directory, False, os.environ.get("GIT_CEILING_DIRECTORIES", "")
