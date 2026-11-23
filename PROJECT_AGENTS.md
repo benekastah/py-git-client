@@ -16,6 +16,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
 - `src/git_client/native.py`: opt-in pygit2 reads of objects named by full SHA-1 ids.
+- `src/git_client/performance.py`: opt-in timing for typed reads, Git process lifetimes,
+  and active CatFile work. Uses one monotonic clock so callers can combine intervals.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
@@ -74,6 +76,9 @@ the shape of the code or a rule here changes.
   nothing, and `git_calls` (which wraps both) sees every process (`FakeGit` replaces
   `process` and `popen`, and asks `stopping` too). Never pass a working directory (`cwd=`):
   it keeps Python from using `posix_spawn`; use `-C`.
+- **Performance recording uses the launch boundary.** Count one Git process per successful
+  launch. Native reads and answers from memory record only the typed read. CatFile records
+  work separately so the lifetime of a persistent process can include idle time.
 - **Real git, not mocks, in this library's tests:** what it promises is how git behaves.
   `FakeGit` is for projects using it, to unit-test the commands they run, once this library
   has shown how git answers them.

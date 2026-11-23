@@ -318,6 +318,43 @@ Use a subprocess-backed client when you need Git's diagnostics for invalid confi
 values. `Git` uses subprocesses for every operation.
 `git_calls` sees fallback subprocesses and all operations that start Git.
 
+### Performance recording
+
+Give a `Git` or `ReadOnlyGit` a `PerformanceRecorder` to collect a timeline in memory.
+Share it with other clients to include work across repositories or threads. `read_only()`
+carries the recorder forward.
+
+```python
+from git_client import Git, PerformanceRecorder
+
+recording = PerformanceRecorder()
+git = Git("path/to/repo", performance=recording)
+reader = git.read_only()
+reader.resolve("HEAD")
+git.run("status", "--short")
+
+for event in recording.events:
+    if event.end is not None:
+        print(event.kind, event.name, event.end - event.start)
+```
+
+Each snapshot is ordered by start time. Timestamps are in monotonic seconds on the same
+clock as `time.monotonic()`. Events cover three kinds of work:
+
+- `read` records a public typed read, including reads served by pygit2 or from memory.
+  A read that invokes Git also produces separate subprocess or CatFile work events.
+- `process` records a Git launch with its command arguments and PID. A failed launch has
+  no PID. The end time and return code are filled in when the client observes its exit,
+  such as by waiting or polling. Subprocess input, output and environment data are excluded.
+- `process_work` records CatFile's request, content transfer and shutdown intervals. Use
+  these intervals for CatFile wall time, since its persistent process can wait idle between
+  requests.
+
+Count process events with a PID to count Git launches. When totaling elapsed time, take the
+union of intervals so overlapping processes or a read and its subprocess count the shared
+time once. Copies of a client within a process share its recorder. Unpickling one starts
+with an empty recorder.
+
 ### Errors
 
 `run` and `run_bytes` raise a `GitError` when git fails, with its `command`, `returncode`,

@@ -48,6 +48,7 @@ from git_client.errors import (
     WrongTypeError,
 )
 from git_client.merging import MergeResult, merge_trees
+from git_client.performance import PerformanceEvent, PerformanceRecorder
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -73,6 +74,8 @@ __all__ = [
     "NotStartedError",
     "ObjectInfo",
     "ObjectType",
+    "PerformanceEvent",
+    "PerformanceRecorder",
     "PushRejectedError",
     "ReadOnlyGit",
     "Ref",

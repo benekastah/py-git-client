@@ -40,6 +40,7 @@ from git_client.client import (
     find_git,
     refuse_if_stopping,
 )
+from git_client.performance import PerformanceRecorder
 
 TEST_GIT_CONFIG = """\
 [user]
@@ -491,6 +492,7 @@ class FakeGit(Git):
         object_id_length: int | None = None,
         process_groups: bool = True,
         remember_for: float | None = None,
+        performance: PerformanceRecorder | None = None,
     ) -> None:
         super().__init__(
             directory,
@@ -502,6 +504,7 @@ class FakeGit(Git):
             object_id_length=object_id_length,
             process_groups=process_groups,
             remember_for=remember_for,
+            performance=performance,
         )
         self.calls: list[Call] = []
         self._responses: list[tuple[list[str], subprocess.CompletedProcess[bytes]]] = []
@@ -578,6 +581,7 @@ class _FakeReadOnlyGit(ReadOnlyGit):
             object_id_length=fake._object_id_length,
             process_groups=fake.process_groups,
             remember_for=fake.remember_for,
+            performance=fake.performance,
         )
         self._memory = fake._memory
         self._fake = fake

@@ -32,6 +32,7 @@ from git_client.client import (
     where_questions,
 )
 from git_client.errors import GitError
+from git_client.performance import record_read
 
 # What patch_ids gives every command, against the user's config, which would drop patches
 # (diff.relative, submodule.<name>.ignore, diff.submodule) or change them (color, an external
@@ -68,6 +69,7 @@ _MOST_CONFLICTS = 127
 _END_MARKER_DIFF = "diff --git a/end b/end\n--- a/end\n+++ b/end\n@@ -0,0 +1 @@\n+end\n"
 
 
+@record_read("git")
 def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     """Every config entry git sees for the repository (system, global, local, worktree and
     included files), from one `git config --list -z`, with each key's values in the order git
@@ -102,6 +104,7 @@ class Ref:
     fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
 
 
+@record_read("git")
 def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
     refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
@@ -132,6 +135,7 @@ def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[s
     return found
 
 
+@record_read("git")
 def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     """Where git keeps each of names (paths in a git directory, e.g. "HEAD", "refs/heads",
     "hooks", "rebase-merge"), as absolute paths, in order, from one `git rev-parse
@@ -188,6 +192,7 @@ class Head:
     detached: bool = False
 
 
+@record_read("git")
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse` (so
     a tool that wants both pays for one process). The paths are as `git_paths` gives them, and
@@ -244,6 +249,7 @@ def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]
     return [Path(os.fsdecode(found[name])) for name in names], head
 
 
+@record_read("git")
 def git_dir(git: ReadOnlyGit) -> Path:
     """The client's own git directory, as `git rev-parse --path-format=absolute --git-dir`
     prints it: a checkout's (from any directory in it), a git directory itself, or, for a
@@ -259,6 +265,7 @@ def git_dir(git: ReadOnlyGit) -> Path:
     return _git_dirs(git)[0]
 
 
+@record_read("git")
 def git_common_dir(git: ReadOnlyGit) -> Path:
     """The directory with the client's repository's refs, objects and config, as `git
     rev-parse --path-format=absolute --git-common-dir` prints it: `git_dir`'s, but for a

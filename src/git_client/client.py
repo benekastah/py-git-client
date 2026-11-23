@@ -27,6 +27,7 @@ from git_client.errors import (
     error_for,
 )
 from git_client.native import NativeObject, read_local_object
+from git_client.performance import PerformanceRecorder, open_git_process, record_read
 
 # Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
 # opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
@@ -427,8 +428,11 @@ def start_process(
     refuse_if_stopping(git, args)
     seconds = git.timeout if timeout is CLIENT_TIMEOUT else timeout
     own_group = _own_process_group(seconds, git.process_groups)
-    with subprocess.Popen(
+    with open_git_process(
         command,
+        git.performance,
+        args,
+        persistent=False,
         stdin=_stdin(input, capture_output),
         stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
         stderr=subprocess.PIPE if capture_output else None,
@@ -461,8 +465,11 @@ def start_popen(
     """Start `command` (git's, for `args`) as Git.popen says: where every long-lived git
     process starts, a ReadOnlyGit's and a Git's (git_calls wraps it)."""
     refuse_if_stopping(git, args)
-    return subprocess.Popen(
+    return open_git_process(
         command,
+        git.performance,
+        args,
+        persistent=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=stderr,
@@ -884,6 +891,9 @@ class ReadOnlyGit:
     With `native=True`, this reader can use the optional pygit2 backend for local SHA-1
     objects addressed by their full ids. Git itself uses subprocesses for all operations.
 
+    Give `performance` a PerformanceRecorder to time the client's public reads and
+    subprocesses. A Git and its `read_only()` share the recorder.
+
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
     """
@@ -901,6 +911,7 @@ class ReadOnlyGit:
         process_groups: bool = True,
         remember_for: float | None = None,
         native: bool = False,
+        performance: PerformanceRecorder | None = None,
     ) -> None:
         if object_id_length not in (None, 40, 64):
             raise ValueError(f"object_id_length is 40 or 64, not {object_id_length}")
@@ -916,6 +927,7 @@ class ReadOnlyGit:
         self._object_id_length = object_id_length
         self._memory = Memory()
         self.native = native and not isinstance(self, Git)
+        self.performance = performance
 
     def read_only(self) -> ReadOnlyGit:
         """This client itself, which is read-only already (a Git's gives a ReadOnlyGit), so
@@ -931,6 +943,7 @@ class ReadOnlyGit:
         no git."""
         self._memory.forget()
 
+    @record_read()
     def object_id_length(self) -> int:
         """How many hex digits the repository's object ids have: 40 for SHA-1, 64 for
         SHA-256: the client's `object_id_length` if given, else asked of git (`rev-parse
@@ -973,6 +986,7 @@ class ReadOnlyGit:
                     del memory.asking_format[where]
                 asking.done.set()
 
+    @record_read()
     def prefix(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the top of the worktree down to the client's directory, with a slash
         after each directory (e.g. "src/app/"), as `git rev-parse --show-prefix` gives it: ""
@@ -987,6 +1001,7 @@ class ReadOnlyGit:
         `object_id_length()`, `git_dir` and `git_common_dir` if they aren't known yet."""
         return self._top(timeout)[0]
 
+    @record_read()
     def cdup(self, *, timeout: Timeout = CLIENT_TIMEOUT) -> str:
         """The path from the client's directory up to the top of the worktree, as `git
         rev-parse --show-cdup` gives it: "../" for each directory of `prefix()` ("" at the
@@ -1003,6 +1018,7 @@ class ReadOnlyGit:
         found = ask_where(self, location(self), TOP_QUESTIONS, timeout)
         return decode(found["--show-prefix"]), decode(found["--show-cdup"])
 
+    @record_read()
     def resolve(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """The id of the object `name` names, as `CatFile.resolve` finds it, or None if it names
         nothing: as `git rev-parse --verify` finds it, but only if the repository has that
@@ -1043,6 +1059,7 @@ class ReadOnlyGit:
             return None  # if it exited, it was on the name, which names nothing
         return header[0]
 
+    @record_read()
     def var(self, name: str, *, timeout: Timeout = CLIENT_TIMEOUT) -> str | None:
         """git's value for one of its variables (as `git var`, e.g. GIT_AUTHOR_IDENT), or None
         if no identity is set for it. Raises GitError for an unknown variable, or another
@@ -1120,6 +1137,7 @@ class Git(ReadOnlyGit):
             process_groups=self.process_groups,
             remember_for=self.remember_for,
             native=native,
+            performance=self.performance,
         )
         reader._memory = self._memory
         return reader

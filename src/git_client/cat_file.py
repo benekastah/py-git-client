@@ -39,6 +39,7 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client.performance import PerformanceRecorder, measure, record_read
 
 _COMMAND = ("cat-file", "--batch-command")
 
@@ -76,7 +77,9 @@ class ObjectInfo:
     warnings: tuple[str, ...] = ()
 
 
-type _Stopper = weakref.finalize[[subprocess.Popen[bytes], _Output, IO[bytes]], CatFile]
+type _Stopper = weakref.finalize[
+    [subprocess.Popen[bytes], _Output, IO[bytes], PerformanceRecorder | None], CatFile
+]
 """What stops a CatFile's process (see _end)."""
 
 
@@ -132,6 +135,12 @@ class CatFile:
             raise ReferenceError("the Git this CatFile runs git with was freed")
         return git
 
+    @property
+    def performance(self) -> PerformanceRecorder | None:
+        """The recorder of the client that supplies this CatFile."""
+        git = self._git()
+        return git.performance if git is not None else None
+
     def __enter__(self) -> Self:
         return self
 
@@ -149,6 +158,7 @@ class CatFile:
         with self._lock:
             self._stop()
 
+    @record_read()
     def info(self, name: str) -> ObjectInfo | None:
         """What `name` (e.g. "HEAD", "main^{tree}", an object id) names, as `git rev-parse
         --verify` would find it, with what git warned of it, or None if it names nothing (or
@@ -169,11 +179,13 @@ class CatFile:
         header = object_header(reply)
         return None if header is None else ObjectInfo(*header, tuple(said.splitlines()))
 
+    @record_read()
     def resolve(self, name: str) -> str | None:
         """The id of the object `name` names, or None if it names nothing."""
         found = self.info(name)
         return None if found is None else found.id
 
+    @record_read()
     def verify(self, name: str) -> str:
         """The id of the object `name` names, as `resolve` finds it. If it names nothing,
         raises UnknownRevisionError, whose `reason` is git's (e.g. "fatal: no upstream
@@ -198,6 +210,7 @@ class CatFile:
             raise _failure(name, reason, exited=not reply)
         return header[0]
 
+    @record_read()
     def read(self, object_id: str, type: ObjectType | None = None) -> tuple[str, bytes]:
         """The type and content of the object with this full id, as `git cat-file <type>
         <id>` prints it (a commit's headers and message exactly as they are). Given a `type`
@@ -229,7 +242,10 @@ class CatFile:
             output = self._output
             assert output is not None
             _, kind, size = header
-            with self._exchange(name):
+            with (
+                measure(self.performance, "process_work", "CatFile.contents"),
+                self._exchange(name),
+            ):
                 content = output.read(size, deadline)
                 newline = output.read(1, deadline)
             self._unanswered = False
@@ -255,6 +271,12 @@ class CatFile:
         GitError if a new process exits before it has answered anything for another reason: a
         usage error, as a git older than 2.36 gives at --batch-command, or what's wrong with
         the repository (e.g. NotARepositoryError). Hold the lock."""
+        with measure(self.performance, "process_work", "CatFile.request"):
+            return self._request_from_process(command, name, deadline)
+
+    def _request_from_process(
+        self, command: bytes, name: str, deadline: float | None
+    ) -> tuple[bytes, str]:
         if self._unanswered:
             self._kill()
         while True:
@@ -273,7 +295,7 @@ class CatFile:
                     process = read_popen(self.git, *_COMMAND, stderr=file)
                     assert process.stdout is not None
                     output = _Output(process.stdout)
-                    stopper = weakref.finalize(self, _end, process, output, file)
+                    stopper = weakref.finalize(self, _end, process, output, file, self.performance)
                     # Not as Python exits, when a daemon thread may be in a request: the
                     # process gets EOF on its stdin then, and exits by itself.
                     stopper.atexit = False
@@ -430,22 +452,28 @@ def _abandon(process: subprocess.Popen[bytes]) -> None:
     process.wait()
 
 
-def _end(process: subprocess.Popen[bytes], output: _Output, stderr: IO[bytes]) -> None:
+def _end(
+    process: subprocess.Popen[bytes],
+    output: _Output,
+    stderr: IO[bytes],
+    performance: PerformanceRecorder | None,
+) -> None:
     """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
     used, rather than left for Python to warn of and reap. Closing its stdout stops one
     writing what nothing will read (git exits when a write fails); one that doesn't exit
     within _EXIT_WAIT (e.g. waiting on a lazy fetch in a partial clone) is killed."""
-    if process.stdin is not None:
-        # It may have stopped already (on Windows, not always with a BrokenPipeError).
-        with contextlib.suppress(OSError):
-            process.stdin.close()
-    output.close()
-    try:
-        process.wait(_EXIT_WAIT)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-    stderr.close()
+    with measure(performance, "process_work", "CatFile.shutdown"):
+        if process.stdin is not None:
+            # It may have stopped already (on Windows, not always with a BrokenPipeError).
+            with contextlib.suppress(OSError):
+                process.stdin.close()
+        output.close()
+        try:
+            process.wait(_EXIT_WAIT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        stderr.close()
 
 
 class _PastDeadline(Exception):

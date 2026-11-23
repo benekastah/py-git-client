@@ -7,7 +7,7 @@ import pygit2
 import pytest
 from pygit2.enums import ConfigLevel
 
-from git_client import CatFile, Git, GitError, NotARepositoryError, ReadOnlyGit
+from git_client import CatFile, Git, GitError, NotARepositoryError, PerformanceRecorder, ReadOnlyGit
 from git_client.testing import GitCall
 
 
@@ -177,3 +177,13 @@ def test_type_suffix_requires_a_parseable_object(repo: Git, kind: str) -> None:
     name = f"{invalid}^{{{kind}}}"
     assert repo.resolve(name) is None
     assert repo.read_only(native=True).resolve(name) is None
+
+
+def test_native_reads_count_as_reads_and_fallback_also_counts_as_a_process(repo: Git) -> None:
+    commit = repo.resolve("HEAD")
+    assert commit is not None
+    recorder = PerformanceRecorder()
+    reader = ReadOnlyGit(repo.directory, native=True, performance=recorder)
+    assert reader.resolve(commit) == commit
+    assert reader.resolve("HEAD") == commit
+    assert [event.kind for event in recorder.events] == ["read", "read", "process"]
