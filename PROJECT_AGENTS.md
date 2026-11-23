@@ -15,6 +15,7 @@ the shape of the code or a rule here changes.
   `ask_where`), with when git told it, for `remember_for` and `forget()`.
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
+- `src/git_client/native.py`: opt-in pygit2 reads of objects named by full SHA-1 ids.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
@@ -33,15 +34,17 @@ the shape of the code or a rule here changes.
 
 ## Rules for this project
 
-- **No dependencies.** git-stack and move-forward allow no runtime dependencies but this
-  library, which they could only take because it has none of its own.
+- **No required runtime dependencies.** The `pygit2` extra provides the opt-in native
+  backend for `ReadOnlyGit`. A default install needs only the standard library.
 - **A git client only: never reimplement git.** The library starts git and parses what git
   prints. It never decides in Python what git decides: no walking objects, refs or worktrees,
   no reading or editing files in a git directory, no ported algorithms or rules (merge-base,
   config syntax, ref names, ...). Where git does an action for many things in one process
   (`update-ref --stdin`, `cat-file --batch-command`, `for-each-ref`, `merge-tree --stdin`,
   `rev-parse` with many arguments, ...), use git's way; where it doesn't, run more processes:
-  that's fine. Before adding a function, ask which git command answers it.
+  that's fine. Before adding a function, ask which git command answers it. Opt-in
+  object reads may ask libgit2 where its answer is equivalent to Git's. Git remains
+  the backend for all writes and the fallback for reads libgit2 can't answer.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
   README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
   or newer, the oldest supported; a block that starts `# Needs git X.Y.`, alone in a block of
@@ -61,10 +64,10 @@ the shape of the code or a rule here changes.
   version adds that version's section.
 - **A ReadOnlyGit offers no public way to run a command of the caller's**: it can't be asked
   to write because it takes no command line, not because the library judges one. A function that
-  takes a ReadOnlyGit runs only commands the library fixes, through `read_process`, `read_popen` or
-  `read_output` (a ReadOnlyGit's private `_process` and `_popen`, which on a Git call its
-  public `process` and `popen`, so a subclass's override sees every process); one that runs
-  a command it's given takes a Git.
+  takes a ReadOnlyGit uses fixed libgit2 reads or runs only commands the library fixes,
+  through `read_process`, `read_popen` or `read_output` (a ReadOnlyGit's private `_process`
+  and `_popen`, which on a Git call its public `process` and `popen`, so a subclass's
+  override sees every process). A function that runs a command it's given takes a Git.
 - **Every git process starts in `start_process`** (or `start_popen` for one that answers
   requests), which `Git.process`, `Git.popen` and a ReadOnlyGit's reads call, so the way git
   is started stays the quickest each system allows, a client whose `stopping` says so starts

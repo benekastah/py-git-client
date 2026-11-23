@@ -116,6 +116,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- Optional native object reads through the `pygit2` extra and
+  `ReadOnlyGit(..., native=True)` or `Git.read_only(native=True)`. Full SHA-1
+  object IDs can be resolved and read in-process. Other reads and all `Git`
+  operations use Git subprocesses.
 - `remember_for=` (seconds from when git answered; None, the default, keeps answers as long as
   the client) on `ReadOnlyGit`, `Git` and `FakeGit`, and `forget()`, for what a client
   remembers of where things are: past it, or after `forget()`, the next call asks git again,
