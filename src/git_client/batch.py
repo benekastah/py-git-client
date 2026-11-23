@@ -146,13 +146,9 @@ def git_paths(git: ReadOnlyGit, *names: str) -> list[Path]:
     whose path couldn't be told from the next one's, and GitError if git fails (e.g.
     NotARepositoryError).
 
-    Each name is asked of git once per client and location (its directory and
-    `env`) and remembered, except "hooks" and what's under it: core.hooksPath, which a tool
-    may set, moves them. Nothing else `--git-path` answers depends on config. The same
-    process tells the client's `prefix()` and `cdup()`, `object_id_length()`, `git_dir` and
-    `git_common_dir`, if they aren't known yet. Where a path git prints holds a newline,
-    which makes its answers' lines impossible to tell apart, each is asked in a process of its
-    own."""
+    With a cache, names are kept for the current location. Git always answers for "hooks"
+    and paths below it because core.hooksPath can move them. A path containing a newline
+    can make batched output ambiguous; in that case Git answers each question separately."""
     if not names:
         return []
     if any(c in name for name in names for c in "\n\r"):
@@ -196,9 +192,8 @@ class Head:
 def git_paths_and_head(git: ReadOnlyGit, *names: str) -> tuple[list[Path], Head]:
     """`git_paths(git, *names)`, and what HEAD points at, from the same one `git rev-parse` (so
     a tool that wants both pays for one process). The paths are as `git_paths` gives them, and
-    remembered for `git_paths` (which asks git again for hooks, whatever is kept),
-    `git.prefix()`, `git.cdup()`, `git.object_id_length()`, `git_dir` and `git_common_dir`; HEAD
-    is read afresh each time, since it moves. Raises what `git_paths` does: ValueError for a
+    cached for `git_paths` when the client has a cache. HEAD is read afresh each time,
+    since it moves. Raises what `git_paths` does: ValueError for a
     name with a line ending, and GitError if git fails before it has printed the paths (e.g.
     NotARepositoryError).
 
@@ -257,11 +252,8 @@ def git_dir(git: ReadOnlyGit) -> Path:
     (see `git_common_dir`). Raises GitError if git fails (e.g. NotARepositoryError for a
     directory in no repository).
 
-    Asked of git once per client and location (its directory and `env`) and remembered, with
-    `git_common_dir`, in the `rev-parse` that asks where things are: the one `prefix()`,
-    `git_paths` and `git_paths_and_head` run, which tells this too while it isn't known, as
-    this tells them. Where a path git prints holds a newline, which makes its answers' lines
-    impossible to tell apart, each is asked in a process of its own."""
+    Asked of Git with `git_common_dir`. With a cache, other metadata queries can
+    fill in both directories in the same process."""
     return _git_dirs(git)[0]
 
 

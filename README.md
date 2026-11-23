@@ -73,8 +73,6 @@ git.succeeds("merge-base", "--is-ancestor", "a", "b")  # the same, but False als
 git.resolve("main@{upstream}")  # an object id, or None if it names nothing
 git.var("GIT_AUTHOR_IDENT")  # git's value, or None if no identity is set
 git.prefix()  # "src/" in path/to/repo/src: from the top of the worktree; "" at the top;
-# asked of git and remembered per client (and directory), as are git_paths, git_dir and
-# object_id_length(), all in one git while any is unknown (see "What a client remembers")
 git.cdup()  # "../" there: the way up to the top, as git prints it, asked with prefix()
 # git config, tried again while locked, for each change; what each did: an unset that removes
 # nothing is NOT_FOUND, or SEVERAL_VALUES (for a key with several values: give the one to
@@ -117,8 +115,7 @@ head_file, hooks = git_paths(git, "HEAD", "hooks")
 # Head(detached=True), or Head() when git can't say (a branch with no commits yet).
 (head_file, hooks), head = git_paths_and_head(git, "HEAD", "hooks")
 # The client's git directory (in a linked worktree, its own: its HEAD, index and rebase state),
-# and the common one, with the refs, objects and config: asked with prefix() and git_paths, in
-# the same git, and remembered per client.
+# and the common one, with the refs, objects and config. Both can be cached (see "Caching").
 # NotARepositoryError if there's no repository.
 own, common = git_dir(git), git_common_dir(git)
 
@@ -227,32 +224,32 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
-### What a client remembers
+### Caching
 
-A client asks git where things are (`prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
-`git_dir`, `git_common_dir`) once per directory and `env`, all in one `git rev-parse` while
-any is unknown, and remembers the answers, shared with what its `read_only()` gives. By default
-they're kept as long as the client, which suits a command that runs and exits, but a
-repository moved or replaced under the client isn't noticed. A long-lived tool (an editor's
-helper, a daemon such as move-forward) asks git, but remembers it for a while: it keeps a
-client per repository, and gives it `remember_for` (seconds, from when git answered), or
-calls `forget()` after each request or refresh:
+By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`
+to reuse `prefix()`, `cdup()`, `object_id_length()`, `git_paths`, `git_dir` and
+`git_common_dir`. A cache miss can fill in other metadata in the same `git rev-parse`.
+`git_paths_and_head` can fill the cache and always reads HEAD afresh.
 
 ```python
-git = Git("path/to/repo", remember_for=5)  # asked again once 5 seconds old
-git.prefix()  # one git, which tells the rest too
-git.forget()  # every answer, so the next call asks git again (one process)
+from git_client import Git, GitCache
+
+cache = GitCache()
+git = Git("path/to/repo", cache=cache)
+git.prefix()  # asks Git and caches the metadata
+git.read_only().object_id_length()  # uses the same cache
+cache.clear()  # invalidate all clients sharing the cache
 ```
 
-What one `rev-parse` told expires together, and is asked again together. An
-`object_id_length=` given to the client never expires. Threads may share a client: each gets
-git's answer, and threads that ask at once what isn't known may each start a process (all but
-`object_id_length()` alone, whose threads wait for one answer). A
-shallow copy of a client (`copy.copy`) shares its answers and `forget()`, as the `ReadOnlyGit` its
-`read_only()` gives does; a deep copy, or a pickled client (e.g. sent to a process pool), starts
-remembering nothing, with the same `remember_for`. A client can be deep-copied or pickled only if
-its `stopping` (and a subclass's attributes) can be: a `threading.Event`'s `is_set` or a lambda
-can't, so give a worker process a client of its own.
+A cache keeps answers until it is cleared or discarded. A long-lived service can make a
+fresh cache for each refresh and share it across the clients used during that refresh.
+`GitCache.clear()` or `git.forget()` invalidates it during the refresh if a repository
+or worktree moves. Entries are separated by the Git program, directory, and client
+environment. Keep the process environment stable for the cache's lifetime.
+
+`read_only()` and shallow copies share the cache. Deep copies and unpickled clients get
+an empty cache if the original client had one. An explicit `object_id_length=` always
+takes precedence over cached data.
 
 ### Reading only
 
@@ -280,9 +277,8 @@ with CatFile(reader) as cat_file:
 A tool with a `Git` for the commands that write gives the paths that only read its
 `read_only()`: a `ReadOnlyGit` (not a `Git`) with the client's settings as they are then,
 which shares what git told the client about where things are (`prefix()`, `cdup()`,
-`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`; see "What a client
-remembers"). A `Git` subclass that overrides `process` and `popen` (e.g. to time each) sees
-every process the client starts, the library's reads' too; but `read_only()` gives a plain
+`object_id_length()`, `git_paths`, `git_dir` and `git_common_dir`; see "Caching"). A `Git` subclass that overrides `process` and
+`popen` (e.g. to time each) sees every process the client starts, the library's reads' too; but `read_only()` gives a plain
 `ReadOnlyGit`, not of the client's class, whose processes it doesn't see: a tool that times
 every process gives its reads the `Git` itself.
 

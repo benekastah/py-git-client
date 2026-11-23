@@ -10,9 +10,9 @@ the shape of the code or a rule here changes.
   it fixes), `Git`, which extends it with the commands of the caller's (`run`, `process`,
   ...), and `find_git`; `start_process` and `start_popen`, where every git process starts,
   and `read_process`, `read_popen` and `read_output`, which the reads run through; and
-  `Memory`, what git told a client (and what its `read_only()` gave) about where things are,
-  which one `rev-parse` asks while any is unknown (`where_questions`, `read_where`,
-  `ask_where`), with when git told it, for `remember_for` and `forget()`.
+  `GitCache`, the opt-in repository metadata store shared across clients. When a cache is
+  attached, `rev-parse` can gather uncached metadata alongside the requested values
+  (`where_questions`, `read_where`, `ask_where`).
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
 - `src/git_client/native.py`: opt-in pygit2 reads of objects named by full SHA-1 ids.

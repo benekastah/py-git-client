@@ -6,11 +6,41 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ## 0.0.4 (unreleased)
 
+### What a tool may need to change
+
+- Repository metadata caching is opt-in. On `Git`, `ReadOnlyGit`, and `FakeGit`,
+  replace `remember_for=` with `cache=GitCache()` if the tool wants to reuse answers.
+  A cache keeps answers until it is cleared or discarded. Give a long-lived service
+  a fresh cache per refresh and share it among clients within that refresh.
+  `read_only()` shares the original client's cache. `cache.clear()` or `git.forget()`
+  invalidates the answers for every client sharing it.
+- The cache covers `prefix()`, `cdup()`, `object_id_length()`, `git_paths`,
+  `git_dir`, and `git_common_dir`. An explicit `object_id_length=` still takes
+  precedence. Git reads HEAD, refs, config, objects, and the configured hooks path afresh.
+- Without a cache, metadata calls ask Git for the requested values without warming
+  unrelated metadata. Tests that script `FakeGit` must match the new arguments and
+  output. For example, `git_paths(git, "HEAD")` asks only
+  `rev-parse --path-format=absolute --git-path HEAD` and expects one path line.
+  Pass `cache=GitCache()` in tests that exercise the batched cache warm-up.
+
 ### Added
 
-- Pass a shared `PerformanceRecorder` to `Git` or `ReadOnlyGit` for an in-memory
-  timeline with monotonic start and end times for typed reads that consult Git or
-  pygit2, subprocesses, and CatFile work.
+- Pass `performance=PerformanceRecorder()` to a client to collect in-memory events
+  with monotonic start and end times. Share a recorder across clients or threads.
+  `read_only()` carries it forward, and `recorder.events` gives an immutable snapshot
+  in start order. A typed read that consults Git or pygit2 records a `read` event.
+  A fully cached answer records nothing.
+- A `process` event records a Git launch, with a PID for a successful launch and
+  `end=None` until the exit is observed. A native pygit2 read has no subprocess
+  event. CatFile records active startup, exchanges, and shutdown as `process_work`
+  intervals. Use those intervals for CatFile wall time so idle gaps in the persistent
+  process's lifetime stay out of the total. Take the union of overlapping intervals
+  when combining read and subprocess times.
+
+### Fixed
+
+- Cache keys preserve `..` after symlinks in repository paths, so a lookup through
+  `link/..` cannot reuse the answer for its lexically normalized path.
 
 ## 0.0.3 (2026-11-23)
 

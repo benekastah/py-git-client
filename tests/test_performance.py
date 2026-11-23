@@ -8,6 +8,7 @@ import pytest
 from git_client import (
     CatFile,
     Git,
+    GitCache,
     GitError,
     NotStartedError,
     PerformanceRecorder,
@@ -20,7 +21,7 @@ from git_client.testing import FakeGit
 
 def test_records_writes_and_backend_reads_but_omits_a_cache_hit(repo: Git) -> None:
     recorder = PerformanceRecorder()
-    git = Git(repo.directory, performance=recorder)
+    git = Git(repo.directory, performance=recorder, cache=GitCache())
     reader = git.read_only()
     git.run("config", "test.value", "value")
     assert reader.prefix() == ""
@@ -132,7 +133,7 @@ def test_copy_keeps_recorder_but_unpickling_starts_a_new_one(repo: Git) -> None:
 
 def test_fully_cached_paths_do_not_count_but_partial_cache_misses_do(repo: Git) -> None:
     recorder = PerformanceRecorder()
-    reader = ReadOnlyGit(repo.directory, performance=recorder)
+    reader = ReadOnlyGit(repo.directory, performance=recorder, cache=GitCache())
 
     assert git_paths(reader) == []
     (head,) = git_paths(reader, "HEAD")

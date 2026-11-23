@@ -32,6 +32,7 @@ from git_client.client import (
     Arg,
     EnvValue,
     Git,
+    GitCache,
     ReadOnlyGit,
     Timeout,
     decode,
@@ -491,7 +492,7 @@ class FakeGit(Git):
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
-        remember_for: float | None = None,
+        cache: GitCache | None = None,
         performance: PerformanceRecorder | None = None,
     ) -> None:
         super().__init__(
@@ -503,7 +504,7 @@ class FakeGit(Git):
             stopping=stopping,
             object_id_length=object_id_length,
             process_groups=process_groups,
-            remember_for=remember_for,
+            cache=cache,
             performance=performance,
         )
         self.calls: list[Call] = []
@@ -580,10 +581,9 @@ class _FakeReadOnlyGit(ReadOnlyGit):
             stopping=fake.stopping,
             object_id_length=fake._object_id_length,
             process_groups=fake.process_groups,
-            remember_for=fake.remember_for,
+            cache=fake.cache,
             performance=fake.performance,
         )
-        self._memory = fake._memory
         self._fake = fake
 
     def _process(
