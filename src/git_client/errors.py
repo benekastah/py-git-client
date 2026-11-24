@@ -196,7 +196,10 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
         ),
     ),
     # Not for another reason the lock file can't be made (e.g. "No such file or directory").
-    (ConfigLockedError, re.compile("could not lock config file .*: File exists$", re.MULTILINE)),
+    (
+        ConfigLockedError,
+        re.compile(r"^error: could not lock config file (?s:.+?): File exists$", re.MULTILINE),
+    ),
     # Not UnknownRevisionError: what git says of the object, then of the name it can't read.
     (CorruptObjectError, CORRUPT_OBJECT),
     # The second is -C's, for a directory that isn't there.

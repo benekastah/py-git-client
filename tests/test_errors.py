@@ -132,6 +132,15 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
+def test_a_locked_config_file_with_a_newline_in_its_path(repo: Git, tmp_path: Path) -> None:
+    config_path = tmp_path / "a\nconfig"
+    config_path.with_name(config_path.name + ".lock").write_bytes(b"")
+
+    with pytest.raises(ConfigLockedError):
+        repo.run("config", "--file", str(config_path), "x.y", "z")
+
+
 def test_a_locked_config_file_is_another_failure_when_git_gives_no_reason(repo: Git) -> None:
     # "could not lock config file .git/config", with no reason, as for a missing directory.
     repo.run("config", "x.y", "z")
