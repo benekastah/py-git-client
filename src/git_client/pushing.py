@@ -128,9 +128,10 @@ def push(
     update or rejection is from Git's machine-readable output. Fast-forwards and
     forced updates report the full old and new OIDs when Git supplies them.
     Other statuses may omit one or both OIDs. An unacknowledged update has
-    UNKNOWN status. Dry-run statuses describe projected changes, and quiet
-    mode can suppress reports. Git's output is captured and launch errors
-    and timeouts are raised as usual.
+    UNKNOWN status. Dry-run statuses describe projected changes. Don't pass
+    `--quiet` with several push URLs: a destination that succeeds then prints
+    only `Done`, which completes the report of an earlier one that failed.
+    Git's output is captured and launch errors and timeouts are raised as usual.
     """
     result = git.process(
         "-c",

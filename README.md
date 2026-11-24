@@ -232,8 +232,10 @@ with a nonzero status. The result has the exit status and captured output,
 plus the completed destination reports. Each report contains the destination
 as Git displayed it and the source, target and status for each reported ref.
 Fast-forward and forced updates include full old and new object IDs when Git
-reports them. An unacknowledged ref has unknown status. Quiet mode can
-suppress reports, and dry-run reports describe projected changes.
+reports them. An unacknowledged ref has unknown status. Dry-run reports
+describe projected changes. Don't pass `--quiet` to a push with several push URLs:
+a destination that succeeds then prints only `Done`, which Git's output attributes
+to an earlier destination that failed, so the reports can't be trusted.
 It runs `git -c core.abbrev=no push --porcelain` with your arguments, so a `FakeGit`
 test responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
 
