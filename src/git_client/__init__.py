@@ -49,6 +49,7 @@ from git_client.errors import (
 )
 from git_client.merging import MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
+from git_client.pushing import PushDestination, PushRef, PushResult, PushStatus, push
 
 __all__ = [
     "CLIENT_TIMEOUT",
@@ -76,7 +77,11 @@ __all__ = [
     "ObjectType",
     "PerformanceEvent",
     "PerformanceRecorder",
+    "PushDestination",
+    "PushRef",
     "PushRejectedError",
+    "PushResult",
+    "PushStatus",
     "ReadOnlyGit",
     "Ref",
     "RefUpdate",
@@ -98,6 +103,7 @@ __all__ = [
     "merge_trees",
     "patch_ids",
     "printable",
+    "push",
     "refs",
     "update_refs",
 ]
