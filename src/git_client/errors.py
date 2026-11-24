@@ -4,8 +4,9 @@ NoAnswerError, when git said nothing."""
 
 import os
 import re
+import shlex
 from collections.abc import Sequence
-from typing import ClassVar, Self
+from typing import ClassVar, Self, cast
 
 # How much of a command line a GitError's message shows: a long one (thousands of paths, say)
 # would bury what git said.
@@ -198,16 +199,38 @@ def _trace2_records(event: str) -> str:
     )
 
 
-# Trace2 emits both exit and atexit. The performance summary can appear between them
-# and can repeat the path on multiple lines, so match the whole trailer at stderr's end.
-_PERFORMANCE_SUMMARY = (
-    rf"{_TRACE_TIME}(?:\S*[/\\])?trace\.c:\d+[ \t]+performance: [\d.]+ s: git command: (?s:.*\n)"
-)
-_GIT_EXIT_TRACE = re.compile(
-    rf"^(?:{_trace2_records('exit')}(?:{_PERFORMANCE_SUMMARY})?{_trace2_records('atexit')}"
-    rf"(?:{_PERFORMANCE_SUMMARY})?|{_PERFORMANCE_SUMMARY})\Z",
+_PERFORMANCE_SUMMARY = re.compile(
+    rf"^{_TRACE_TIME}(?:\S*[/\\])?trace\.c:\d+[ \t]+performance: [\d.]+ s: git command: ",
     re.MULTILINE,
 )
+_TRACE2_ATEXIT = _trace2_records("atexit")
+_TRACE2_ATEXIT_TRAILER = re.compile(rf"^{_TRACE2_ATEXIT}\Z", re.MULTILINE)
+_TRACE2_TRAILER = re.compile(rf"^{_trace2_records('exit')}{_TRACE2_ATEXIT}\Z", re.MULTILINE)
+
+
+def _config_diagnostic(stderr: str, command: object) -> str:
+    """Get the config lock diagnostic before Git's exit traces."""
+    if isinstance(command, Sequence) and not isinstance(command, (str, bytes)):
+        args = cast("Sequence[object]", command)
+        # Skip argv[0] because a Git launcher can replace the executable path.
+        argv = [
+            arg.decode("utf-8", "surrogateescape") if isinstance(arg, bytes) else arg
+            for arg in args[1:]
+        ]
+        # The performance summary can appear between Trace2's exit and atexit records.
+        atexit = _TRACE2_ATEXIT_TRAILER.search(stderr)
+        end = atexit.start() if atexit else len(stderr)
+        for summary in _PERFORMANCE_SUMMARY.finditer(stderr, 0, end):
+            try:
+                reported = shlex.split(stderr[summary.end() : end])
+            except ValueError:  # a path can look like the beginning of a summary
+                continue
+            if reported and reported[1:] == argv:
+                stderr = stderr[: summary.start()] + stderr[end:]
+                break
+    return _TRACE2_TRAILER.sub("", stderr)
+
+
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
     # Before RemoteError: what's missing is what the tool can act on (see MissingObjectError).
@@ -254,13 +277,13 @@ WRONG_TYPE = re.compile(
 )
 
 
-def error_for(stderr: str, stdout: str) -> type[GitError]:
+def error_for(stderr: str, stdout: str, *, command: object) -> type[GitError]:
     """The GitError for a command that failed, saying stderr and stdout (in English)."""
     for error, says in _STDOUT_SAYS:
         if says.search(stdout):
             return error
     if "error: could not lock config file " in stderr:
-        diagnostic = _GIT_EXIT_TRACE.sub("", stderr)
+        diagnostic = _config_diagnostic(stderr, command)
         if _CONFIG_LOCK_BUSY.search(diagnostic):
             return ConfigLockedError
     for error, says in _STDERR_SAYS:

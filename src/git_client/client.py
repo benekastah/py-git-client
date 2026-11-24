@@ -351,7 +351,8 @@ def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) 
     """The GitError for a command that failed: a subclass for a failure the library knows from
     what git said (see errors.py)."""
     stderr, stdout = decode(result.stderr), decode(result.stdout or b"")
-    return error_for(stderr, stdout)(args, result.returncode, stderr, stdout)
+    command: object = result.args
+    return error_for(stderr, stdout, command=command)(args, result.returncode, stderr, stdout)
 
 
 # What a ReadOnlyGit's git gets, last: no fetching a missing object in a partial clone (which
