@@ -146,7 +146,8 @@ OK_ROW = "=\trefs/heads/main:refs/heads/main\t[up to date]"
 
 
 def test_destination_without_done_is_left_out() -> None:
-    # Git prints "Done" only when the push succeeded; without it the outcome is unknown.
+    # Git ends a destination's report with "Done" unless its push failed outright;
+    # without it, the report may be incomplete.
     assert _destinations(f"To A\n{OK_ROW}\n") == ()
 
 

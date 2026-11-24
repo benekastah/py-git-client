@@ -134,8 +134,11 @@ def push(
     forced updates report the full old and new OIDs when Git supplies them.
     Other statuses may omit one or both OIDs. An unacknowledged update has
     UNKNOWN status. Dry-run statuses describe projected changes. Don't pass
-    `--quiet` with several push URLs: a destination that succeeds then prints
-    only `Done`, which completes the report of an earlier one that failed.
+    `--quiet`: Git then reports a destination only when a ref fails, so the
+    ones that succeed are left out, even with one push URL. With several push
+    URLs, a successful destination's bare `Done` can also complete the report
+    of an earlier destination whose push failed outright (e.g. an unpacker
+    error), which then looks finished.
     Git's output is captured and launch errors and timeouts are raised as usual.
     """
     result = git.process(
