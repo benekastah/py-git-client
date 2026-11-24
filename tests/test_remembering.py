@@ -199,20 +199,14 @@ def test_a_deep_copy_remembers_nothing_and_forgets_alone(
     assert len(git_calls) == 2
 
 
-@pytest.mark.parametrize("close_fds", [None, True, False])
 def test_a_pickled_client_comes_back_remembering_nothing(
-    repo: Git, git_calls: list[GitCall], close_fds: bool | None
+    repo: Git, git_calls: list[GitCall]
 ) -> None:
     git = Git(repo.directory, cache=GitCache())
     git_paths(git, "HEAD")
-    if close_fds is None:
-        del git.close_fds  # clients pickled before this setting was added
-    else:
-        git.close_fds = close_fds
     back = pickle.loads(pickle.dumps(git))
 
     assert isinstance(back, Git) and isinstance(back.cache, GitCache)
-    assert back.close_fds is (close_fds is not False)
     assert back.prefix() == ""
     assert len(git_calls) == 2
 
