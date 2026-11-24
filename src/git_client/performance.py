@@ -188,7 +188,6 @@ class _ProcessOptions(TypedDict, total=False):
     stdout: int | IO[bytes] | IO[str] | None
     stderr: int | IO[bytes] | None
     env: dict[str, str]
-    close_fds: bool
     process_group: int | None
 
 
@@ -240,7 +239,11 @@ def open_git_process(
     persistent: bool,
     **options: Unpack[_ProcessOptions],
 ) -> subprocess.Popen[bytes]:
-    """Start a Git process, tracking launch and observed exit when requested."""
+    """Start a Git process, tracking launch and observed exit when requested.
+
+    Popen closes extra inheritable descriptors and handles by default. This prevents
+    one Git process from holding open a pipe that another thread is setting up.
+    """
     if recorder is None:
         return subprocess.Popen(command, **options)
     note_backend_read()

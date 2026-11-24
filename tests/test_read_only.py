@@ -136,7 +136,6 @@ def test_a_clients_read_only_one_has_its_settings_and_answers(
         stopping=stopping,
         env={"TZ": "UTC"},
         process_groups=False,
-        close_fds=False,
         cache=GitCache(),
         object_id_length=64,
     )
@@ -152,7 +151,6 @@ def test_a_clients_read_only_one_has_its_settings_and_answers(
         "timeout",
         "stopping",
         "process_groups",
-        "close_fds",
         "cache",
     )
     assert [getattr(reader, name) for name in settings] == [getattr(git, name) for name in settings]

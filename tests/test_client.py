@@ -1,3 +1,4 @@
+import inspect
 import os
 import pickle
 import subprocess
@@ -61,8 +62,15 @@ def test_run_returns_stdout_stripped(repo: Git) -> None:
     assert repo.run("rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
+@pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
+def test_client_constructors_have_no_descriptor_inheritance_option(
+    client: type[ReadOnlyGit],
+) -> None:
+    assert "close_fds" not in inspect.signature(client).parameters
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="tests POSIX file descriptor inheritance")
-def test_short_lived_git_processes_can_opt_into_descriptor_inheritance(
+def test_git_processes_ignore_the_descriptor_setting_on_legacy_clients(
     repo: Git, tmp_path: Path
 ) -> None:
     data = tmp_path / "inheritable"
@@ -88,14 +96,17 @@ def test_short_lived_git_processes_can_opt_into_descriptor_inheritance(
         assert isolated.run("rev-parse", "--show-prefix") == ""
         assert report.read_text(encoding="utf-8") == "False"
 
-        fast = Git(repo.directory, program=str(launcher), close_fds=False)
-        reader = ReadOnlyGit(repo.directory, program=str(launcher), close_fds=False)
-        for client in (fast, fast.read_only(), reader):
+        git = Git(repo.directory, program=str(launcher))
+        reader = ReadOnlyGit(repo.directory, program=str(launcher))
+        vars(git)["close_fds"] = vars(reader)["close_fds"] = False
+        git, reader = pickle.loads(pickle.dumps((git, reader)))
+        for client in (git, git.read_only(), reader):
             report.unlink()
             assert client.prefix() == ""
-            assert report.read_text(encoding="utf-8") == "True"
+            assert report.read_text(encoding="utf-8") == "False"
 
-        with fast.popen("cat-file", "--batch") as process:
+        report.unlink()
+        with git.popen("cat-file", "--batch") as process:
             process.communicate()
             assert process.returncode == 0
         assert report.read_text(encoding="utf-8") == "False"

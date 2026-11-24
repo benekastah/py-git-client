@@ -20,7 +20,6 @@ from git_client.batch import (
 from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
-    CLOSE_FDS,
     Arg,
     EnvValue,
     Git,
@@ -53,7 +52,6 @@ from git_client.performance import PerformanceEvent, PerformanceRecorder
 
 __all__ = [
     "CLIENT_TIMEOUT",
-    "CLOSE_FDS",
     "Arg",
     "CatFile",
     "ConfigChange",
