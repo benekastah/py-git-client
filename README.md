@@ -6,10 +6,9 @@ times a command is only as fast as the number of git processes it starts. py-git
 what git-stack, git-recommit and move-forward share for that:
 
 - **One way to start git** (`Git`), the quickest each system allows: by its full path, with
-  `-C` rather than a working directory, and, except on Windows (or for a long-lived process),
-  without `close_fds`, so Python can use `posix_spawn` (but for a command with a timeout run
-  without a terminal, which gets a process group of its own: see below). Text and paths go to
-  git as git expects them (see `Git.command`).
+  `-C` rather than a working directory. Short-lived commands on Linux and macOS can opt into
+  inheriting file descriptors for faster startup. Text and paths go to git as git expects them
+  (see `Git.command`).
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
@@ -207,6 +206,12 @@ exchange each command starts faster without a terminal: by about 50 µs on Linux
 macOS, where a group of its own keeps Python from using posix_spawn. It suits a tool that runs
 many short commands, whose git starts nothing that could outlive it.
 
+Git processes start with only their standard streams by default. Pass `close_fds=False`
+to `Git` or `ReadOnlyGit` to allow short-lived commands on Linux and macOS to inherit
+extra file descriptors marked inheritable. This can reduce launch overhead. `read_only()`
+carries the setting forward. Windows and long-lived processes such as `CatFile` always
+close extra descriptors or handles.
+
 A tool that's shutting down can have its clients start no more git, whichever thread asks,
 with `stopping`, which each client asks before it starts git:
 
@@ -374,7 +379,7 @@ said and raises a subclass:
 | `UnknownRevisionError` | A revision (a commit, ref or object id) names nothing (from `CatFile`, its `reason` is git's, or "" if it gave none). |
 | `WrongTypeError` | A name names an object of the wrong type, e.g. a tree where git wants a commit (its `expected` and `found` types). |
 | `CorruptObjectError` | An object git read is damaged (e.g. a corrupt loose object): not taken for one that isn't there. |
-| `ConfigLockedError` | Another process has the config file locked; a write can be tried again (`Git.write_configs` does). |
+| `ConfigLockedError` | Another process has the config file locked. `Git.write_configs` retries when Git gives `File exists` as the reason. |
 | `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. The promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |

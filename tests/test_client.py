@@ -61,6 +61,46 @@ def test_run_returns_stdout_stripped(repo: Git) -> None:
     assert repo.run("rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="tests POSIX file descriptor inheritance")
+def test_short_lived_git_processes_can_opt_into_descriptor_inheritance(
+    repo: Git, tmp_path: Path
+) -> None:
+    data = tmp_path / "inheritable"
+    report = tmp_path / "inherited"
+    launcher = tmp_path / "git-launcher"
+    with data.open("wb") as file:
+        fd = file.fileno()
+        os.set_inheritable(fd, True)
+        launcher.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "try:\n"
+            f"    inherited = os.path.samestat(os.fstat({fd}), os.stat({str(data)!r}))\n"
+            "except OSError:\n"
+            "    inherited = False\n"
+            f"Path({str(report)!r}).write_text(str(inherited), encoding='utf-8')\n"
+            f"os.execv({repo.program!r}, [{repo.program!r}, *sys.argv[1:]])\n",
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+        isolated = Git(repo.directory, program=str(launcher))
+        assert isolated.run("rev-parse", "--show-prefix") == ""
+        assert report.read_text(encoding="utf-8") == "False"
+
+        fast = Git(repo.directory, program=str(launcher), close_fds=False)
+        reader = ReadOnlyGit(repo.directory, program=str(launcher), close_fds=False)
+        for client in (fast, fast.read_only(), reader):
+            report.unlink()
+            assert client.prefix() == ""
+            assert report.read_text(encoding="utf-8") == "True"
+
+        with fast.popen("cat-file", "--batch") as process:
+            process.communicate()
+            assert process.returncode == 0
+        assert report.read_text(encoding="utf-8") == "False"
+
+
 def test_run_can_leave_the_output_as_git_wrote_it(repo: Git) -> None:
     (Path(repo.directory) / "a").write_bytes(b"changed\n")
 

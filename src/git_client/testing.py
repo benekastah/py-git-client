@@ -492,6 +492,7 @@ class FakeGit(Git):
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
+        close_fds: bool = True,
         cache: GitCache | None = None,
         performance: PerformanceRecorder | None = None,
     ) -> None:
@@ -504,6 +505,7 @@ class FakeGit(Git):
             stopping=stopping,
             object_id_length=object_id_length,
             process_groups=process_groups,
+            close_fds=close_fds,
             cache=cache,
             performance=performance,
         )
@@ -581,6 +583,7 @@ class _FakeReadOnlyGit(ReadOnlyGit):
             stopping=fake.stopping,
             object_id_length=fake._object_id_length,
             process_groups=fake.process_groups,
+            close_fds=fake.close_fds,
             cache=fake.cache,
             performance=fake.performance,
         )

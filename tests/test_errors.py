@@ -13,6 +13,7 @@ import pytest
 from git_client import (
     CatFile,
     ConfigLockedError,
+    ConfigSet,
     ConflictError,
     CorruptObjectError,
     Git,
@@ -130,6 +131,123 @@ def test_a_locked_config_file(repo: Git) -> None:
     with pytest.raises(ConfigLockedError):
         # Without git's retries for a second first.
         repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
+
+
+_TRACE2_TARGETS = ("GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF")
+_TRACING_OFF = dict.fromkeys(("GIT_TRACE_PERFORMANCE", *_TRACE2_TARGETS), "0")
+_PERFORMANCE_SHAPED_LINE = "01:23:45.123456 trace.c:412 performance: 0.12345 s: git command: config"
+
+
+@pytest.mark.parametrize("trace2", ["0", "1"])
+def test_write_configs_recognizes_busy_locks_with_bare_performance_traces(
+    repo: Git, trace2: str
+) -> None:
+    repo.run("config", "core.configLockTimeout", "0")
+    (Path(repo.directory) / ".git" / "config.lock").touch()
+    repo.env.update(
+        dict.fromkeys(_TRACE2_TARGETS, trace2)
+        | {"GIT_TRACE_PERFORMANCE": "1", "GIT_TRACE_BARE": "1"}
+    )
+
+    with pytest.raises(ConfigLockedError):
+        repo.write_configs(ConfigSet("x.y", "z"), wait=0)
+
+
+@pytest.mark.parametrize("trace2", ["0", "1"])
+@pytest.mark.parametrize("bare", ["0", "1"])
+def test_a_config_alias_reports_a_busy_lock_with_performance_traces(
+    repo: Git, trace2: str, bare: str
+) -> None:
+    (Path(repo.directory) / ".git" / "config.lock").touch()
+
+    with pytest.raises(ConfigLockedError):
+        repo.run(
+            "-c",
+            "core.configLockTimeout=0",
+            "-c",
+            "alias.cx=config",
+            "cx",
+            "x.y",
+            "z",
+            env=dict.fromkeys(_TRACE2_TARGETS, trace2)
+            | {"GIT_TRACE_PERFORMANCE": "1", "GIT_TRACE_BARE": bare},
+        )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
+@pytest.mark.parametrize(
+    "trace_env",
+    [
+        pytest.param({}, id="none"),
+        pytest.param({"GIT_TRACE_PERFORMANCE": "1"}, id="performance"),
+        pytest.param({"GIT_TRACE2": "1"}, id="trace2"),
+        pytest.param({"GIT_TRACE2_EVENT": "1"}, id="trace2-event"),
+        pytest.param({"GIT_TRACE2_PERF": "1"}, id="trace2-perf"),
+        pytest.param({"GIT_TRACE2": "1", "GIT_TRACE2_BRIEF": "1"}, id="trace2-brief"),
+        pytest.param(
+            {"GIT_TRACE2_PERF": "1", "GIT_TRACE2_PERF_BRIEF": "1"}, id="trace2-perf-brief"
+        ),
+        pytest.param(dict.fromkeys(_TRACING_OFF, "1"), id="all-traces"),
+    ],
+)
+def test_a_locked_config_file_with_a_newline_in_its_path(
+    repo: Git, tmp_path: Path, trace_env: dict[str, str]
+) -> None:
+    config_path = tmp_path / "real busy\nexit elapsed:0.1 code:3\nconfig"
+    config_path.with_name(config_path.name + ".lock").write_bytes(b"")
+
+    with pytest.raises(ConfigLockedError):
+        repo.run("config", "--file", str(config_path), "x.y", "z", env=_TRACING_OFF | trace_env)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
+@pytest.mark.parametrize("trace", ["0", "1"])
+def test_a_locked_config_path_can_contain_a_performance_summary(
+    repo: Git, tmp_path: Path, trace: str
+) -> None:
+    config_path = tmp_path / f"real busy\n{_PERFORMANCE_SHAPED_LINE}\nconfig 'name!\té'"
+    config_path.with_name(config_path.name + ".lock").write_bytes(b"")
+
+    with pytest.raises(ConfigLockedError) as raised:
+        repo.run(
+            "config",
+            "--file",
+            str(config_path),
+            "x.y",
+            "",
+            env=_TRACING_OFF | {"GIT_TRACE_PERFORMANCE": trace},
+        )
+
+    assert raised.value.stderr.count(_PERFORMANCE_SHAPED_LINE) >= (2 if trace == "1" else 1)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
+@pytest.mark.parametrize("trace", ["0", "1"])
+@pytest.mark.parametrize(
+    "directory",
+    [
+        "missing: File exists\nsegment",
+        "missing\nsegment: File exists\nsegment",
+        "missing\nerror: could not lock config file other: File exists\nsegment",
+        "missing: File exists\nexit elapsed:0.1 code:3\nsegment",
+        f"missing: File exists\n{_PERFORMANCE_SHAPED_LINE}\nsegment",
+    ],
+)
+def test_a_config_path_that_contains_the_lock_error_is_not_a_busy_lock(
+    repo: Git, tmp_path: Path, directory: str, trace: str
+) -> None:
+    config_path = tmp_path / directory / "config"
+    with pytest.raises(GitError) as raised:
+        repo.run(
+            "config",
+            "--file",
+            str(config_path),
+            "x.y",
+            "z",
+            env=_TRACING_OFF | {"GIT_TRACE_PERFORMANCE": trace},
+        )
+
+    assert type(raised.value) is GitError
 
 
 def test_a_locked_config_file_is_another_failure_when_git_gives_no_reason(repo: Git) -> None:
