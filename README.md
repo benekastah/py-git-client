@@ -224,6 +224,16 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
+### Push results
+
+Use `push(git, *args)` to run one push and get a `PushResult` even if Git exits
+with a nonzero status. The result has the exit status and captured output,
+plus the completed destination reports. Each report contains the destination
+as Git displayed it and the source, target and status for each reported ref.
+Fast-forward and forced updates include full old and new object IDs when Git
+reports them. An unacknowledged ref has unknown status. Quiet mode can
+suppress reports, and dry-run reports describe projected changes.
+
 ### Caching
 
 By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`
