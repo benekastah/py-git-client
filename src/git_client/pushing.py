@@ -76,8 +76,9 @@ def _parse_ref(line: str) -> PushRef | None:
     if not separator or not target:
         return None
     if source == "(delete)":
-        # Git names a deletion it rejects itself "(delete)" and one it reports otherwise "",
-        # and a source it resolved is a full ref name or an object id, never "(delete)".
+        # Git names a deletion it rejects itself "(delete)" and reports others with an empty
+        # source. A local ref named (delete) prints as refs/heads/(delete), so a bare
+        # "(delete)" means a deletion.
         source = ""
     try:
         status = PushStatus(flag)
