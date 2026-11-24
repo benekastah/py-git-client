@@ -13,6 +13,7 @@ import pytest
 from git_client import (
     CatFile,
     ConfigLockedError,
+    ConfigSet,
     ConflictError,
     CorruptObjectError,
     Git,
@@ -132,10 +133,45 @@ def test_a_locked_config_file(repo: Git) -> None:
         repo.run("-c", "core.configLockTimeout=0", "config", "x.y", "z")
 
 
-_TRACING_OFF = dict.fromkeys(
-    ("GIT_TRACE_PERFORMANCE", "GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF"), "0"
-)
+_TRACE2_TARGETS = ("GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF")
+_TRACING_OFF = dict.fromkeys(("GIT_TRACE_PERFORMANCE", *_TRACE2_TARGETS), "0")
 _PERFORMANCE_SHAPED_LINE = "01:23:45.123456 trace.c:412 performance: 0.12345 s: git command: config"
+
+
+@pytest.mark.parametrize("trace2", ["0", "1"])
+def test_write_configs_recognizes_busy_locks_with_bare_performance_traces(
+    repo: Git, trace2: str
+) -> None:
+    repo.run("config", "core.configLockTimeout", "0")
+    (Path(repo.directory) / ".git" / "config.lock").touch()
+    repo.env.update(
+        dict.fromkeys(_TRACE2_TARGETS, trace2)
+        | {"GIT_TRACE_PERFORMANCE": "1", "GIT_TRACE_BARE": "1"}
+    )
+
+    with pytest.raises(ConfigLockedError):
+        repo.write_configs(ConfigSet("x.y", "z"), wait=0)
+
+
+@pytest.mark.parametrize("trace2", ["0", "1"])
+@pytest.mark.parametrize("bare", ["0", "1"])
+def test_a_config_alias_reports_a_busy_lock_with_performance_traces(
+    repo: Git, trace2: str, bare: str
+) -> None:
+    (Path(repo.directory) / ".git" / "config.lock").touch()
+
+    with pytest.raises(ConfigLockedError):
+        repo.run(
+            "-c",
+            "core.configLockTimeout=0",
+            "-c",
+            "alias.cx=config",
+            "cx",
+            "x.y",
+            "z",
+            env=dict.fromkeys(_TRACE2_TARGETS, trace2)
+            | {"GIT_TRACE_PERFORMANCE": "1", "GIT_TRACE_BARE": bare},
+        )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")

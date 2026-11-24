@@ -5,7 +5,7 @@ NoAnswerError, when git said nothing."""
 import os
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import ClassVar, Self, cast
 
 # How much of a command line a GitError's message shows: a long one (thousands of paths, say)
@@ -200,12 +200,50 @@ def _trace2_records(event: str) -> str:
 
 
 _PERFORMANCE_SUMMARY = re.compile(
-    rf"^{_TRACE_TIME}(?:\S*[/\\])?trace\.c:\d+[ \t]+performance: [\d.]+ s: git command: ",
+    rf"^(?:{_TRACE_TIME}(?:\S*[/\\])?trace\.c:\d+[ \t]+)?performance: [\d.]+ s: git command: ",
     re.MULTILINE,
 )
 _TRACE2_ATEXIT = _trace2_records("atexit")
 _TRACE2_ATEXIT_TRAILER = re.compile(rf"^{_TRACE2_ATEXIT}\Z", re.MULTILINE)
 _TRACE2_TRAILER = re.compile(rf"^{_trace2_records('exit')}{_TRACE2_ATEXIT}\Z", re.MULTILINE)
+_TRACE2_CHILD_EXIT_TRAILER = re.compile(
+    r'^(?:(?:\{"event":"child_exit","sid":[^\r\n]+\}'
+    rf"|(?:{_TRACE_LOCATION})?child_exit\[\d+\] pid:-?\d+ code:-?\d+ elapsed:[\d.]+"
+    rf"|(?:{_TRACE_LOCATION}\| )?d\d+ \| main +\| child_exit +\|[^\r\n]*\| "
+    r"\[ch\d+\] pid:-?\d+ code:-?\d+)\r?\n)+\Z",
+    re.MULTILINE,
+)
+
+
+def _performance_summaries(stderr: str) -> Iterator[tuple[list[str], str]]:
+    """Yield each candidate command and the stderr around its summary."""
+    # The performance summary can appear between Trace2's exit and atexit records.
+    atexit = _TRACE2_ATEXIT_TRAILER.search(stderr)
+    end = atexit.start() if atexit else len(stderr)
+    for summary in _PERFORMANCE_SUMMARY.finditer(stderr, 0, end):
+        try:
+            reported = shlex.split(stderr[summary.end() : end])
+        except ValueError:  # a path can look like the beginning of a summary
+            continue
+        if reported:
+            yield reported, stderr[: summary.start()] + stderr[end:]
+
+
+def _config_alias_diagnostic(stderr: str, argv: Sequence[object]) -> str:
+    """Accept a lock diagnostic followed by the trace for an alias's Git config child."""
+    child_stderr = _TRACE2_CHILD_EXIT_TRAILER.sub("", stderr)
+    for reported, remaining in _performance_summaries(child_stderr):
+        config_args = reported[2:]
+        if (
+            reported[1:2] == ["config"]
+            and os.path.basename(reported[0]).lower() in ("git", "git.exe")
+            and config_args
+            and argv[-len(config_args) :] == config_args
+        ):
+            diagnostic = _TRACE2_TRAILER.sub("", remaining)
+            if _CONFIG_LOCK_BUSY.search(diagnostic):
+                return diagnostic
+    return stderr
 
 
 def _config_diagnostic(stderr: str, command: object) -> str:
@@ -217,17 +255,12 @@ def _config_diagnostic(stderr: str, command: object) -> str:
             arg.decode("utf-8", "surrogateescape") if isinstance(arg, bytes) else arg
             for arg in args[1:]
         ]
-        # The performance summary can appear between Trace2's exit and atexit records.
-        atexit = _TRACE2_ATEXIT_TRAILER.search(stderr)
-        end = atexit.start() if atexit else len(stderr)
-        for summary in _PERFORMANCE_SUMMARY.finditer(stderr, 0, end):
-            try:
-                reported = shlex.split(stderr[summary.end() : end])
-            except ValueError:  # a path can look like the beginning of a summary
-                continue
-            if reported and reported[1:] == argv:
-                stderr = stderr[: summary.start()] + stderr[end:]
-                break
+        for reported, remaining in _performance_summaries(stderr):
+            if reported[1:] == argv:
+                diagnostic = _TRACE2_TRAILER.sub("", remaining)
+                if _CONFIG_LOCK_BUSY.search(diagnostic):
+                    return diagnostic
+                return _config_alias_diagnostic(diagnostic, argv)
     return _TRACE2_TRAILER.sub("", stderr)
 
 
