@@ -30,7 +30,7 @@ from git_client.native import NativeObject, read_local_object
 from git_client.performance import PerformanceRecorder, open_git_process, record_read
 
 CLOSE_FDS = sys.platform == "win32"
-"""Whether short-lived git processes close extra descriptors or handles by default."""
+"""Whether the platform requires closing extra handles regardless of the client's setting."""
 
 type Arg = str | bytes
 """An argument to git: text (str), or a path in the filesystem (bytes, in its encoding)."""
@@ -878,10 +878,10 @@ class ReadOnlyGit:
     twentieth of what starting git costs). It suits a tool that runs many short commands
     with a timeout and without a terminal, whose git starts nothing that could outlive it.
 
-    With `close_fds=True`, short-lived git commands start with only their standard streams
-    inherited. On Linux and macOS the default lets inheritable file descriptors reach git
-    so Python can use its fastest launch path. Windows and long-lived processes always
-    close extra descriptors or handles.
+    Git commands start with only their standard streams by default. On Linux and macOS,
+    `close_fds=False` lets short-lived git commands inherit extra file descriptors marked
+    inheritable so Python can use its fastest launch path. Windows and long-lived processes
+    always close extra descriptors or handles.
 
     With `native=True`, this reader can use the optional pygit2 backend for local SHA-1
     objects addressed by their full ids. Git itself uses subprocesses for all operations.
@@ -892,6 +892,9 @@ class ReadOnlyGit:
     Every command is given its directory with `-C` rather than as a working directory, which
     would keep Python from using posix_spawn.
     """
+
+    # Also the default when unpickling clients saved before this setting existed.
+    close_fds: bool = True
 
     def __init__(
         self,
@@ -904,7 +907,7 @@ class ReadOnlyGit:
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
-        close_fds: bool = False,
+        close_fds: bool = True,
         cache: GitCache | None = None,
         native: bool = False,
         performance: PerformanceRecorder | None = None,

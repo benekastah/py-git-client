@@ -77,10 +77,10 @@ the shape of the code or a rule here changes.
   requests), which `Git.process`, `Git.popen` and a ReadOnlyGit's reads call, so the way git
   is started stays the quickest each system allows, a client whose `stopping` says so starts
   nothing, and `git_calls` (which wraps both) sees every process (`FakeGit` replaces
-  `process` and `popen`, and asks `stopping` too). Every long-lived process and every Windows
-  launch closes extra inheritable descriptors or handles. Short-lived launches on Linux
-  and macOS close them when the client requests `close_fds=True`. Never pass a working
-  directory (`cwd=`): it keeps Python from using `posix_spawn`; use `-C`.
+  `process` and `popen`, and asks `stopping` too). Launches close extra inheritable
+  descriptors or handles by default. Short-lived launches on Linux and macOS allow them
+  when the client requests `close_fds=False`. Never pass a working directory (`cwd=`): it
+  keeps Python from using `posix_spawn`; use `-C`.
 - **Performance recording uses the launch boundary.** Count one Git process per successful
   launch. Native reads record only the typed read, and cache hits record nothing. CatFile
   records work separately so the lifetime of a persistent process can include idle time.

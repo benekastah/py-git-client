@@ -136,7 +136,7 @@ def test_a_clients_read_only_one_has_its_settings_and_answers(
         stopping=stopping,
         env={"TZ": "UTC"},
         process_groups=False,
-        close_fds=True,
+        close_fds=False,
         cache=GitCache(),
         object_id_length=64,
     )

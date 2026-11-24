@@ -6,9 +6,9 @@ times a command is only as fast as the number of git processes it starts. py-git
 what git-stack, git-recommit and move-forward share for that:
 
 - **One way to start git** (`Git`), the quickest each system allows: by its full path, with
-  `-C` rather than a working directory. Short-lived commands on Linux and macOS allow
-  inheritable file descriptors to reach git by default so Python can use its fastest launch
-  path. Text and paths go to git as git expects them (see `Git.command`).
+  `-C` rather than a working directory. Short-lived commands on Linux and macOS can opt into
+  inheriting file descriptors for faster startup. Text and paths go to git as git expects them
+  (see `Git.command`).
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
@@ -206,10 +206,11 @@ exchange each command starts faster without a terminal: by about 50 µs on Linux
 macOS, where a group of its own keeps Python from using posix_spawn. It suits a tool that runs
 many short commands, whose git starts nothing that could outlive it.
 
-Pass `close_fds=True` to `Git` or `ReadOnlyGit` to keep extra inheritable file descriptors
-out of short-lived Git processes on Linux and macOS. `read_only()` carries this setting
-forward. Windows and long-lived processes such as `CatFile` always close extra descriptors
-or handles when starting Git.
+Git processes start with only their standard streams by default. Pass `close_fds=False`
+to `Git` or `ReadOnlyGit` to allow short-lived commands on Linux and macOS to inherit
+extra file descriptors marked inheritable. This can reduce launch overhead. `read_only()`
+carries the setting forward. Windows and long-lived processes such as `CatFile` always
+close extra descriptors or handles.
 
 A tool that's shutting down can have its clients start no more git, whichever thread asks,
 with `stopping`, which each client asks before it starts git:

@@ -492,7 +492,7 @@ class FakeGit(Git):
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
-        close_fds: bool = False,
+        close_fds: bool = True,
         cache: GitCache | None = None,
         performance: PerformanceRecorder | None = None,
     ) -> None:

@@ -62,7 +62,9 @@ def test_run_returns_stdout_stripped(repo: Git) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="tests POSIX file descriptor inheritance")
-def test_close_fds_isolates_git_processes_when_requested(repo: Git, tmp_path: Path) -> None:
+def test_short_lived_git_processes_can_opt_into_descriptor_inheritance(
+    repo: Git, tmp_path: Path
+) -> None:
     data = tmp_path / "inheritable"
     report = tmp_path / "inherited"
     launcher = tmp_path / "git-launcher"
@@ -82,21 +84,21 @@ def test_close_fds_isolates_git_processes_when_requested(repo: Git, tmp_path: Pa
             encoding="utf-8",
         )
         launcher.chmod(0o755)
-        fast = Git(repo.directory, program=str(launcher))
-        assert fast.run("rev-parse", "--show-prefix") == ""
-        assert report.read_text(encoding="utf-8") == "True"
+        isolated = Git(repo.directory, program=str(launcher))
+        assert isolated.run("rev-parse", "--show-prefix") == ""
+        assert report.read_text(encoding="utf-8") == "False"
+
+        fast = Git(repo.directory, program=str(launcher), close_fds=False)
+        reader = ReadOnlyGit(repo.directory, program=str(launcher), close_fds=False)
+        for client in (fast, fast.read_only(), reader):
+            report.unlink()
+            assert client.prefix() == ""
+            assert report.read_text(encoding="utf-8") == "True"
 
         with fast.popen("cat-file", "--batch") as process:
             process.communicate()
             assert process.returncode == 0
         assert report.read_text(encoding="utf-8") == "False"
-
-        isolated = Git(repo.directory, program=str(launcher), close_fds=True)
-        reader = ReadOnlyGit(repo.directory, program=str(launcher), close_fds=True)
-        for client in (isolated, isolated.read_only(), reader):
-            report.unlink()
-            assert client.prefix() == ""
-            assert report.read_text(encoding="utf-8") == "False"
 
 
 def test_run_can_leave_the_output_as_git_wrote_it(repo: Git) -> None:
