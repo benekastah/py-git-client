@@ -167,3 +167,26 @@ def test_unfinished_destination_is_left_out_before_a_finished_one() -> None:
 )
 def test_destination_with_an_unrecognized_row_is_left_out(row: str) -> None:
     assert _destinations(f"To A\n{OK_ROW}\n{row}\n{OK_ROW}\nDone\n") == ()
+
+
+def test_push_reports_a_rejected_deletion_with_an_empty_source(repo: Git, tmp_path: Path) -> None:
+    # Git names the source of a deletion it rejects itself "(delete)".
+    destination = tmp_path / "remote"
+    repo.run("branch", "obsolete")
+    repo.run("clone", "--quiet", "--bare", ".", str(destination))
+    stale = repo.run("rev-parse", "HEAD")
+    repo.run("commit", "--allow-empty", "-qm", "moved")
+    Git(destination).run("fetch", str(repo.directory), "+main:obsolete")
+
+    result = push(
+        repo,
+        f"--force-with-lease=refs/heads/obsolete:{stale}",
+        str(destination),
+        ":refs/heads/obsolete",
+    )
+
+    assert result.returncode != 0
+    (reported,) = result.destinations
+    (ref,) = reported.refs
+    assert (ref.source, ref.target, ref.status) == ("", "refs/heads/obsolete", PushStatus.REJECTED)
+    assert "(delete):refs/heads/obsolete" in result.stdout

@@ -28,9 +28,10 @@ class PushStatus(enum.StrEnum):
 class PushRef:
     """One ref Git reported for a destination.
 
-    `source` is `""` for a deletion. `summary` is Git's, with any parenthesized reason
-    (e.g. `[rejected] (stale info)`). `old_oid` and `new_oid` are set only for
-    FAST_FORWARD and FORCED, when Git prints both; otherwise they're None.
+    `source` is `""` for every deletion, even one Git prints as `(delete)`. `summary` is
+    Git's, with any parenthesized reason (e.g. `[rejected] (stale info)`). `old_oid` and
+    `new_oid` are set only for FAST_FORWARD and FORCED, when Git prints both; otherwise
+    they're None.
     """
 
     source: str
@@ -74,6 +75,10 @@ def _parse_ref(line: str) -> PushRef | None:
     source, separator, target = refspec.rpartition(":")
     if not separator or not target:
         return None
+    if source == "(delete)":
+        # Git names a deletion it rejects itself "(delete)" and one it reports otherwise "",
+        # and a source it resolved is a full ref name or an object id, never "(delete)".
+        source = ""
     try:
         status = PushStatus(flag)
     except ValueError:
