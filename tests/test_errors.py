@@ -182,6 +182,9 @@ def test_a_config_alias_reports_a_busy_lock_with_performance_traces(
         pytest.param({"GIT_TRACE_PERFORMANCE": "1"}, id="performance"),
         pytest.param({"GIT_TRACE2": "1"}, id="trace2"),
         pytest.param({"GIT_TRACE2_EVENT": "1"}, id="trace2-event"),
+        pytest.param(
+            {"GIT_TRACE2_EVENT": "1", "GIT_TRACE2_EVENT_BRIEF": "1"}, id="trace2-event-brief"
+        ),
         pytest.param({"GIT_TRACE2_PERF": "1"}, id="trace2-perf"),
         pytest.param({"GIT_TRACE2": "1", "GIT_TRACE2_BRIEF": "1"}, id="trace2-brief"),
         pytest.param(

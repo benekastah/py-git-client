@@ -193,7 +193,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - Config writes recognize a busy lock on paths containing newlines, including with Git's
   performance or Trace2 logging enabled. Retries depend on the reason after the path, which
   can contain text shaped like an exit trace line. Bare performance traces and aliases that
-  forward the config arguments also preserve the lock error type.
+  forward the config arguments also preserve the lock error type, including when Git logs
+  fsync or Windows memory counters at exit.
 
 - Cache keys preserve `..` after symlinks in repository paths, so a lookup through
   `link/..` cannot reuse the answer for its lexically normalized path.
