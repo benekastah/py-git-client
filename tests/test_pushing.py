@@ -4,6 +4,7 @@ import pytest
 
 from git_client import Git, PushStatus, push
 from git_client.pushing import _destinations  # pyright: ignore[reportPrivateUsage]
+from git_client.testing import FakeGit
 
 
 def test_push_reports_partial_publication(repo: Git, tmp_path: Path) -> None:
@@ -191,3 +192,16 @@ def test_push_reports_a_rejected_deletion_with_an_empty_source(repo: Git, tmp_pa
     (ref,) = reported.refs
     assert (ref.source, ref.target, ref.status) == ("", "refs/heads/obsolete", PushStatus.REJECTED)
     assert "(delete):refs/heads/obsolete" in result.stdout
+
+
+def test_fake_git_answers_push_by_its_documented_command() -> None:
+    # The README tells FakeGit users to respond to exactly this command.
+    fake = FakeGit()
+    fake.respond(["-c", "core.abbrev=no", "push", "--porcelain"], stdout=f"To A\n{OK_ROW}\nDone\n")
+
+    result = push(fake, "origin")
+
+    assert [(d.url, [r.status for r in d.refs]) for d in result.destinations] == [
+        ("A", [PushStatus.UP_TO_DATE])
+    ]
+    assert fake.commands == [["-c", "core.abbrev=no", "push", "--porcelain", "origin"]]
