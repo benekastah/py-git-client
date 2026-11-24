@@ -188,7 +188,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 ### Fixed
 
 - Config writes recognize a busy lock on paths containing newlines, including with Git's
-  performance or Trace2 logging enabled. Retries depend on the reason after the path.
+  performance or Trace2 logging enabled. Retries depend on the reason after the path, which
+  can contain text shaped like a Trace2 exit line.
 
 - Cache keys preserve `..` after symlinks in repository paths, so a lookup through
   `link/..` cannot reuse the answer for its lexically normalized path.

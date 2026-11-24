@@ -185,14 +185,27 @@ MISSING_OBJECT = re.compile(r"^fatal: could not fetch \S+ from promisor remote$"
 _CONFIG_LOCK_BUSY = re.compile(
     r"^error: could not lock config file (?s:.+): File exists(?:\r?\n)?\Z", re.MULTILINE
 )
-# TRACE2 event, normal and perf exit records, and GIT_TRACE_PERFORMANCE's command summary.
-# The latter can repeat the path on multiple lines, so leave the whole trailer out.
-_TRACE_LOCATION = r"\d\d:\d\d:\d\d\.\d+[ \t]+\S+:\d+[ \t]+"
+_TRACE_TIME = r"\d\d:\d\d:\d\d\.\d+[ \t]+"
+_TRACE_LOCATION = rf"{_TRACE_TIME}\S+:\d+[ \t]+"
+
+
+def _trace2_records(event: str) -> str:
+    """Match one or more lines for a Trace2 event in JSON, normal or perf format."""
+    return (
+        rf'(?:(?:\{{"event":"{event}","sid":[^\r\n]+\}}'
+        rf"|(?:{_TRACE_LOCATION})?{event} elapsed:[\d.]+ code:-?\d+"
+        rf"|(?:{_TRACE_LOCATION}\| )?d\d+ \| main +\| {event} +\|[^\r\n]*\| code:-?\d+)\r?\n)+"
+    )
+
+
+# Trace2 emits both exit and atexit. The performance summary can appear between them
+# and can repeat the path on multiple lines, so match the whole trailer at stderr's end.
+_PERFORMANCE_SUMMARY = (
+    rf"{_TRACE_TIME}(?:\S*[/\\])?trace\.c:\d+[ \t]+performance: [\d.]+ s: git command: (?s:.*\n)"
+)
 _GIT_EXIT_TRACE = re.compile(
-    r'^\{"event":"exit","sid":'
-    rf"|^(?:{_TRACE_LOCATION})?exit elapsed:[\d.]+ code:-?\d+\r?$"
-    rf"|^(?:{_TRACE_LOCATION}\| )?d\d+ \| main +\| exit +\|[^\n]*\| code:-?\d+\r?$"
-    rf"|^{_TRACE_LOCATION}performance: [\d.]+ s: git command: ",
+    rf"^(?:{_trace2_records('exit')}(?:{_PERFORMANCE_SUMMARY})?{_trace2_records('atexit')}"
+    rf"(?:{_PERFORMANCE_SUMMARY})?|{_PERFORMANCE_SUMMARY})\Z",
     re.MULTILINE,
 )
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
@@ -247,7 +260,7 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
         if says.search(stdout):
             return error
     if "error: could not lock config file " in stderr:
-        diagnostic = _GIT_EXIT_TRACE.split(stderr, maxsplit=1)[0]
+        diagnostic = _GIT_EXIT_TRACE.sub("", stderr)
         if _CONFIG_LOCK_BUSY.search(diagnostic):
             return ConfigLockedError
     for error, says in _STDERR_SAYS:
