@@ -6,10 +6,9 @@ times a command is only as fast as the number of git processes it starts. py-git
 what git-stack, git-recommit and move-forward share for that:
 
 - **One way to start git** (`Git`), the quickest each system allows: by its full path, with
-  `-C` rather than a working directory, and, except on Windows (or for a long-lived process),
-  without `close_fds`, so Python can use `posix_spawn` (but for a command with a timeout run
-  without a terminal, which gets a process group of its own: see below). Text and paths go to
-  git as git expects them (see `Git.command`).
+  `-C` rather than a working directory. Short-lived commands on Linux and macOS allow
+  inheritable file descriptors to reach git by default so Python can use its fastest launch
+  path. Text and paths go to git as git expects them (see `Git.command`).
 - **One long-lived `git cat-file --batch-command`** (`CatFile`) for resolving names and
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
@@ -206,6 +205,11 @@ or on an interrupt, only git is stopped, and what it started runs on, as with a 
 exchange each command starts faster without a terminal: by about 50 µs on Linux, and more on
 macOS, where a group of its own keeps Python from using posix_spawn. It suits a tool that runs
 many short commands, whose git starts nothing that could outlive it.
+
+Pass `close_fds=True` to `Git` or `ReadOnlyGit` to keep extra inheritable file descriptors
+out of short-lived Git processes on Linux and macOS. `read_only()` carries this setting
+forward. Windows and long-lived processes such as `CatFile` always close extra descriptors
+or handles when starting Git.
 
 A tool that's shutting down can have its clients start no more git, whichever thread asks,
 with `stopping`, which each client asks before it starts git:

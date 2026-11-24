@@ -29,15 +29,8 @@ from git_client.errors import (
 from git_client.native import NativeObject, read_local_object
 from git_client.performance import PerformanceRecorder, open_git_process, record_read
 
-# Whether short-lived git processes are started with close_fds. Not on Linux or macOS: Python
-# opens its own files non-inheritable (PEP 446), so git inherits only what the tool itself
-# inherited, as it would if run from a shell, and without close_fds (and with git's full path,
-# and no cwd) Python starts git with posix_spawn, which on macOS is about a third faster than
-# forking. (On macOS a new pipe is inheritable for a moment; see Git.popen. A command given a
-# process group of its own doesn't get posix_spawn either: see _own_process_group.) On
-# Windows, yes: without it, a process one thread starts can inherit, and hold open, the pipes
-# another thread is setting up for its own process.
 CLOSE_FDS = sys.platform == "win32"
+"""Whether short-lived git processes close extra descriptors or handles by default."""
 
 type Arg = str | bytes
 """An argument to git: text (str), or a path in the filesystem (bytes, in its encoding)."""
@@ -437,7 +430,9 @@ def start_process(
         stdout=subprocess.PIPE if capture_output and stdout is None else stdout,
         stderr=subprocess.PIPE if capture_output else None,
         env=environment,
-        close_fds=CLOSE_FDS,
+        # On Windows, a process one thread starts could otherwise inherit the pipes
+        # another thread is setting up and hold them open.
+        close_fds=git.close_fds or CLOSE_FDS,
         process_group=0 if own_group else None,
     ) as process:
         try:
@@ -474,10 +469,8 @@ def start_popen(
         stdout=subprocess.PIPE,
         stderr=stderr,
         env=environment,
-        # On every system, unlike CLOSE_FDS: macOS makes a pipe, then makes it
-        # non-inheritable, so a process that lives as long as the tool could hold the pipe
-        # another thread is making, and that thread's process would never see EOF. One
-        # process a session doesn't need posix_spawn's speed.
+        # macOS makes a pipe, then makes it non-inheritable. A long-lived process could
+        # otherwise hold the pipe another thread is making and prevent it from seeing EOF.
         close_fds=True,
     )
 
@@ -885,6 +878,11 @@ class ReadOnlyGit:
     twentieth of what starting git costs). It suits a tool that runs many short commands
     with a timeout and without a terminal, whose git starts nothing that could outlive it.
 
+    With `close_fds=True`, short-lived git commands start with only their standard streams
+    inherited. On Linux and macOS the default lets inheritable file descriptors reach git
+    so Python can use its fastest launch path. Windows and long-lived processes always
+    close extra descriptors or handles.
+
     With `native=True`, this reader can use the optional pygit2 backend for local SHA-1
     objects addressed by their full ids. Git itself uses subprocesses for all operations.
 
@@ -906,6 +904,7 @@ class ReadOnlyGit:
         stopping: Callable[[], bool] | None = None,
         object_id_length: int | None = None,
         process_groups: bool = True,
+        close_fds: bool = False,
         cache: GitCache | None = None,
         native: bool = False,
         performance: PerformanceRecorder | None = None,
@@ -918,6 +917,7 @@ class ReadOnlyGit:
         self.timeout = timeout
         self.stopping = stopping
         self.process_groups = process_groups
+        self.close_fds = close_fds
         self._object_id_length = object_id_length
         self._cache = cache
         self.native = native and not isinstance(self, Git)
@@ -1097,6 +1097,7 @@ class Git(ReadOnlyGit):
             stopping=self.stopping,
             object_id_length=self._object_id_length,
             process_groups=self.process_groups,
+            close_fds=self.close_fds,
             cache=self.cache,
             native=native,
             performance=self.performance,

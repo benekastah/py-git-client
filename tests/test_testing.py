@@ -651,7 +651,7 @@ def test_a_build_that_fails_leaves_nothing_behind(repo_templates: RepoTemplates)
 
 
 def test_a_fake_gits_read_only_one_answers_from_its_responses_and_records_in_its_calls() -> None:
-    git = FakeGit(object_id_length=40, timeout=3, cache=GitCache())
+    git = FakeGit(object_id_length=40, timeout=3, cache=GitCache(), close_fds=True)
     git.respond(["var"], stdout="A U Thor <a@example.com> 1 +0000\n")
     git.respond(["rev-parse"], stdout="sub/\n../\ntrue\n/r/.git\n/r/.git\n")
     reader = git.read_only()
@@ -659,6 +659,7 @@ def test_a_fake_gits_read_only_one_answers_from_its_responses_and_records_in_its
     assert reader.var("GIT_AUTHOR_IDENT") == "A U Thor <a@example.com> 1 +0000"
     assert reader.prefix() == "sub/"
     assert (git.cdup(), reader.timeout) == ("../", 3)  # what the reader was told
+    assert reader.close_fds
     assert not isinstance(reader, FakeGit)
     assert git.commands == [
         ["var", "GIT_AUTHOR_IDENT"],

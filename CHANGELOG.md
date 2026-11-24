@@ -152,6 +152,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `process_groups=False` on `Git`, `ReadOnlyGit` and `FakeGit`: git never gets a process group
   of its own, so a command with a timeout starts faster without a terminal, but what git
   started isn't stopped with it (#52).
+- `close_fds=True` on `Git`, `ReadOnlyGit` and `FakeGit` to keep extra inheritable file
+  descriptors out of short-lived Git processes on Linux and macOS. `read_only()` carries
+  the setting forward.
 - `hash_blob_at(..., paths_from_top=True)`, for a path from the top of the worktree, as git
   reports one, from a client in a subdirectory (going up by `cdup()`), as `patch_ids` has
   (#50, #67).
