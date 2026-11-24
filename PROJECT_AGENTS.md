@@ -47,6 +47,9 @@ the shape of the code or a rule here changes.
   that's fine. Before adding a function, ask which git command answers it. Opt-in
   object reads may ask libgit2 where its answer is equivalent to Git's. Git remains
   the backend for all writes and the fallback for reads libgit2 can't answer.
+- **Typed Git operations return parsed results.** Prefer plumbing or documented
+  machine-readable formats. Cover the fields consumers need and extend the results as they
+  need more. Arbitrary commands through `Git.run` and `Git.run_bytes` return raw output.
 - **The API is a contract.** git-stack, git-recommit and move-forward build on it, and the
   README's examples stay true (`tests/test_readme.py` runs its Python blocks, with git 2.36
   or newer, the oldest supported; a block that starts `# Needs git X.Y.`, alone in a block of
