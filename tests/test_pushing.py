@@ -140,3 +140,30 @@ def test_missing_remote_acknowledgement_is_not_a_rejection() -> None:
     )
     (ref,) = reported.refs
     assert ref.status is PushStatus.UNKNOWN
+
+
+OK_ROW = "=\trefs/heads/main:refs/heads/main\t[up to date]"
+
+
+def test_destination_without_done_is_left_out() -> None:
+    # Git prints "Done" only when the push succeeded; without it the outcome is unknown.
+    assert _destinations(f"To A\n{OK_ROW}\n") == ()
+
+
+def test_unfinished_destination_is_left_out_before_a_finished_one() -> None:
+    (reported,) = _destinations(f"To A\n{OK_ROW}\nTo B\n{OK_ROW}\nDone\n")
+    assert reported.url == "B"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "something else",
+        "=\trefs/heads/main:refs/heads/main",
+        "=\trefs/heads/main\t[up to date]",
+        "?\trefs/heads/main:refs/heads/main\t[up to date]",
+    ],
+    ids=["unrecognized", "too few columns", "no colon", "unknown flag"],
+)
+def test_destination_with_an_unrecognized_row_is_left_out(row: str) -> None:
+    assert _destinations(f"To A\n{OK_ROW}\n{row}\n{OK_ROW}\nDone\n") == ()
