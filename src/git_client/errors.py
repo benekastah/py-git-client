@@ -205,7 +205,21 @@ _PERFORMANCE_SUMMARY = re.compile(
 )
 _TRACE2_ATEXIT = _trace2_records("atexit")
 _TRACE2_ATEXIT_TRAILER = re.compile(rf"^{_TRACE2_ATEXIT}\Z", re.MULTILINE)
-_TRACE2_TRAILER = re.compile(rf"^{_trace2_records('exit')}{_TRACE2_ATEXIT}\Z", re.MULTILINE)
+# Git 2.36 logs fsync counters just before exit. Git for Windows logs memory usage there.
+_TRACE2_FSYNC_KEY = r"fsync/(?:writeout-only|hardware-flush)"
+_TRACE2_MEMORY_VALUE = r"\{[^\r\n]*\}"
+_TRACE2_EXIT_DATA = (
+    r'(?:(?:\{"event":"data","sid":[^\r\n]+,"category":"fsync",'
+    rf'"key":"{_TRACE2_FSYNC_KEY}","value":"\d+"\}}'
+    r'|\{"event":"data_json","sid":[^\r\n]+,"category":"process","key":"windows/memory",'
+    rf'"value":{_TRACE2_MEMORY_VALUE}\}}'
+    rf"|(?:{_TRACE_LOCATION}\| )?d\d+ \| main +\| (?:"
+    rf"data +\|[^\r\n]*\| fsync +\| {_TRACE2_FSYNC_KEY}:\d+"
+    rf"|data_json +\|[^\r\n]*\| process +\| windows/memory:{_TRACE2_MEMORY_VALUE}))\r?\n)*"
+)
+_TRACE2_TRAILER = re.compile(
+    rf"^{_TRACE2_EXIT_DATA}{_trace2_records('exit')}{_TRACE2_ATEXIT}\Z", re.MULTILINE
+)
 _TRACE2_CHILD_EXIT_TRAILER = re.compile(
     r'^(?:(?:\{"event":"child_exit","sid":[^\r\n]+\}'
     rf"|(?:{_TRACE_LOCATION})?child_exit\[\d+\] pid:-?\d+ code:-?\d+ elapsed:[\d.]+"
