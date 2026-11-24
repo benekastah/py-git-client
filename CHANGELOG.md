@@ -187,7 +187,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
-- Config writes recognize a busy lock even when the config path contains a newline.
+- Config writes recognize a busy lock on paths containing newlines, including with Git's
+  performance or Trace2 logging enabled. Retries depend on the reason after the path.
 
 - Cache keys preserve `..` after symlinks in repository paths, so a lookup through
   `link/..` cannot reuse the answer for its lexically normalized path.

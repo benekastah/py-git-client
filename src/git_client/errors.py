@@ -181,6 +181,20 @@ CORRUPT_OBJECT = re.compile(
 )
 # What git says as it exits for an object a partial clone lacks and couldn't fetch.
 MISSING_OBJECT = re.compile(r"^fatal: could not fetch \S+ from promisor remote$", re.MULTILINE)
+# A config path can span lines. Only the reason at the end of the diagnostic counts.
+_CONFIG_LOCK_BUSY = re.compile(
+    r"^error: could not lock config file (?s:.+): File exists(?:\r?\n)?\Z", re.MULTILINE
+)
+# TRACE2 event, normal and perf exit records, and GIT_TRACE_PERFORMANCE's command summary.
+# The latter can repeat the path on multiple lines, so leave the whole trailer out.
+_TRACE_LOCATION = r"\d\d:\d\d:\d\d\.\d+[ \t]+\S+:\d+[ \t]+"
+_GIT_EXIT_TRACE = re.compile(
+    r'^\{"event":"exit","sid":'
+    rf"|^(?:{_TRACE_LOCATION})?exit elapsed:[\d.]+ code:-?\d+\r?$"
+    rf"|^(?:{_TRACE_LOCATION}\| )?d\d+ \| main +\| exit +\|[^\n]*\| code:-?\d+\r?$"
+    rf"|^{_TRACE_LOCATION}performance: [\d.]+ s: git command: ",
+    re.MULTILINE,
+)
 _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
     (PushRejectedError, re.compile(r"^ ! \[(remote )?rejected\]", re.MULTILINE)),
     # Before RemoteError: what's missing is what the tool can act on (see MissingObjectError).
@@ -193,17 +207,6 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
             # Of a URL (`<scheme>://`): git says the same of a local file it can't read.
             "|unable to access '[a-zA-Z][a-zA-Z0-9+.-]*://"
             "|repository '.*' not found"
-        ),
-    ),
-    # Not for another reason the lock file can't be made (e.g. "No such file or directory").
-    (
-        ConfigLockedError,
-        re.compile(
-            r"^error: could not lock config file "
-            # A multiline path can itself contain an apparent end of the diagnostic.
-            r"(?:[^\n]+: File exists$|(?s:.+?): File exists(?=\n?\Z|\n"
-            r"\d\d:\d\d:\d\d\.\d+\s+[\w./-]+:\d+\s+performance:))",
-            re.MULTILINE,
         ),
     ),
     # Not UnknownRevisionError: what git says of the object, then of the name it can't read.
@@ -243,6 +246,10 @@ def error_for(stderr: str, stdout: str) -> type[GitError]:
     for error, says in _STDOUT_SAYS:
         if says.search(stdout):
             return error
+    if "error: could not lock config file " in stderr:
+        diagnostic = _GIT_EXIT_TRACE.split(stderr, maxsplit=1)[0]
+        if _CONFIG_LOCK_BUSY.search(diagnostic):
+            return ConfigLockedError
     for error, says in _STDERR_SAYS:
         if says.search(stderr):
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):

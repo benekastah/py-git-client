@@ -133,26 +133,48 @@ def test_a_locked_config_file(repo: Git) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
-@pytest.mark.parametrize("trace", ["0", "1"])
+@pytest.mark.parametrize(
+    "trace_env",
+    [
+        pytest.param({}, id="none"),
+        pytest.param({"GIT_TRACE_PERFORMANCE": "1"}, id="performance"),
+        pytest.param({"GIT_TRACE2": "1"}, id="trace2"),
+        pytest.param({"GIT_TRACE2_EVENT": "1"}, id="trace2-event"),
+        pytest.param({"GIT_TRACE2_PERF": "1"}, id="trace2-perf"),
+        pytest.param({"GIT_TRACE2": "1", "GIT_TRACE2_BRIEF": "1"}, id="trace2-brief"),
+        pytest.param(
+            {"GIT_TRACE2_PERF": "1", "GIT_TRACE2_PERF_BRIEF": "1"}, id="trace2-perf-brief"
+        ),
+    ],
+)
 def test_a_locked_config_file_with_a_newline_in_its_path(
-    repo: Git, tmp_path: Path, trace: str
+    repo: Git, tmp_path: Path, trace_env: dict[str, str]
 ) -> None:
     config_path = tmp_path / "a\nconfig"
     config_path.with_name(config_path.name + ".lock").write_bytes(b"")
 
     with pytest.raises(ConfigLockedError):
-        repo.run(
-            "config", "--file", str(config_path), "x.y", "z", env={"GIT_TRACE_PERFORMANCE": trace}
-        )
+        repo.run("config", "--file", str(config_path), "x.y", "z", env=trace_env)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows paths cannot contain newlines")
+@pytest.mark.parametrize("trace", ["0", "1"])
+@pytest.mark.parametrize(
+    "directory",
+    [
+        "missing: File exists\nsegment",
+        "missing\nsegment: File exists\nsegment",
+        "missing\nerror: could not lock config file other: File exists\nsegment",
+    ],
+)
 def test_a_config_path_that_contains_the_lock_error_is_not_a_busy_lock(
-    repo: Git, tmp_path: Path
+    repo: Git, tmp_path: Path, directory: str, trace: str
 ) -> None:
-    config_path = tmp_path / "missing\nsegment: File exists\nsegment" / "config"
+    config_path = tmp_path / directory / "config"
     with pytest.raises(GitError) as raised:
-        repo.run("config", "--file", str(config_path), "x.y", "z")
+        repo.run(
+            "config", "--file", str(config_path), "x.y", "z", env={"GIT_TRACE_PERFORMANCE": trace}
+        )
 
     assert type(raised.value) is GitError
 
