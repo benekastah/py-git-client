@@ -234,6 +234,8 @@ as Git displayed it and the source, target and status for each reported ref.
 Fast-forward and forced updates include full old and new object IDs when Git
 reports them. An unacknowledged ref has unknown status. Quiet mode can
 suppress reports, and dry-run reports describe projected changes.
+It runs `git -c core.abbrev=no push --porcelain` with your arguments, so a `FakeGit`
+test responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
 
 ### Caching
 

@@ -9,6 +9,12 @@ from git_client.client import CLIENT_TIMEOUT, Arg, EnvValue, Git, Timeout, decod
 
 
 class PushStatus(enum.StrEnum):
+    """A ref's outcome: Git's porcelain flag, except UNKNOWN.
+
+    Git prints UNKNOWN as `!` too, for a ref it didn't say was rejected (e.g. one the
+    remote failed to report).
+    """
+
     FAST_FORWARD = " "
     FORCED = "+"
     CREATED = "*"
@@ -20,6 +26,13 @@ class PushStatus(enum.StrEnum):
 
 @dataclass(frozen=True)
 class PushRef:
+    """One ref Git reported for a destination.
+
+    `source` is `""` for a deletion. `summary` is Git's, with any parenthesized reason
+    (e.g. `[rejected] (stale info)`). `old_oid` and `new_oid` are set only for
+    FAST_FORWARD and FORCED, when Git prints both; otherwise they're None.
+    """
+
     source: str
     target: str
     status: PushStatus
@@ -38,6 +51,11 @@ class PushDestination:
 
 @dataclass(frozen=True)
 class PushResult:
+    """What one push did: its exit status, captured output and completed reports.
+
+    `destinations` holds only the destinations whose report Git finished (with `Done`).
+    """
+
     returncode: int
     stdout: str
     stderr: str
@@ -102,6 +120,9 @@ def push(
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> PushResult:
     """Run one git push and return the completed destination reports even on failure.
+
+    It runs `git -c core.abbrev=no push --porcelain *args`, so a `FakeGit` test
+    responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
 
     A missing report leaves that destination's outcome unknown. A reported ref
     update or rejection is from Git's machine-readable output. Fast-forwards and
