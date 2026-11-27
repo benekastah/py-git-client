@@ -43,7 +43,9 @@ from git_client import (
     Git,
     ObjectType,
     RefUpdate,
+    color_enabled,
     config,
+    config_values,
     git_common_dir,
     git_dir,
     git_paths,
@@ -98,6 +100,13 @@ remotes = config(git)["remote.origin.url"]  # every value of each key
 # For a key a user typed, run `git config --get <key>` (one process).
 default_branch = config(git).get("init.defaultbranch")
 push_remote = config(git).get("branch.Topic.pushremote")
+# Values read by git as a type ("bool", "int", "bool-or-int", "bool-or-str", "path",
+# "expiry-date", "color"; none: as written), the last of each key's, or None if it isn't set:
+# {"commit.gpgsign": True, "merge.verifysignatures": None}. One git per call, so one per type;
+# keys as config() gives them. GitError for a value git can't read as the type.
+signing = config_values(git, "commit.gpgsign", "merge.verifysignatures", type="bool")
+# Whether to color output, as git decides for a setting, color.ui, and "auto" on a terminal.
+colored = color_enabled(git, "color.stack", stdout_is_tty=sys.stdout.isatty())
 for ref in refs(git, "refs/heads/").values():
     print(ref.name, ref.object, ref.upstream, ref.head)
 # Typed attributes, each read only if asked (None otherwise), in the same one process: how
@@ -310,11 +319,12 @@ takes precedence over cached data.
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git` and offers the library's fixed read operations:
 `resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
-one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
-`CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`,
-`ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
-write: the library doesn't try to tell from a command line whether git would write (that's
-git's to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends
+one: `refs`, `config`, `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`,
+`git_dir`, `git_common_dir` and `CatFile`. It has no public way to run a command of the
+caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which
+are `Git`'s. So it can't be asked to write: the library doesn't try to tell from a command
+line whether git would write (that's git's to decide, and it has no read-only mode to ask), it
+just doesn't take one. `Git` extends
 it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
 flags a call of `run` on one. A tool that reads with other commands (`log`, `status`,
 `diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a
