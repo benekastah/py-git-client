@@ -23,7 +23,7 @@ class Signature:
     """Who authored or committed a commit, and when, as the commit says: `date` is aware, in
     the commit's own time zone. Like any datetime's, its `==` compares instants, so the same
     moment in two zones is equal: `date.utcoffset()` tells them apart. It's None where the
-    commit records no date, or one a datetime can't hold (a zone that isn't `+HHMM` of a
+    commit records no date, or one a datetime can't hold (a zone that isn't `±HHMM` of a
     real offset, a year past 9999), which git takes, and fsck only warns of."""
 
     name: str

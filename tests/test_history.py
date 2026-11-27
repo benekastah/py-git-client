@@ -99,6 +99,7 @@ def test_commits_lists_a_range_newest_first_with_what_git_says_of_each(history: 
     "date",
     [
         "1700000000 +9999",
+        "1700000000 +2400",
         "1700000000 +0060",
         "1700000000 +123456",
         "",
