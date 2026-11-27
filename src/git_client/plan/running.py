@@ -10,7 +10,7 @@ from collections.abc import Hashable
 from concurrent.futures import ThreadPoolExecutor
 
 from git_client.client import Git
-from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Resource
+from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Resource, Skipped
 
 type Graph = dict[Node[object], tuple[Node[object], ...]]
 """Each node, with its inputs."""
@@ -62,8 +62,9 @@ class Plan:
         while pending:
             node = pending.popleft()
             if node in graph:
-                if canonical[node] is not node:
+                if canonical[node] is not node and id(node) not in copies:
                     copies[id(node)] = (node, canonical[node])
+                    pending += node.inputs()  # equal ones too, which a caller may hold
                 continue
             canonical[node] = node
             graph[node] = tuple(node.inputs())
@@ -71,10 +72,13 @@ class Plan:
         return graph, list(copies.values())
 
     def execute(self) -> None:
-        """Run every node not done yet. Raises graphlib.CycleError, running nothing, if
-        nodes read each other; ExecutionException once the nodes that could run did, if
-        one failed."""
+        """Run every node not done yet, so again those that failed or were skipped, after a
+        failure. Raises graphlib.CycleError, running nothing, if nodes read each other;
+        ExecutionException once the nodes that could run did, if one failed."""
         graph, copies = self._crawl()
+        for node in (*graph, *(copy for copy, _ in copies)):
+            if not node._done:
+                object.__setattr__(node, "_error", None)
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
         order = _Order(graph, self)
@@ -83,20 +87,25 @@ class Plan:
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
                 now, held = order.choose([*held, *sorter.get_ready()])
-                self._run_round(now, graph, groups_of, pool)
+                self._run_round(now, order, groups_of, pool)
                 for copy, original in copies:
                     if not copy._done:
                         copy._copy_outcome(original)
                 sorter.done(*now)
-        failures = {node: node._error for node in graph if node._error is not None}
+        failures = {
+            node: node._error
+            for node in graph
+            if node._error is not None and not isinstance(node._error, Skipped)
+        }
         if failures:
             first = next(iter(failures))
-            raise ExecutionException(first, groups_of[first], failures) from failures[first]
+            group = groups_of.get(first, [first])
+            raise ExecutionException(first, group, failures) from failures[first]
 
     def _run_round(
         self,
         ready: list[Node[object]],
-        graph: Graph,
+        order: _Order,
         groups_of: dict[Node[object], list[Node[object]]],
         pool: ThreadPoolExecutor,
     ) -> None:
@@ -104,14 +113,13 @@ class Plan:
         `groups_of`), each lane's groups in turn, the lanes at once."""
         groups: dict[Hashable, list[Node[object]]] = {}
         for node in ready:
-            blocked = any(not input._done for input in graph[node])
-            if not node._done and not blocked:
-                key = (type(node), node.batch_key(self))
+            if not node._done and node._error is None:
+                key = order.key[node]
                 groups_of[node] = groups.setdefault(key, [])
                 groups_of[node].append(node)
         lanes: dict[Hashable, list[list[Node[object]]]] = {}
         for group in groups.values():
-            lane = group[0].lane(self)
+            lane = order.lane[group[0]]
             lanes.setdefault(object() if lane is None else lane, []).append(group)
         *others, mine = [*lanes.values()] or [[]]
         futures = [pool.submit(self._run_lane, lane) for lane in others]
@@ -175,6 +183,9 @@ class _Order:
                 self.dependents[input].append(node)
         self.seen: set[Node[object]] = set()  # every node that's been ready
         self.resources: dict[Node[object], _Resources] = {}
+        self.key: dict[Node[object], Hashable] = {}
+        self.lane: dict[Node[object], Hashable | None] = {}
+        self.waits: dict[Node[object], bool] = {}
 
     def choose(self, ready: list[Node[object]]) -> tuple[list[Node[object]], list[Node[object]]]:
         """The ready nodes to run now, and those to hold back."""
@@ -183,18 +194,16 @@ class _Order:
         now: list[Node[object]] = []
         for node in ready:
             # One done, or that won't run (it reads a node that failed), goes at once.
-            runs = not node._done and all(input._done for input in self.graph[node])
-            (movable if runs else now).append(node)
-        for node in movable:
-            if node not in self.resources:
-                reads, writes = node.reads(self.plan), node.writes(self.plan)
-                if reads is None or writes is None:
-                    self.resources[node] = None
-                else:
-                    self.resources[node] = (frozenset(reads), frozenset(writes))
+            failed = next((input for input in self.graph[node] if not input._done), None)
+            if failed is not None:
+                node._skip(failed)
+            if node._done or node._error is not None or not self._ask(node):
+                now.append(node)
+            else:
+                movable.append(node)
         groups: dict[Hashable, list[Node[object]]] = {}
         for node in movable:
-            groups.setdefault((type(node), node.batch_key(self.plan)), []).append(node)
+            groups.setdefault(self.key[node], []).append(node)
         waiting = {
             node for group in groups.values() if self._worth_waiting(group) for node in group
         }
@@ -216,6 +225,27 @@ class _Order:
                 now.append(node)
         return now, held
 
+    def _ask(self, node: Node[object]) -> bool:
+        """Ask the node what the plan needs to know (once its inputs are done), or fail it
+        with what it raises: whether it can run."""
+        if node in self.key:
+            return True
+        try:
+            key = (type(node), node.batch_key(self.plan))
+            lane = node.lane(self.plan)
+            reads, writes = node.reads(self.plan), node.writes(self.plan)
+            self.waits[node] = node.waits(self.plan)
+        # Whatever it raises is its failure.
+        except Exception as error:  # noqa: BLE001
+            node._fail(error)
+            return False
+        self.key[node], self.lane[node] = key, lane
+        if reads is None or writes is None:
+            self.resources[node] = None
+        else:
+            self.resources[node] = (frozenset(reads), frozenset(writes))
+        return True
+
     def _level(self, node: Node[object]) -> int:
         return self.level[node]
 
@@ -233,7 +263,7 @@ class _Order:
     def _worth_waiting(self, group: list[Node[object]]) -> bool:
         """Whether a node of the group's class that's not been ready yet, and depends on
         none of it, might join it."""
-        if any(self.resources[node] is None or not node.waits(self.plan) for node in group):
+        if any(self.resources[node] is None or not self.waits[node] for node in group):
             return False
         after = self._descendants(group)
         return any(

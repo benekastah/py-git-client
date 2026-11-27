@@ -3,6 +3,7 @@
 import graphlib
 import threading
 from collections.abc import Callable, Hashable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, assert_type, override
 
@@ -31,6 +32,7 @@ from git_client.plan import (
     NotExecuted,
     Plan,
     Push,
+    Skipped,
     Value,
     lift,
 )
@@ -142,9 +144,140 @@ def test_a_failure_names_its_node_and_stops_its_dependents(repo: Git) -> None:
     assert isinstance(raised.value.__cause__, ZeroDivisionError)
     with pytest.raises(NotExecuted, match="failed"):
         failing.get()
-    with pytest.raises(NotExecuted, match="hasn't run"):
+    with pytest.raises(Skipped) as skipped:
         dependent.get()
+    assert skipped.value.failed is failing
+    assert isinstance(skipped.value.__cause__, ZeroDivisionError)
     assert independent.get() == "2"
+
+
+def test_a_node_skipped_further_down_names_the_node_that_failed(repo: Git) -> None:
+    def fail() -> int:
+        raise ZeroDivisionError
+
+    failing = Map(fail)
+    further = Map(str, Map(str, failing))
+    plan = Plan(repo)
+    plan.add(further)
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert set(raised.value.failures) == {failing}
+    with pytest.raises(Skipped, match="failed") as skipped:
+        further.get()
+    assert skipped.value.failed is failing
+
+
+def test_a_plan_runs_again_what_failed(repo: Git) -> None:
+    runs: list[int] = []
+
+    def fail_once() -> int:
+        runs.append(len(runs))
+        if len(runs) == 1:
+            raise ZeroDivisionError
+        return len(runs)
+
+    flaky = Map(fail_once)
+    dependent = Map(str, flaky)
+    plan = Plan(repo)
+    plan.add(dependent)
+    with pytest.raises(ExecutionException):
+        plan.execute()
+
+    plan.execute()
+
+    assert (flaky.get(), dependent.get()) == (2, "2")
+
+
+@dataclass(frozen=True)
+class Echo(Node[str]):
+    """Gives its input's value, or "" for None: a frozen node, so equal ones are one."""
+
+    source: Node[str | None]
+
+    @override
+    def inputs(self) -> Iterable[Node[object]]:
+        return (self.source,)
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            node._set(node.source.get() or "")
+
+
+def test_each_of_equal_nodes_gets_the_result(repo: Git) -> None:
+    repo.run("config", "example.name", "example.value")
+    repo.run("config", "example.value", "found")
+    plan = Plan(repo)
+    first = plan.add(ConfigValue(Echo(ConfigValue("example.name"))))
+    inner = Echo(ConfigValue("example.name"))  # equal to first's key, but another object
+    again = plan.add(ConfigValue(inner))
+
+    plan.execute()
+
+    assert (first.get(), again.get(), inner.get()) == ("found", "found", "example.value")
+
+
+class Broken(Map[int]):
+    """A Map whose `hook` raises when the plan asks it."""
+
+    def __init__(self, hook: str) -> None:
+        super().__init__(int)
+        self.hook = hook
+
+    def _ask(self, name: str) -> None:
+        if name == self.hook:
+            raise ZeroDivisionError(name)
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        self._ask("batch_key")
+        return super().batch_key(plan)
+
+    @override
+    def lane(self, plan: Plan) -> Hashable | None:
+        self._ask("lane")
+        return super().lane(plan)
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        self._ask("reads")
+        return super().reads(plan)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        self._ask("writes")
+        return super().writes(plan)
+
+    @override
+    def waits(self, plan: Plan) -> bool:
+        self._ask("waits")
+        return super().waits(plan)
+
+
+@pytest.mark.parametrize("hook", ["batch_key", "lane", "reads", "writes", "waits"])
+def test_a_node_whose_question_fails_fails_itself(repo: Git, hook: str) -> None:
+    broken = Broken(hook)
+    plan = Plan(repo)
+    plan.add(broken)
+    fine = plan.add(Map(str, Value(1)))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert raised.value.node is broken
+    assert isinstance(raised.value.__cause__, ZeroDivisionError)
+    assert fine.get() == "1"
 
 
 def test_config_values_are_read_by_one_process(repo: Git, git_calls: list[GitCall]) -> None:
@@ -243,7 +376,7 @@ def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
     assert isinstance(raised.value.__cause__, PushRejectedError)
     assert [ref.status for ref in forced.get()] == [PushStatus.FORCED]
     assert [ref.status for ref in created.get()] == [PushStatus.CREATED]
-    with pytest.raises(NotExecuted, match="hasn't run"):
+    with pytest.raises(Skipped):
         dependent.get()
     assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD~1")
     assert remote_tip(remotes, "origin", "b") == remotes.run("rev-parse", "HEAD")

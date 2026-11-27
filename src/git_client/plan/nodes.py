@@ -17,15 +17,25 @@ class PlanError(Exception):
 
 
 class NotExecuted(PlanError):
-    """`get()` on a node that has no result: it hasn't run, it failed, or it depends on a
-    node that failed (its `__cause__` says why, if it failed)."""
+    """`get()` on a node that has no result: it hasn't run, or it failed (chained from its
+    error), or it wasn't run because a node it reads failed (Skipped)."""
+
+
+class Skipped(NotExecuted):
+    """`get()` on a node that didn't run because `failed`, a node it reads (directly or
+    not), failed; chained from that node's error."""
+
+    def __init__(self, node: Node[object], failed: Node[object]) -> None:
+        super().__init__(f"{node!r} wasn't run: {failed!r} failed")
+        self.failed = failed
 
 
 class ExecutionException(PlanError):
     """A node failed: `node` is the first that did (in the order the plan crawled them), and
     `group` the nodes it ran with; the exception is chained from its error. `failures` has
     every node that failed and its error. The results of the nodes that ran stay readable;
-    the nodes that depend on a failed one didn't run."""
+    the nodes that depend on a failed one didn't run (their `get()` raises Skipped). A
+    node's `batch_key`, `lane`, `reads`, `writes` or `waits` that raises fails that node."""
 
     def __init__(
         self,
@@ -99,6 +109,8 @@ class Node[T]:
 
     def get(self) -> T:
         """The result. Raises NotExecuted if there's none (see NotExecuted)."""
+        if isinstance(self._error, Skipped):
+            raise Skipped(self, self._error.failed) from self._error.__cause__
         if self._error is not None:
             raise NotExecuted(f"{self!r} failed") from self._error
         if not self._done:
@@ -110,9 +122,18 @@ class Node[T]:
         # object's own, as a frozen dataclass refuses its fields' setattr.
         object.__setattr__(self, "_result", result)
         object.__setattr__(self, "_done", True)
+        object.__setattr__(self, "_error", None)
 
     def _fail(self, error: Exception) -> None:
         object.__setattr__(self, "_error", error)
+
+    def _skip(self, input: Node[object]) -> None:
+        """Mark the node as not run because `input` failed or was skipped."""
+        error = input._error
+        failed = error.failed if isinstance(error, Skipped) else input
+        skipped = Skipped(self, failed)
+        skipped.__cause__ = failed._error
+        self._fail(skipped)
 
     def _copy_outcome(self, other: Node[object]) -> None:
         for name in ("_done", "_error", "_result"):
