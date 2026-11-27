@@ -123,6 +123,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
+  worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
+  doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,
+  `Renamed`, `Unmerged`, `Untracked`, `Ignored`, with a `SubmoduleState`), and with
+  `branch`, HEAD's commit, branch, upstream and ahead/behind counts. `worktrees(git)` lists
+  the repository's worktrees from one `git worktree list --porcelain -z` (`Worktree`: path,
+  HEAD, branch, bare, detached, and the reasons it's locked or prunable). A tool replaces its
+  `git status --porcelain` runs and parsers (emptiness becomes `not status(...).entries`),
+  and its `git worktree list --porcelain` runs and parsers.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,
