@@ -98,8 +98,19 @@ remotes = config(git)["remote.origin.url"]  # every value of each key
 # For a key a user typed, run `git config --get <key>` (one process).
 default_branch = config(git).get("init.defaultbranch")
 push_remote = config(git).get("branch.Topic.pushremote")
-for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
-    print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
+for ref in refs(git, "refs/heads/", fields=["subject"]).values():
+    print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["subject"])
+# Typed attributes, each read only if asked (None otherwise), in the same one process: how
+# each branch stands against its upstream and what it pushes to, as git says it (a Track:
+# ahead, behind, or gone; None with none), the upstream's remote ("." for a local branch) and
+# name there, git's push destination and its remote, the committer date, and commits ahead of
+# and behind a base (git 2.41's %(ahead-behind:...); before, one more process per ref).
+both = refs(git, "refs/heads/", track=True, push_track=True, remotes=True, dates=True)
+counted = refs(git, "refs/heads/", ahead_behind="refs/heads/main")
+print(both["refs/heads/main"].track, counted["refs/heads/a"].ahead_behind)  # Track(), (0, 0)
+# for-each-ref's filters (contains, no_contains, merged, no_merged, points_at) and order:
+# the branches main has, newest first, then by name; the first 10.
+done = refs(git, "refs/heads/", merged="main", sort=["-committerdate", "refname"], count=10)
 
 # For a branch's short name, ask for the field "refname:lstrip=2", never "refname:short",
 # which comes back as "heads/v1" when a tag is named v1 too; and give git full ref names.

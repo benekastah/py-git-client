@@ -117,6 +117,23 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
+  `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
+  in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`, a
+  `Track(ahead, behind, gone)` as git says it (`%(upstream:track)`); `push_track=True`,
+  `push_track` (`%(push:track)`) and `push`; `remotes=True`, `upstream_remote`,
+  `upstream_remote_ref`, `push` and `push_remote`; `dates=True`, `committer_date`, a
+  `datetime`; and `ahead_behind="<base>"`, `ahead_behind`, `(ahead, behind)`, from git 2.41's
+  `%(ahead-behind:<base>)` (before 2.41, one `git rev-list --left-right --count` per ref).
+  Calls without them run the same `git for-each-ref` as before. This replaces raw
+  `for-each-ref` runs in tools: move-forward's branch listing and its `_TRACK_RE`
+  (`plugins/git/client.py:200`, which `track=True, remotes=True, dates=True` cover);
+  git-stack's `local_branches` (`git.py:901`), per-branch `%(upstream:track)` (`git.py:1003`,
+  `track=True` for all branches at once), `chain_to_restack`'s `--contains --merged`
+  (`core.py:809`), `find_parent`'s `--merged --no-merged` (`stack.py:3992`), and its
+  `rev-parse --abbrev-ref <b>@{upstream}` (`core.py:1153`, `1275`: `upstream`, which `refs()`
+  always reads). A raw `fields=["upstream:track"]` still works.
+
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial
