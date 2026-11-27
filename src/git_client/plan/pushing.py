@@ -10,12 +10,10 @@ from git_client.errors import GitError, PushRejectedError, error_for
 from git_client.plan.nodes import Effect, Node, lift
 from git_client.plan.resources import (
     CONFIG,
-    Access,
     LocalRef,
     RemoteRef,
     Resource,
     TrackingRef,
-    overlap,
 )
 from git_client.pushing import PushRef, PushResult, PushStatus, PushUpdate, push
 
@@ -37,10 +35,12 @@ class Push(Effect[tuple[PushRef, ...]]):
     `force` says so, or only if the remote's branch is at `lease` (see PushUpdate). Its
     result is what git reported for the branch: a PushRef for each of the remote's push URLs.
 
-    The round's pushes to one remote with the same `atomic` (None: the plan's
-    `atomic_pushes`) are one `push` with an update each: atomic, all or nothing; else each
-    branch succeeds or fails alone. Pushes run one at a time, as their remote-tracking refs
-    may be the same (see TrackingRef). A branch fails if git rejected it (PushRejectedError),
+    The pushes to one remote that run at once, with the same `atomic` (None: the plan's
+    `atomic_pushes`), are one `push` with an update each: atomic, all or nothing (which
+    pushes run at once is the plan's choice, so an atomic push is outside its sequential
+    semantics); else each branch succeeds or fails alone. Pushes don't conflict with each
+    other (see TrackingRef), but for two of one ref of one remote, which git can't make in
+    one push, so they run in turn. A branch fails if git rejected it (PushRejectedError),
     if a destination's report of it isn't done, or if git didn't report it, or failed with
     nothing rejected (as git's message says).
     """
@@ -77,27 +77,8 @@ class Push(Effect[tuple[PushRef, ...]]):
 
     @override
     def writes(self, plan: Plan) -> Iterable[Resource]:
-        return RemoteRef(self._ref()), TrackingRef(self.remote.get(), self._ref())
-
-    @override
-    @classmethod
-    def keeps_order(cls, earlier: Access, later: Access) -> bool:
-        # Git reads what a push reads before it updates anything, and updates remote-tracking
-        # refs in the order of its refspecs (a group's order); two updates of one remote ref
-        # in one push fail.
-        if overlap(earlier.writes, later.reads):
-            return False
-        return all(
-            isinstance(first, TrackingRef) and isinstance(then, TrackingRef)
-            for first in earlier.writes
-            for then in later.writes
-            if overlap((first,), (then,))
-        )
-
-    @override
-    def waits(self, plan: Plan) -> bool:
-        # An atomic push of more branches can fail where one of fewer wouldn't.
-        return not self._atomic(plan)
+        remote = self.remote.get()
+        return RemoteRef(remote, self._ref()), TrackingRef(remote, self._ref())
 
     def _atomic(self, plan: Plan) -> bool:
         return plan.atomic_pushes if self.atomic is None else self.atomic

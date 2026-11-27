@@ -7,7 +7,7 @@ from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self, cast, override
 
-from git_client.plan.resources import Access, Resource
+from git_client.plan.resources import Resource
 
 if TYPE_CHECKING:
     from git_client.plan.running import Plan
@@ -36,7 +36,7 @@ class ExecutionException(PlanError):
     `group` the nodes it ran with; the exception is chained from its error. `failures` has
     every node that failed and its error. The results of the nodes that ran stay readable;
     the nodes that depend on a failed one didn't run (their `get()` raises Skipped). A
-    node's `batch_key`, `lane`, `reads`, `writes` or `waits` that raises fails that node."""
+    node's `batch_key`, `reads` or `writes` that raises fails that node."""
 
     def __init__(
         self,
@@ -53,11 +53,10 @@ class ExecutionException(PlanError):
 class Node[T]:
     """One value or operation of a plan, giving a `T` once it has run.
 
-    A subclass says what it reads (`inputs`), which nodes may run together (`batch_key`, and
-    the class: nodes of different classes never share a group), which groups mustn't run at
-    once (`lane`), and how a group runs (`execute_group`). Nodes compare by identity, but for
-    frozen dataclasses (reads), which compare by value: the plan runs equal ones once, and
-    gives each the result.
+    A subclass says which nodes it reads (`inputs`), which resources it reads and writes
+    (`reads`, `writes`), which nodes may run together (`batch_key`, and the class: nodes of
+    different classes never share a group), and how a group runs (`execute_group`). Nodes
+    compare by identity, frozen ones too.
     """
 
     _done: bool = False
@@ -74,16 +73,10 @@ class Node[T]:
         del plan
         return id(self)
 
-    def lane(self, plan: Plan) -> Hashable | None:
-        """Groups with the same lane (not None) run one after another; the others run in
-        parallel. Asked once the inputs are done."""
-        del plan
-        return None
-
     def reads(self, plan: Plan) -> Iterable[Resource] | None:
         """What the node reads (e.g. CONFIG), asked once its inputs are done, so the plan
-        knows which nodes it may run it before or after (see Plan). None, the default:
-        undeclared, as if it read and wrote everything, so it's never moved."""
+        knows which nodes it may run it before (see Plan). None, the default: undeclared,
+        as if it read and wrote everything, so nothing moves past it."""
         del plan
         return None
 
@@ -91,24 +84,6 @@ class Node[T]:
         """What the node writes, as `reads`."""
         del plan
         return None
-
-    def waits(self, plan: Plan) -> bool:
-        """Whether the node may wait for a node of its class that isn't ready yet, to share
-        its group (see Plan): False, the default. A class says True only if a node that's
-        not ready yet can join a group (e.g. not the default `batch_key`'s one per node),
-        and a group gives what its members one by one would (not an atomic push). Asked
-        once its inputs are done."""
-        del plan
-        return False
-
-    @classmethod
-    def keeps_order(cls, earlier: Access, later: Access) -> bool:
-        """Whether a group that has a node with `earlier` access, of a lower level, and one
-        with `later` access, which conflict (see Plan), gives what running them in that
-        order would: the plan gives a group its members in level order. False, the
-        default: such nodes run in groups of their own."""
-        del earlier, later
-        return False
 
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
@@ -147,15 +122,10 @@ class Node[T]:
         skipped.__cause__ = failed._error
         self._fail(skipped)
 
-    def _copy_outcome(self, other: Node[object]) -> None:
-        for name in ("_done", "_error", "_result"):
-            object.__setattr__(self, name, getattr(other, name))
 
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Value[T](Node[T]):
-    """A value known already: done from the start. Equal values are equal nodes, so `value`
-    must be hashable."""
+    """A value known already: done from the start."""
 
     value: T
 

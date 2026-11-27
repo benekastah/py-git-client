@@ -8,22 +8,23 @@ git's own batch forms allow, the independent ones in parallel. A prototype: not 
     plan.execute()
 
 Each node's fields are nodes too (`lift` wraps a plain value in a `Value`), and a node reads
-them only through `get()` once they've run. The plan crawls the graph from the ops it was
-given (`Node.inputs`), and runs it in rounds: the nodes whose inputs are done, grouped by
-class and `batch_key`, each group run once by its class's `execute_group` (one git process,
-where git has a batch form), the groups on different lanes in parallel. Nodes are never
-replaced: a group writes each member's result back onto the member.
+them only through `get()` once they've run. A group of nodes (of one class and
+`batch_key`) runs once, by its class's `execute_group` (one git process, where git has a
+batch form), which writes each member's result back onto the member.
 
-Only data and `after=` order nodes: ops with no edge between them are independent, whatever
-order they were added in. Each node declares the resources it reads and writes
-(`Node.reads`, `Node.writes`: typed Resources such as CONFIG, a RemoteRef or a TrackingRef);
-one that declares nothing may conflict with everything. To run fewer processes, a group of a
-class that allows it (`Node.waits`: a non-atomic Push) may wait for a node of its class that
-isn't ready yet (a push whose `force` is still to be read from config, say), so that they
-share a process. The schedule (see Schedule) keeps the result what running the graph in
-order gives: no node runs before a node of a lower level that may conflict with it, which
-a node not ready yet (its resources unknown) always may; and nodes that may conflict never
-run at once.
+The semantics are sequential: a plan gives what running its nodes one at a time in program
+order gives (`Plan.order`: the ops in add() order, each after the nodes it reads, `after=`
+ones too). To run fewer processes, the plan only runs nodes earlier than that, where it
+can't change a result (see Plan), given what each node declares it reads and writes (typed
+Resources: CONFIG, a LocalRef, a RemoteRef, a TrackingRef; a node that declares nothing
+conflicts with everything):
+
+- a read runs as early as its inputs allow, but never before an earlier write of what it
+  reads (a config read waits for an earlier config write);
+- pushes don't conflict with each other, so their order doesn't matter (see TrackingRef),
+  but for two of one ref of one remote, which run in add() order;
+- so a remote's pushes, once the reads they need have run, are one `git push`, and pushes to
+  different remotes run at once.
 """
 
 from git_client.plan.config import ConfigValue, TypedConfig
@@ -48,7 +49,7 @@ from git_client.plan.resources import (
     Resource,
     TrackingRef,
 )
-from git_client.plan.running import Graph, Plan
+from git_client.plan.running import Plan
 
 __all__ = [
     "CONFIG",
@@ -57,7 +58,6 @@ __all__ = [
     "ConfigValue",
     "Effect",
     "ExecutionException",
-    "Graph",
     "LocalRef",
     "Map",
     "Node",

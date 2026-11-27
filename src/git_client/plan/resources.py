@@ -1,5 +1,5 @@
-"""What a plan's nodes declare they read and write, so the plan knows which it may reorder
-(see Plan): typed, so that two names for one thing can't miss each other."""
+"""What a plan's nodes declare they read and write, so the plan knows which it may run
+earlier (see Plan): typed, so that two names for one thing can't miss each other."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -8,8 +8,8 @@ from typing import override
 
 @dataclass(frozen=True)
 class Resource:
-    """Something a node reads or writes. Two resources conflict if either `overlaps` the
-    other: by default, if they're equal."""
+    """Something a node reads or writes. Two resources are the same if either `overlaps`
+    the other: by default, if they're equal."""
 
     def overlaps(self, other: Resource) -> bool:
         """Whether `other` may be this resource, or share some of it."""
@@ -34,30 +34,30 @@ class LocalRef(Resource):
 
 @dataclass(frozen=True)
 class RemoteRef(Resource):
-    """A ref at a remote, by its full name there: at whichever remote, since a remote's name
-    and its URL, or two names, may be one repository, which only git could say."""
+    """A ref at a remote (as a push names it: a name or a URL), by its full name there.
+    Two names for one repository are taken for two."""
 
+    remote: str
     ref: str
 
 
 @dataclass(frozen=True)
 class TrackingRef(Resource):
-    """The remote-tracking ref git updates as it pushes `ref` to `remote`. Git finds it with
-    the remote's fetch refspecs, which may map refs of any remote, or several refs of one
-    remote, onto one remote-tracking ref (`git fetch` refuses the latter; `git push` updates
-    it for each, in turn). So it overlaps every TrackingRef, and every LocalRef but branches
-    and tags: a plan assumes no fetch refspec maps a remote's ref onto a branch or tag other
-    than one of the same name (a mirror's maps each onto itself), which a push leaves where
-    it already was."""
+    """The remote-tracking ref git updates as it pushes `ref` to `remote`, which the remote's
+    fetch refspecs say. It may be any local ref but a branch or tag: a plan assumes no
+    fetch refspec maps a ref onto a branch or tag but one of the same name (a mirror's maps
+    each onto itself), which a push leaves where it was. Pushes are taken not to conflict
+    through it: two whose refspecs map onto one remote-tracking ref may leave either's
+    value there."""
 
     remote: str
     ref: str
 
     @override
     def overlaps(self, other: Resource) -> bool:
-        if isinstance(other, LocalRef):
-            return not other.ref.startswith(("refs/heads/", "refs/tags/"))
-        return isinstance(other, TrackingRef)
+        return isinstance(other, LocalRef) and not other.ref.startswith(
+            ("refs/heads/", "refs/tags/")
+        )
 
 
 def overlap(these: Iterable[Resource], those: Iterable[Resource]) -> bool:

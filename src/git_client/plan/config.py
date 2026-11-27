@@ -17,12 +17,12 @@ if TYPE_CHECKING:
     from git_client.plan.running import Plan
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True, eq=False, init=False)
 class ConfigValue(Node[str | None]):
     """A config key's value as git reads it (the last one, for a key with several), or None
     if it's not set. `key` is in the form git prints (`config()`'s): section and name in
-    lower case. A key with no value (`[core] bare`) gives "". Every ConfigValue of a round
-    is read by one `git config --list -z`, however many keys."""
+    lower case. A key with no value (`[core] bare`) gives "". The ConfigValues that run at
+    once are read by one `git config --list -z`, however many keys."""
 
     key: Node[str]
 
@@ -79,14 +79,14 @@ _PARSERS: dict[str, Callable[[str], object]] = {"bool": lambda text: text == "tr
 _ERE_SPECIAL = re.compile(r"[.\[\\()*+?{|^$]")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TypedConfig[T](Node[T]):
     """A config key's value as git reads a `git_type` ("bool" or "int": `git config --type`),
-    or `default` if it's not set: made by `ConfigValue.as_bool` and `as_int`. Each round's
-    TypedConfigs of one type are read by one `git config --type=<type> --get-regexp`, whose
-    pattern matches their keys alone (in the form git prints, as ConfigValue's): git, not
-    Python, reads the config syntax. A value of a key's that isn't one (a bool "maybe")
-    fails the whole group."""
+    or `default` if it's not set: made by `ConfigValue.as_bool` and `as_int`. The
+    TypedConfigs of one type that run at once are read by one `git config --type=<type>
+    --get-regexp`, whose pattern matches their keys alone (in the form git prints, as
+    ConfigValue's): git, not Python, reads the config syntax. A value of a key's that isn't
+    one (a bool "maybe") fails the whole group."""
 
     key: Node[str]
     git_type: str
