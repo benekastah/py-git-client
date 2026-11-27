@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Self, cast, override
 
 from git_client.batch import CONFIG_LIST, config_entries
 from git_client.client import Started, decode, error_from, stdout_of
-from git_client.plan.nodes import Map, Node, lift
+from git_client.config_file import ConfigChange, ConfigResult
+from git_client.plan.nodes import Effect, Map, Node, lift
 from git_client.plan.resources import CONFIG, Resource
 
 if TYPE_CHECKING:
@@ -129,3 +130,32 @@ class TypedConfig[T](Node[T]):
         for node in nodes:
             key = node.key.get()
             node._set(cast(T, _PARSERS[git_type](typed[key])) if key in typed else node.default)
+
+
+class WriteConfig(Effect[ConfigResult]):
+    """Make `change` (a ConfigSet or ConfigUnset) to the repository's config, as
+    `Git.write_configs` does (one `git config`), giving what it did."""
+
+    def __init__(self, change: ConfigChange, *, after: Iterable[Node[object]] = ()) -> None:
+        self.change = change
+        self.after = list(after)
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return (CONFIG,)
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node, result in zip(
+            nodes, plan.git.write_configs(*(node.change for node in nodes)), strict=True
+        ):
+            node._set(result)
+
+    @override
+    def __repr__(self) -> str:
+        return f"WriteConfig({self.change!r})"

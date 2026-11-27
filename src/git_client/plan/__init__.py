@@ -24,10 +24,12 @@ conflicts with everything):
 - pushes don't conflict with each other, so their order doesn't matter (see TrackingRef),
   but for two of one ref of one remote, which run in add() order;
 - so a remote's pushes, once the reads they need have run, are one `git push`, and pushes to
-  different remotes run at once.
+  different remotes run at once;
+- a plain read of a key a WriteConfig set earlier in the plan starts no process: it's the
+  value set (not a typed read, whose conversion is git's, nor one after an unset).
 """
 
-from git_client.plan.config import ConfigValue, TypedConfig
+from git_client.plan.config import ConfigValue, TypedConfig, WriteConfig
 from git_client.plan.nodes import (
     Effect,
     ExecutionException,
@@ -71,5 +73,6 @@ __all__ = [
     "TrackingRef",
     "TypedConfig",
     "Value",
+    "WriteConfig",
     "lift",
 ]

@@ -8,8 +8,10 @@ import itertools
 from collections.abc import Generator, Hashable
 
 from git_client.client import Git
-from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped
-from git_client.plan.resources import Access
+from git_client.config_file import ConfigSet
+from git_client.plan.config import ConfigValue, WriteConfig
+from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped, Value
+from git_client.plan.resources import CONFIG, Access, overlap
 
 
 class Plan:
@@ -23,7 +25,8 @@ class Plan:
     whose resources aren't known (it declares none, or its inputs haven't run) may conflict
     with anything. Each round runs every node that may run, but for those that write, while
     a read may run: so reads run as early as they can, and then the writes that are left
-    wait for nothing but each other, and share groups. A round's nodes don't conflict, so
+    wait for nothing but each other, and share groups. A ConfigValue of a key an earlier
+    WriteConfig set needs no process: its value is the one set (see `_written`). A round's nodes don't conflict, so
     its groups run at once: the plan starts every group's git process, then waits for each
     in turn, in the calling thread (work in-process just runs). Without `reorder`, nodes
     run one at a time, in program order.
@@ -47,6 +50,8 @@ class Plan:
         self.ops: list[Node[object]] = []
         self._access: dict[Node[object], Access | None] = {}
         self._key: dict[Node[object], Hashable] = {}
+        self._order: list[Node[object]] = []
+        self._position: dict[Node[object], int] = {}
 
     def add[N: Node[object]](self, op: N) -> N:
         """Add `op` (and so what it reads) to the plan, after what's there, and give it
@@ -94,6 +99,8 @@ class Plan:
         failure. Raises graphlib.CycleError, running nothing, if nodes read each other;
         ExecutionException once the nodes that could run did, if one failed."""
         order = self.order()
+        self._position = {node: index for index, node in enumerate(order)}
+        self._order = order
         left = [node for node in order if not node._done]
         for node in left:
             object.__setattr__(node, "_error", None)
@@ -133,6 +140,9 @@ class Plan:
                 if not self._ask(node):
                     continue
                 if not any(self._conflict(earlier, node) for earlier in before):
+                    if self.reorder and (written := self._written(node)) is not None:
+                        node._set(written[0])  # known: no process
+                        continue
                     may_run.append(node)
             before.append(node)
         if not self.reorder:
@@ -160,6 +170,31 @@ class Plan:
             None if reads is None or writes is None else Access(frozenset(reads), frozenset(writes))
         )
         return True
+
+    def _written(self, node: Node[object]) -> tuple[str] | None:
+        """For a ConfigValue, the value an earlier WriteConfig of this run set its key to (by
+        the same name), if nothing between could have changed it (a write of another key
+        can't), or None. It takes that nothing of higher precedence than the repository's
+        config (worktree config, `-c`, GIT_CONFIG_* variables) sets the key: git would read
+        that instead."""
+        if not isinstance(node, ConfigValue):
+            return None
+        key = node.key.get()
+        for earlier in reversed(self._order[: self._position[node]]):
+            if isinstance(earlier, WriteConfig):
+                written = earlier.change.key
+                if written.lower() != key.lower():
+                    continue  # another key, whichever case git gives its parts
+                if written == key and isinstance(earlier.change, ConfigSet) and earlier._done:
+                    return (earlier.change.value,)
+                return None  # unset, failed, or maybe the key under another name
+            access = self._access.get(earlier)
+            harmless = isinstance(earlier, Value) or (
+                access is not None and not overlap(access.writes, (CONFIG,))
+            )
+            if not harmless:
+                return None
+        return None
 
     def _conflict(self, earlier: Node[object], node: Node[object]) -> bool:
         a, b = self._access.get(earlier), self._access[node]

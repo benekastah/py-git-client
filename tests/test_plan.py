@@ -13,6 +13,8 @@ import pytest
 
 from git_client import (
     Arg,
+    ConfigSet,
+    ConfigUnset,
     EnvValue,
     Git,
     GitError,
@@ -42,6 +44,7 @@ from git_client.plan import (
     Skipped,
     TrackingRef,
     Value,
+    WriteConfig,
     lift,
 )
 from git_client.plan.pushing import push_failure
@@ -906,3 +909,60 @@ def test_an_interrupt_stops_every_started_process(
 
     assert len(git.started) == 2
     assert all(process.poll() is not None for process in git.started)
+
+
+@pytest.mark.parametrize("reorder", [True, False])
+def test_a_read_of_a_key_just_set_is_what_was_set(
+    repo: Git, git_calls: list[GitCall], reorder: bool
+) -> None:
+    git_calls.clear()
+    plan = Plan(repo, reorder=reorder)
+    plan.add(WriteConfig(ConfigSet("example.k", "new")))
+    plan.add(WriteConfig(ConfigSet("example.other", "x")))
+    read = plan.add(ConfigValue("example.k"))
+
+    plan.execute()
+
+    assert read.get() == "new"
+    reads = [call for call in git_calls if call == ["config", "--list", "-z"]]
+    assert len(reads) == (0 if reorder else 1)  # program order reads it; reordering knows it
+
+
+def test_a_typed_read_of_a_key_just_set_asks_git(repo: Git, git_calls: list[GitCall]) -> None:
+    git_calls.clear()
+    plan = Plan(repo)
+    plan.add(WriteConfig(ConfigSet("example.flag", "on")))
+    flag = plan.add(ConfigValue("example.flag").as_bool())
+
+    plan.execute()
+
+    assert flag.get() is True
+    assert [call[2] for call in git_calls if call[:2] == ["config", "-z"]] == ["--type=bool"]
+
+
+def test_a_read_of_a_key_just_unset_asks_git(repo: Git, git_calls: list[GitCall]) -> None:
+    repo.run("config", "--global", "example.k", "global")
+    git_calls.clear()
+    plan = Plan(repo)
+    plan.add(WriteConfig(ConfigSet("example.k", "new")))
+    plan.add(WriteConfig(ConfigUnset("example.k")))
+    read = plan.add(ConfigValue("example.k"))
+
+    plan.execute()
+
+    assert read.get() == "global"
+    assert ["config", "--list", "-z"] in git_calls
+
+
+def test_a_read_of_a_key_whose_set_failed_asks_git(repo: Git) -> None:
+    repo.run("config", "example.k", "one")
+    repo.run("config", "--add", "example.k", "two")  # git refuses to set a key with two
+    plan = Plan(repo)
+    write = plan.add(WriteConfig(ConfigSet("example.k", "new")))
+    read = plan.add(ConfigValue("example.k"))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert raised.value.node is write
+    assert read.get() == "two"

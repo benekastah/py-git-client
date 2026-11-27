@@ -9,7 +9,9 @@ the shape of the code or a rule here changes.
 - `src/git_client/client.py`: `ReadOnlyGit`, which offers only the library's reads (commands
   it fixes), `Git`, which extends it with the commands of the caller's (`run`, `process`,
   ...), and `find_git`; `start_process` and `start_popen`, where every git process starts,
-  and `read_process`, `read_popen` and `read_output`, which the reads run through; and
+  and `read_process`, `read_popen` and `read_output`, which the reads run through;
+  `Started`, a process started now (through `popen`) and collected later, so a caller runs
+  several at once in one thread; and
   `GitCache`, the opt-in repository metadata store shared across clients. When a cache is
   attached, `rev-parse` can gather uncached metadata alongside the requested values
   (`where_questions`, `read_where`, `ask_where`).
