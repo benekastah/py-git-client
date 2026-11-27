@@ -61,7 +61,8 @@ class Revisions:
       <exclude>...<include>`, which takes one of each (ValueError otherwise).
     - `since`: only commits committed at or after it (`--max-age`, which `--since` gives
       git: by the committer's date, not the author's). An aware datetime: a naive one raises
-      ValueError, rather than be taken for local time.
+      ValueError, rather than be taken for local time. One before 1970 keeps every commit,
+      as git's dates start then.
     - `author`: only commits whose author, as `Name <email>`, contains this text (a fixed
       string, not a pattern: `--fixed-strings --author`), as the commit records it: the
       mailmap, which `git log --author` reads by default, maps no one.
@@ -204,9 +205,10 @@ def _rev_list(git: ReadOnlyGit, revisions: Revisions, *options: str, timeout: Ti
     }
     options += tuple(switch for switch, on in switches.items() if on)
     if revisions.since is not None:
-        # git's whole seconds, rounded up: so none before `since` is kept.
+        # git's whole seconds, rounded up: so none before `since` is kept. Not below 0, which
+        # git would read as unsigned: no commit is dated before 1970, so 0 keeps them all.
         after = revisions.since - datetime(1970, 1, 1, tzinfo=UTC)
-        seconds = after.days * 86400 + after.seconds + (after.microseconds > 0)
+        seconds = max(0, after.days * 86400 + after.seconds + (after.microseconds > 0))
         options += (f"--max-age={seconds}",)
     if revisions.author is not None:
         options += ("--fixed-strings", f"--author={revisions.author}")

@@ -97,7 +97,13 @@ def test_commits_lists_a_range_newest_first_with_what_git_says_of_each(history: 
 # hold: a zone out of range or not 4 digits, no date at all, a year past 9999.
 @pytest.mark.parametrize(
     "date",
-    ["1700000000 +9999", "1700000000 +0060", "1700000000 +123456", "", "99999999999999 +0000"],
+    [
+        "1700000000 +9999",
+        "1700000000 +0060",
+        "1700000000 +123456",
+        "",
+        "99999999999999 +0000",
+    ],
 )
 def test_a_date_a_datetime_cant_hold_is_none(history: Git, date: str) -> None:
     tree, first = history.run("rev-parse", "first^{tree}", "first").split()
@@ -174,6 +180,12 @@ def test_commits_by_author_text_and_committer_date(history: Git) -> None:
     # At or after it: not s3, a microsecond before.
     later = since + timedelta(microseconds=1)
     assert found(Revisions("main", exclude="first", since=later)) == ["Merge branch 'side'"]
+
+
+def test_since_before_1970_keeps_every_commit(history: Git) -> None:
+    before = Revisions("main", exclude="first", since=datetime(1969, 12, 31, tzinfo=UTC))
+
+    assert count(history, before) == 4
 
 
 def test_since_must_say_its_zone() -> None:
