@@ -8,6 +8,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `refs()` no longer takes `fields` (raw `--format` names), and `Ref` has no `fields`: a tool
+  asks for the typed attributes instead. move-forward's `push_target`
+  (`src/move_forward/plugins/git/client.py:289`, `push:remotename`, `upstream:remotename` and
+  `upstream:remoteref`) passes `remotes=True` and reads `push_remote`, `upstream_remote` and
+  `upstream_remote_ref`. A tool (or test) that built a `Ref` with `fields` as its sixth
+  argument drops it.
 - All Git subprocesses close extra inheritable file descriptors or handles. Remove the
   `close_fds` keyword from calls to `Git`, `ReadOnlyGit` and `FakeGit`, and remove imports
   of `CLOSE_FDS`.
@@ -132,6 +138,26 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (log.mailmap); and the top of the worktree is the path `""`: `"."` matches nothing, so
   move-forward's derive.py, whose `PurePosixPath(path).parent` gives `"."` for top-level
   files, passes `""` for them.
+- `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
+  `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
+  in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`,
+  a `Track(ahead, behind, gone)` as git says it (`%(upstream:track)`); `push_track=True`,
+  `push_track` (`%(push:track)`) and `push`; `remotes=True`, `upstream_remote`,
+  `upstream_remote_ref`, `push` and `push_remote`; `dates=True`, `committer_date`, a
+  `datetime`; and `ahead_behind="<base>"`, `ahead_behind`, `(ahead, behind)`, from git 2.41's
+  `%(ahead-behind:<base>)` (before 2.41, one `git rev-list --left-right --count` per ref).
+  Calls without them run the same `git for-each-ref` as before. This replaces raw
+  `for-each-ref` runs in tools: move-forward's branch listing and its `_TRACK_RE`
+  (`src/move_forward/plugins/git/client.py:200`, which `track=True, remotes=True, dates=True`
+  cover); git-stack's `local_branches` (`git.py:901`), per-branch `%(upstream:track)`
+  (`git.py:1003`, `track=True` for all branches at once), `chain_to_restack`'s `--contains
+  --merged` (`core.py:809`), `find_parent`'s `--merged --no-merged` (`stack.py:3992`), and
+  its `rev-parse --abbrev-ref <b>@{upstream}` (`core.py:1153`, `1275`: `upstream`, which
+  `refs()` always reads). An `ahead_behind` base that names nothing raises
+  `UnknownRevisionError` on every git. A filter given None filters nothing: a tool whose base
+  can be None (git-stack's `chain_to_restack`, `core.py:809`, whose `base` comes from config)
+  handles that itself, rather than list every branch.
+
 - `config_values(git, *keys, type=None)` reads keys' values as git reads them as a type
   (`ConfigType`: `git config --type`'s), the last of each, or None where a key isn't set,
   with one `git config --get-regexp` per call, so one per type. It replaces a tool's

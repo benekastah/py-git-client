@@ -12,10 +12,10 @@ what git-stack, git-recommit and move-forward share for that:
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
-  their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  where git keeps many files in the git directory (`git_paths`), the git directory and the
-  common one (`git_dir`, `git_common_dir`), blobs as they are (`hash_blobs`), and ref updates
-  in one transaction (`update_refs`).
+  their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
+  commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
+  git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
@@ -107,11 +107,21 @@ push_remote = config(git).get("branch.Topic.pushremote")
 signing = config_values(git, "commit.gpgsign", "merge.verifysignatures", type="bool")
 # Whether to color output, as git decides for a setting, color.ui, and "auto" on a terminal.
 colored = color_enabled(git, "color.stack", stdout_is_tty=sys.stdout.isatty())
-for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
-    print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
+for ref in refs(git, "refs/heads/").values():
+    print(ref.name, ref.object, ref.upstream, ref.head)
+# Typed attributes, each read only if asked (None otherwise), in the same one process: how
+# each branch stands against its upstream and what it pushes to, as git says it (a Track:
+# ahead, behind, or gone; None with none), the upstream's remote ("." for a local branch) and
+# name there, git's push destination and its remote, the committer date, and commits ahead of
+# and behind a base (git 2.41's %(ahead-behind:...); before, one more process per ref).
+both = refs(git, "refs/heads/", track=True, push_track=True, remotes=True, dates=True)
+counted = refs(git, "refs/heads/", ahead_behind="refs/heads/main")
+print(both["refs/heads/main"].track, counted["refs/heads/a"].ahead_behind)  # Track(), (0, 0)
+# for-each-ref's filters (contains, no_contains, merged, no_merged, points_at) and order:
+# the branches main has, newest first, then by name; the first 10.
+done = refs(git, "refs/heads/", merged="main", sort=["-committerdate", "refname"], count=10)
 
-# For a branch's short name, ask for the field "refname:lstrip=2", never "refname:short",
-# which comes back as "heads/v1" when a tag is named v1 too; and give git full ref names.
+# Give git full ref names: a short one is ambiguous when a tag has the same name.
 old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
 
