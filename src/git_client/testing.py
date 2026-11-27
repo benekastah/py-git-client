@@ -475,10 +475,10 @@ class FakeGit(Git):
     realistic output and assert the result. It can't start long-lived processes (`popen`),
     so CatFile needs a real Git. It answers the processes a plan (git_client.plan) starts as
     it answers `process`, so a plan can run on it. Like Git, it raises NotStartedError,
-    recording nothing, once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not a FakeGit) that
-    answers from the fake's responses and records in its `calls` (through FakeGit's own
-    `process`, not a faked subclass's, as with a real Git): give that to code that only reads,
-    so it has no public way to run a command of its own.
+    recording nothing, once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not
+    a FakeGit) that answers from the fake's responses and records in its `calls` (through
+    FakeGit's own `process`, not a faked subclass's, as with a real Git): give that to code
+    that only reads, so it has no public way to run a command of its own.
 
     To fake a project's own subclass of Git, put that class first, so FakeGit stands where
     Git was beneath it: its methods, and its own `process` (which calls `super().process`),
