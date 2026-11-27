@@ -15,7 +15,8 @@ the shape of the code or a rule here changes.
   (`where_questions`, `read_where`, `ask_where`).
 - `src/git_client/errors.py`: `GitError`, and the subclass each failure git describes raises;
   `NoAnswerError` (a timeout, or not started), which isn't a `GitError`.
-- `src/git_client/native.py`: opt-in pygit2 reads of objects named by full SHA-1 ids.
+- `src/git_client/native.py`: opt-in pygit2 reads of objects named by full SHA-1 ids (the only
+  native reads today; there are no native writes).
 - `src/git_client/performance.py`: opt-in timing for typed reads, Git process lifetimes,
   and active CatFile work. Uses one monotonic clock so callers can combine intervals.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
@@ -42,13 +43,11 @@ the shape of the code or a rule here changes.
   but each needs a reason and the maintainer's go-ahead before it's added. Today none is
   required: the `pygit2` extra provides the opt-in native backend for `ReadOnlyGit`, and a
   default install needs only the standard library.
-- **Git is the reference.** Policy (native reads exist only for objects named by full SHA-1
-  ids today, in `native.py`; there are no native writes):
+- **Git is the reference.** Policy:
   - *Reads* go through pygit2 (libgit2) only where libgit2 answers exactly as git would,
-    proven by differential tests against real git (as the `rev-parse` parsing was). A read
-    libgit2 can't answer exactly is a git process: `--fork-point`, `--cherry-pick`,
-    `%(upstream:track)`, `--walk-reflogs`, `status`, partial clones, and anything that
-    depends on git config, hook or filter semantics.
+    proven by differential tests against real git. A read libgit2 can't answer exactly is a
+    git process, e.g. `--fork-point`, `status`, or anything that depends on git config, hook
+    or filter semantics.
   - *Writes* go through pygit2 only where no behavior difference from git is expected;
     wherever one is known, use git. Hooks must never be skipped, and libgit2 runs none: any
     write that can trigger a hook (`update-ref`'s reference-transaction hook, commit, merge,
