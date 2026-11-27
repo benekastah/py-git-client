@@ -257,8 +257,9 @@ commits(git, Revisions("a", exclude="main", cherry_pick=True), topo_order=True, 
 
 The revisions reach git on its stdin, as many as it takes, so none is read as an option: a
 `Revisions` refuses one that is empty, starts with `-`, or holds a newline, a carriage return
-or a NUL (ValueError), which git would read as something else. Each message is read as UTF-8 whatever `i18n.logOutputEncoding` says. `first_parent=True` follows only each
-merge's first parent.
+or a NUL (ValueError), which git would read as something else. Each message is read as UTF-8
+whatever `i18n.logOutputEncoding` says. `first_parent=True` follows only each merge's first
+parent.
 
 ### Push results
 
