@@ -20,6 +20,7 @@ from git_client import (
     status,
     worktrees,
 )
+from git_client.testing import FakeGit
 
 # The repo_from fixture's type (see conftest.py).
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
@@ -251,3 +252,29 @@ def test_status_reads_a_renamed_path_that_looks_like_a_header(repo: Git) -> None
     )
     assert found.branch is not None
     assert found.branch.head == "main"
+
+
+STATUS = ["--no-optional-locks", "status", "--porcelain=v2", "-z"]
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"3 x\0",  # a kind git doesn't document
+        b"1 .M N... a\0",  # an entry cut short
+        b"2 R. N... 100644 100644 100644 0 0 R100 b\0",  # a rename with no original path
+    ],
+)
+def test_status_raises_for_output_git_doesnt_document(output: bytes) -> None:
+    git = FakeGit()
+    git.respond(STATUS, output)
+
+    with pytest.raises(GitError, match="status printed"):
+        status(git)
+
+
+def test_status_skips_a_header_it_doesnt_know() -> None:
+    git = FakeGit()
+    git.respond(STATUS, b"# stash 3\0? new\0")
+
+    assert status(git).entries == (Untracked("new"),)

@@ -98,31 +98,42 @@ def _submodule(field: bytes) -> SubmoduleState | None:
 
 def _entries(fields: Iterator[bytes], args: tuple[str, ...]) -> Iterator[StatusEntry]:
     """The entries of `git status --porcelain=v2 -z`, but for its headers. Each field is one
-    of git's NUL-separated fields; a rename's original path is the field after it."""
+    of git's NUL-separated fields; a rename's original path is the field after it. Raises
+    GitError for an entry git doesn't document."""
+
+    def columns(field: bytes, count: int) -> list[bytes]:
+        """The entry's space-separated columns, the last (its path) whole."""
+        found = field.split(b" ", count - 1)
+        if len(found) != count or len(found[1]) != 2:
+            raise GitError(args, 0, f"status printed an entry it doesn't document: {field!r}")
+        return found
+
     for field in fields:
         kind = field[:2]
         if kind == b"1 ":
-            _, xy, sub, *_, path = field.split(b" ", 8)
+            _, xy, sub, *_, path = columns(field, 9)
             yield Changed(decode(path), chr(xy[0]), chr(xy[1]), _submodule(sub))
         elif kind == b"2 ":
-            _, xy, sub, *_, score, path = field.split(b" ", 9)
-            original = decode(next(fields))
+            _, xy, sub, *_, score, path = columns(field, 10)
+            original = next(fields, b"")
+            if not original:
+                raise GitError(args, 0, f"status printed a rename with no original: {field!r}")
             yield Renamed(
                 decode(path),
                 chr(xy[0]),
                 chr(xy[1]),
                 _submodule(sub),
-                original=original,
+                original=decode(original),
                 similarity=int(score[1:]),
             )
         elif kind == b"u ":
-            _, xy, sub, *_, path = field.split(b" ", 10)
+            _, xy, sub, *_, path = columns(field, 11)
             yield Unmerged(decode(path), chr(xy[0]), chr(xy[1]), _submodule(sub))
         elif kind == b"? ":
             yield Untracked(decode(field[2:]))
         elif kind == b"! ":
             yield Ignored(decode(field[2:]))
-        elif field and kind != b"# ":
+        elif field and kind != b"# ":  # git documents that it may add headers, not entries
             raise GitError(args, 0, f"status printed an entry it doesn't document: {field!r}")
 
 
@@ -148,7 +159,9 @@ def status(
     files whose stat it found stale), which makes it a read a ReadOnlyGit offers; a
     ReadOnlyGit's `-c core.fsmonitor=false` (see ReadOnlyGit) keeps the fsmonitor hook from
     speeding it up. So a FakeGit test responds to `["--no-optional-locks", "status",
-    "--porcelain=v2", "-z"]`. Raises GitError if git fails (e.g. in a bare repository)."""
+    "--porcelain=v2", "-z"]`. Raises GitError if git fails (e.g. in a bare repository), or
+    prints an entry its documentation doesn't describe; a header it doesn't describe is
+    skipped, as git says it may add some."""
     args = ("--no-optional-locks", "status", "--porcelain=v2", "-z")
     if untracked is not None:
         args += (f"--untracked-files={untracked}",)
