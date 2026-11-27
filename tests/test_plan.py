@@ -1,5 +1,6 @@
 # So the checks fail if a type error a test expects (an ignore below) goes away:
 # pyright: reportUnnecessaryTypeIgnoreComment=true
+import contextlib
 import graphlib
 import random
 import subprocess
@@ -7,13 +8,14 @@ import time
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Self, assert_type, override
+from typing import IO, Self, assert_type, cast, override
 
 import pytest
 
 from git_client import (
     Arg,
     ConfigSet,
+    ConfigUnset,
     Git,
     GitError,
     GitTimeoutError,
@@ -47,8 +49,8 @@ from git_client.plan import (
     lift,
 )
 from git_client.plan.pushing import ConflictingPushes, push_failure
-from git_client.testing import GitCall
-from tests.conftest import Changes
+from git_client.testing import GitCall, RepoTemplates
+from tests.conftest import Changes, make_repo
 
 PUSH = ["-c", "core.abbrev=no", "push", "--porcelain"]
 
@@ -642,16 +644,17 @@ class Cell(Resource):
 
 
 class Put(Effect[int]):
-    """Sets a cell to its source's value plus one; puts run as one group."""
+    """Sets a cell, named by a node's value (so what it writes is known only once that
+    has run), to its source's value plus one; puts run as one group."""
 
     def __init__(
-        self, cells: dict[str, int], name: str, source: Node[int], after: list[Node[object]]
+        self, cells: dict[str, int], name: Node[str], source: Node[int], after: list[Node[object]]
     ) -> None:
         self.cells, self.name, self.source, self.after = cells, name, source, after
 
     @override
     def _reads(self) -> Iterable[Node[object]]:
-        return (self.source,)
+        return (self.name, self.source)
 
     @override
     def batch_key(self, plan: Plan) -> Hashable:
@@ -663,14 +666,14 @@ class Put(Effect[int]):
 
     @override
     def writes(self, plan: Plan) -> Iterable[Resource]:
-        return (Cell(self.name),)
+        return (Cell(self.name.get()),)
 
     @override
     @classmethod
     def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
         for node in nodes:
-            node.cells[node.name] = node.source.get() + 1
-            node._set(node.cells[node.name])
+            node.cells[node.name.get()] = node.source.get() + 1
+            node._set(node.cells[node.name.get()])
 
 
 class Take(Effect[int]):
@@ -698,6 +701,66 @@ class Take(Effect[int]):
             node._set(node.cells.get(node.name, 0))
 
 
+class Stamp(Effect[int]):
+    """Sets a cell to `value`, counting in `stamps` each time it runs: a repeat of an
+    earlier stamp of the cell, with nothing between that writes it, settles as that one
+    (as a repeated Push does)."""
+
+    def __init__(
+        self, cells: dict[str, int], name: str, value: int, after: list[Node[object]]
+    ) -> None:
+        self.cells, self.name, self.value, self.after = cells, name, value, after
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return (Cell(self.name),)
+
+    @override
+    def settle(self, plan: Plan, before: Sequence[Node[object]]) -> bool:
+        for earlier in reversed(before):
+            if isinstance(earlier, Stamp) and (earlier.name, earlier.value) == (
+                self.name,
+                self.value,
+            ):
+                self._copy_outcome(earlier)
+                return True
+            between = plan.access(earlier)
+            if between is None or Cell(self.name) in between.writes:
+                return False
+        return False
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            node.cells[node.name] = node.value
+            node._set(node.value)
+
+
+class Fail(Effect[int]):
+    """Fails, declaring it writes a cell."""
+
+    def __init__(self, name: str, after: list[Node[object]]) -> None:
+        self.name, self.after = name, after
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return (Cell(self.name),)
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        raise ZeroDivisionError
+
+
 class Barrier(Effect[int]):
     """Declares nothing, so it may conflict with everything: 0."""
 
@@ -711,34 +774,64 @@ class Barrier(Effect[int]):
             node._set(0)
 
 
-def random_plan(seed: int, git: Git, reorder: bool) -> tuple[Plan, list[Node[int]], dict[str, int]]:
-    """A plan of random puts, takes and barriers, added in a random order: the same for a
-    seed."""
+def cell_of(number: int) -> str:
+    return "xy"[number % 2]
+
+
+def random_plan(
+    seed: int, git: Git, reorder: bool
+) -> tuple[Plan, list[Node[object]], dict[str, int]]:
+    """A plan of random puts (to a cell named by an earlier node, at times), takes, stamps,
+    failures and barriers, added in a random order: the same for a seed."""
     rng = random.Random(seed)
     cells: dict[str, int] = {}
-    nodes: list[Node[int]] = []
-    for _ in range(10):
+    nodes: list[Node[object]] = []
+    numbers: list[Node[int]] = []
+    for _ in range(12):
         name = rng.choice("xy")
         after: list[Node[object]] = [node for node in nodes if rng.random() < 0.2]
         kind = rng.random()
-        if kind < 0.45:
-            source = rng.choice([*nodes, Value(rng.randrange(10))])
-            nodes.append(Put(cells, name, source, after))
+        node: Node[int]
+        if kind < 0.3:
+            named: Node[str] = Value(name)
+            if numbers and rng.random() < 0.5:
+                named = Map(cell_of, rng.choice(numbers))
+                nodes.append(named)
+            node = Put(cells, named, rng.choice([*numbers, Value(rng.randrange(10))]), after)
+        elif kind < 0.6:
+            node = Take(cells, name, after)
+        elif kind < 0.8:
+            node = Stamp(cells, name, rng.randrange(2), after)
         elif kind < 0.9:
-            nodes.append(Take(cells, name, after))
+            node = Fail(name, after)
         else:
-            nodes.append(Barrier(after))
+            node = Barrier(after)
+        nodes.append(node)
+        numbers.append(node)
     plan = Plan(git, reorder=reorder)
-    for node in rng.sample(nodes, len(nodes)):
-        plan.add(node)
+    for added in rng.sample(nodes, len(nodes)):
+        plan.add(added)
     return plan, nodes, cells
+
+
+def outcome(node: Node[object], nodes: Sequence[Node[object]]) -> str:
+    """What became of a node: its result, the node whose failure skipped it, or its error."""
+    try:
+        result = node.get()
+    except Skipped as skipped:
+        return f"skipped for {nodes.index(skipped.failed)}"
+    except NotExecuted as failed:
+        return f"failed: {type(failed.__cause__).__name__}"
+    if isinstance(node, Push):
+        return repr([ref.status for ref in cast(tuple[PushRef, ...], result)])
+    return repr(result)
 
 
 def test_reordering_gives_what_program_order_gives(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     groups: list[str] = []
-    for cls in (Put, Take):
+    for cls in (Put, Take, Stamp):
         run = cls.execute_group
 
         def counting(
@@ -748,20 +841,106 @@ def test_reordering_gives_what_program_order_gives(
             run(nodes, plan)
 
         monkeypatch.setattr(cls, "execute_group", counting)
-    fewer = 0
+    seen = {"fewer groups": 0, "a failure": 0, "a skip": 0}
     for seed in range(300):
-        reference, reference_nodes, reference_cells = random_plan(seed, repo, reorder=False)
-        groups.clear()
-        reference.execute()
-        in_order = len(groups)
-        plan, nodes, cells = random_plan(seed, repo, reorder=True)
-        groups.clear()
-        plan.execute()
+        runs: list[tuple[list[str], dict[str, int], int]] = []
+        for reorder in (False, True):
+            plan, nodes, cells = random_plan(seed, repo, reorder=reorder)
+            groups.clear()
+            with contextlib.suppress(ExecutionException):
+                plan.execute()
+            runs.append(([outcome(node, nodes) for node in nodes], cells, len(groups)))
+        (in_order, in_order_cells, in_order_groups), (outcomes, cells, fewer) = runs
 
-        assert [node.get() for node in nodes] == [node.get() for node in reference_nodes], seed
-        assert cells == reference_cells, seed
-        fewer += len(groups) < in_order
-    assert fewer  # reordering merged groups in some
+        assert outcomes == in_order, seed
+        assert cells == in_order_cells, seed
+        seen["fewer groups"] += fewer < in_order_groups
+        seen["a failure"] += any(o.startswith("failed") for o in outcomes)
+        seen["a skip"] += any(o.startswith("skipped") for o in outcomes)
+    assert all(seen.values()), seen  # each case came up
+
+
+def random_git_plan(seed: int, git: Git, reorder: bool) -> tuple[Plan, list[Node[object]]]:
+    """A plan of random pushes, changes of the remote's URL, config writes and reads: the
+    same for a seed."""
+    rng = random.Random(seed)
+    nodes: list[Node[object]] = []
+    for _ in range(8):
+        kind = rng.random()
+        if kind < 0.4:
+            nodes.append(Push("origin", rng.choice("acc"), force=rng.random() < 0.2))
+        elif kind < 0.6:
+            url = rng.choice(["../origin.git", "../mirror.git"])
+            nodes.append(WriteConfig(ConfigSet("remote.origin.url", url)))
+        elif kind < 0.7:
+            nodes.append(WriteConfig(ConfigSet("x.k", rng.choice(["yes", "no"]))))
+        elif kind < 0.75:
+            nodes.append(WriteConfig(ConfigUnset("x.k")))
+        elif kind < 0.85:
+            nodes.append(ConfigValue("x.k"))
+        else:
+            nodes.append(ConfigValue("x.k").as_bool())
+    plan = Plan(git, reorder=reorder)
+    for node in nodes:
+        plan.add(node)
+    return plan, nodes
+
+
+def run_random_git_plan(
+    seed: int, git: Git, reorder: bool
+) -> tuple[str | None, list[str], list[str]]:
+    """What became of random_git_plan's run: what it raised, each node's outcome, and the
+    remotes' refs."""
+    git.run("branch", "c", "HEAD~1")
+    plan, nodes = random_git_plan(seed, git, reorder)
+    try:
+        plan.execute()
+        raised = None
+    except (ExecutionException, ConflictingPushes) as error:
+        raised = type(error).__name__
+    remotes = [
+        Git(Path(git.directory).parent / f"{name}.git").run("for-each-ref")
+        for name in ("origin", "mirror")
+    ]
+    return raised, [outcome(node, nodes) for node in nodes], remotes
+
+
+def never_settles(node: Node[object], plan: Plan, before: Sequence[Node[object]]) -> bool:
+    return False
+
+
+def never_checks(node: Node[object], plan: Plan, before: Sequence[Node[object]]) -> None:
+    pass
+
+
+def test_reordering_gives_what_program_order_gives_with_git(
+    repo_templates: RepoTemplates, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def make(directory: Path) -> None:
+        make_repo(directory)
+        with_remotes(Git(directory / "repo"))
+
+    def copy(name: str) -> Git:
+        return Git(repo_templates.copy("plan-remotes", tmp_path / name) / "repo")
+
+    repo_templates.build("plan-remotes", make)
+    seen = {"a repeat": 0, "conflicting pushes": 0}
+    for seed in range(20):
+        in_order = run_random_git_plan(seed, copy(f"{seed}-in-order"), reorder=False)
+        reordered = run_random_git_plan(seed, copy(f"{seed}-reordered"), reorder=True)
+        with monkeypatch.context() as unsettled:  # program order, as git answers each push
+            unsettled.setattr(Push, "settle", never_settles)
+            unsettled.setattr(Push, "check", never_checks)
+            raw = run_random_git_plan(seed, copy(f"{seed}-raw"), reorder=False)
+
+        assert reordered == in_order, seed
+        if in_order[0] == "ConflictingPushes":
+            seen["conflicting pushes"] += 1
+            continue
+        # A repeated push reports the first's report: but the remotes end as git leaves them.
+        assert in_order[2] == raw[2], seed
+        seen["a repeat"] += in_order[1] != raw[1]
+    assert all(seen.values()), seen
 
 
 def test_a_read_sees_the_writes_added_before_it_and_none_after(repo: Git) -> None:

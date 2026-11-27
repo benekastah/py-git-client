@@ -133,9 +133,10 @@ class Plan:
         may_run: list[Node[object]] = []
         before: list[Node[object]] = []  # the nodes left before this one
         for node in left:
-            failed = next((input for input in node.inputs() if input._error is not None), None)
-            if failed is not None:
-                node._skip(failed)
+            inputs = list(node.inputs())
+            failed = next((input for input in inputs if input._error is not None), None)
+            if failed is not None and all(i._done or i._error is not None for i in inputs):
+                node._skip(failed)  # once all have finished: the first that failed
                 continue
             if all(input._done for input in node.inputs()):
                 if not self._ask(node):
