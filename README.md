@@ -22,8 +22,8 @@ what git-stack, git-recommit and move-forward share for that:
   merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
   why git couldn't merge that pair.
 
-It has no dependencies of its own, and needs Python 3.15 or newer and git 2.36 or newer (for
-`git cat-file --batch-command`; 2.38 for `merge_trees`).
+It has no required dependencies (`pygit2` is an optional extra), and needs Python 3.15 or
+newer and git 2.36 or newer (for `git cat-file --batch-command`; 2.38 for `merge_trees`).
 
 ## Installing
 
