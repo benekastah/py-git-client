@@ -12,12 +12,13 @@ them only through `get()` once they've run. The plan crawls the graph from the o
 given (`Node.inputs`), and runs it in rounds: the nodes whose inputs are done, grouped by
 class and `batch_key`, each group run once by its class's `execute_group` (one git process,
 where git has a batch form), the groups on different lanes in parallel. Nodes are never
-replaced: a group writes each member's result back onto the member. Reads go first: an
-effect (a Push) waits while any read can run, so the effects that read config are ready
-together, and share groups.
+replaced: a group writes each member's result back onto the member.
 
 Only data and `after=` order nodes: ops with no edge between them are independent, whatever
-order they were added in.
+order they were added in. So nodes merge only if they're ready in the same round: pushes that
+share their inputs (one `force` node, as above) are, but a push whose inputs are all plain
+values runs in the first round, and won't merge with one whose `force` comes from config,
+which is ready only once that's read.
 """
 
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the module.
@@ -430,16 +431,9 @@ class Plan:
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
         groups_of: dict[Node[object], list[Node[object]]] = {}
-        waiting: list[Node[object]] = []  # effects, ready but held back
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
-                ready = [*waiting, *sorter.get_ready()]
-                # Reads first: an effect waits while a read can run, so the effects whose
-                # inputs come from reads are ready together, and share groups.
-                waiting = [node for node in ready if isinstance(node, Effect)]
-                now = [node for node in ready if not isinstance(node, Effect)] or waiting
-                if now is waiting:
-                    waiting = []
+                now = [*sorter.get_ready()]
                 self._run_round(now, graph, groups_of, pool)
                 for copy, original in copies:
                     if not copy._done:

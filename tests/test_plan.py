@@ -204,16 +204,13 @@ def test_a_value_git_cant_type_fails_its_group(repo: Git) -> None:
 def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
     remotes: Git, git_calls: list[GitCall]
 ) -> None:
-    remotes.run("config", "example.push-with-force", "on")
     remotes.run("branch", "-f", "a", "HEAD~1")
     remotes.run("branch", "-f", "b", "HEAD~1")
     remotes.run("branch", "c")
     git_calls.clear()
     plan = Plan(remotes)
-    force = ConfigValue("example.push-with-force").as_bool()
     forced, rejected, created = (
-        plan.add(Push("origin", branch, force=force if branch == "a" else False))
-        for branch in "abc"
+        plan.add(Push("origin", branch, force=branch == "a")) for branch in "abc"
     )
     dependent = plan.add(Push("origin", "c", after=[rejected]))
 
@@ -236,6 +233,29 @@ def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
         dependent.get()
     assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD~1")
     assert remote_tip(remotes, "origin", "b") == remotes.run("rev-parse", "HEAD")
+
+
+def test_pushes_ready_in_different_rounds_are_not_merged(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    remotes.run("config", "example.push-with-force", "on")
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    git_calls.clear()
+    plan = Plan(remotes)
+    # b's force is known at once; a's once its config is read, a round later.
+    forced = plan.add(Push("origin", "a", force=ConfigValue("example.push-with-force").as_bool()))
+    plain = plan.add(Push("origin", "b", force=False))
+
+    plan.execute()
+
+    assert pushes(git_calls) == [
+        [*PUSH, "origin", "refs/heads/b:refs/heads/b"],
+        [*PUSH, "origin", "+refs/heads/a:refs/heads/a"],
+    ]
+    assert [ref.status for ref in forced.get() + plain.get()] == [
+        PushStatus.FORCED,
+        PushStatus.UP_TO_DATE,
+    ]
 
 
 def test_an_atomic_push_is_all_or_nothing(remotes: Git, git_calls: list[GitCall]) -> None:
@@ -272,7 +292,8 @@ def test_pushes_to_two_remotes_run_at_once(
     remotes.run("config", "example.remote", "mirror")
     git_calls.clear()
     plan = Plan(remotes)
-    to_origin = plan.add(Push("origin", "a"))
+    # Both remotes come from config, so both pushes are ready in the same round.
+    to_origin = plan.add(Push(ConfigValue("example.unset").or_default("origin"), "a"))
     to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "a"))
 
     plan.execute()
