@@ -147,6 +147,23 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (log.mailmap); and the top of the worktree is the path `""`: `"."` matches nothing, so
   move-forward's derive.py, whose `PurePosixPath(path).parent` gives `"."` for top-level
   files, passes `""` for them.
+- `changed_paths(git, diffs, *, renames=False, ignore_submodules=False, paths=(),
+  pathspecs=())` lists the paths each of many diffs changes (`TreeChange`: status, path, old
+  and new mode and object id, and a rename's old path and similarity), and `line_changes`, with
+  the same arguments, how many lines each adds and removes per path (`LineChange`; None for a
+  binary file). A diff is a commit, against its parent, or a pair (old, new) of commits or
+  trees, each any revision. Two processes for all of them: `git cat-file --batch-check` to
+  resolve the names, and `git diff-tree --stdin -z`. A tool replaces its per-diff runs:
+  git-stack's `changes_something` (`git_stack/adapters/git.py:108`, `diff --quiet`: an empty
+  list) and `changed_files` (`adapters/git.py:231`, `diff --name-only -z`), one per branch, by
+  one call for all branches, and `batch_line_changes` (`git.py:741`) and its hand parser by
+  `line_changes`; git-recommit's `match` (`git_recommit/session.py:194`, `pathspecs=`) and
+  `_old_commits`' `diff-tree --stdin` and parser (`oldcommits.py:138`, with `commits()` for
+  each commit's author); move-forward's `_my_dirs`
+  (`src/move_forward/plugins/git/client.py:306`) and git-stack's `disjoint_source_paths`
+  (`git_stack/integrations.py:780`), `log --name-only` and `--name-status -z`, by `commits()`
+  and `changed_paths` of their ids (a merge's paths, which `log` doesn't list by default,
+  aren't listed either).
 - `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
   `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
   in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`,

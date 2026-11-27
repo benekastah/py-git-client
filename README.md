@@ -281,6 +281,37 @@ whatever `i18n.logOutputEncoding` says. A date is None where the commit records 
 datetime can't hold (a bad zone, a year past 9999), which git takes and fsck only warns of.
 `first_parent=True` follows only each merge's first parent.
 
+### Diffs
+
+`changed_paths` lists the paths each of many diffs changes, and `line_changes` how many lines
+each adds and removes there, with one `git cat-file --batch-check` to resolve the names and one
+`git diff-tree --stdin` for all the diffs:
+
+```python
+from git_client import ReadOnlyGit, changed_paths, line_changes
+
+reader = ReadOnlyGit("path/to/repo")
+# A commit, against its parent (a root commit against nothing; a merge isn't diffed, as git
+# does by default: give (merge.parents[0], merge.id) for its first parent's), or a pair,
+# (old, new), of commits or trees: e.g. commit.id from commits(), "main", "a^{tree}".
+for changes in changed_paths(reader, ["main", ("main", "a")], renames=True):  # one list each
+    for change in changes:  # in git's order, recursing into directories; [] if none
+        change.status, change.path  # "A", "D", "M", "R" (renames=True), ...; from the top
+        change.old_mode, change.new_mode, change.old_id, change.new_id  # "000000", zeros: none
+        change.old_path, change.similarity  # a rename's; None otherwise
+[counts] = line_changes(reader, [("a", "main")], paths=["src", "README.md"])  # literally
+for count in counts:
+    count.path, count.added, count.removed  # both None for a binary file
+```
+
+Both also take `ignore_submodules=True`, to leave out submodules' changes, and `pathspecs`,
+git's pathspecs as a user types them (from the client's directory, with wildcards and magic). A
+file that becomes a symlink or a submodule is deleted and added. The user's diff config doesn't
+change what git reports. A name that is empty or holds a newline, a carriage return or a NUL
+raises ValueError. A `FakeGit` test responds to `["cat-file", "--batch-check"]` with a line for
+each name (`<id> commit 100`) and to `["diff-tree", "--stdin"]` with git's output. Merges'
+combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and patches aren't supported.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says
@@ -397,15 +428,15 @@ A tool that only reads can show that it does with a `ReadOnlyGit`, which takes t
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
 `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-`git_common_dir`, `commits`, `count`, `any_commit`, `status`, `worktrees` and `CatFile`. It has
-no public way to run a command of the caller's: no `run`, `run_bytes`, `ok`, `succeeds`,
-`passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to write: the
-library doesn't try to tell from a command line whether git would write (that's git's to decide,
-and it has no read-only mode to ask), it just doesn't take one. `Git` extends it, so a function
-that only reads takes a `ReadOnlyGit` and is given either; a type checker flags a call of `run`
-on one. A tool that reads with other commands (`log`, `diff`, ...) runs them with a `Git`.
-`patch_ids` runs the commands it's given, so it takes a `Git`, and raises `TypeError` for a
-`ReadOnlyGit`.
+`git_common_dir`, `commits`, `count`, `any_commit`, `changed_paths`, `line_changes`, `status`,
+`worktrees` and `CatFile`. It has no public way to run a command of the caller's: no `run`,
+`run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it
+can't be asked to write: the library doesn't try to tell from a command line whether git would
+write (that's git's to decide, and it has no read-only mode to ask), it just doesn't take one.
+`Git` extends it, so a function that only reads takes a `ReadOnlyGit` and is given either; a
+type checker flags a call of `run` on one. A tool that reads with other commands (`log`, `diff`,
+...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a `Git`, and
+raises `TypeError` for a `ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
