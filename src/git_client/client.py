@@ -801,8 +801,8 @@ class ReadOnlyGit:
     """Reads a repository with git in `directory`, as `git -C <directory>` does, offering the
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
     `cdup` and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`,
-    `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `status` and
-    `CatFile`).
+    `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `status`,
+    `worktrees` and `CatFile`).
     It has no public way to run a command of the caller's (no `run`, `process` and the like),
     so a tool that only reads can show that it does by making one: what it doesn't offer, it
     can't be asked to run (the library's private helpers can, as anything private can be

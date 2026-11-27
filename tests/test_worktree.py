@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -17,6 +18,7 @@ from git_client import (
     Unmerged,
     Untracked,
     status,
+    worktrees,
 )
 
 # The repo_from fixture's type (see conftest.py).
@@ -176,6 +178,65 @@ def test_status_raises_where_git_fails(repo: Git, tmp_path: Path) -> None:
 
     with pytest.raises(GitError):
         status(Git(tmp_path / "bare"))
+
+
+def same(path: str | Path) -> Path:
+    return Path(path).resolve()
+
+
+def test_worktrees_lists_each_with_its_state(repo: Git, tmp_path: Path) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    repo.run("worktree", "add", "--quiet", "-b", "topic", str(tmp_path / "linked"))
+    repo.run("worktree", "add", "--quiet", "--detach", str(tmp_path / "detached"))
+    repo.run("worktree", "lock", "--reason", "on a\nstick", str(tmp_path / "detached"))
+    repo.run("worktree", "add", "--quiet", "--detach", str(tmp_path / "gone"))
+    repo.run("worktree", "lock", str(tmp_path / "gone"))
+    shutil.rmtree(tmp_path / "gone")
+
+    found = [
+        (same(w.path), w.head, w.branch, w.detached, w.locked, w.prunable is not None)
+        for w in worktrees(repo.read_only())
+    ]
+    found[1:] = sorted(found[1:])  # the main one first, the others in no order git promises
+
+    assert found == [
+        (same(repo.directory), head, "refs/heads/main", False, None, False),
+        (same(tmp_path / "detached"), head, None, True, "on a\nstick", False),
+        (same(tmp_path / "gone"), head, None, True, "", False),
+        (same(tmp_path / "linked"), head, "refs/heads/topic", False, None, False),
+    ]
+
+
+def test_worktrees_says_why_one_is_prunable(repo: Git, tmp_path: Path) -> None:
+    repo.run("worktree", "add", "--quiet", "--detach", str(tmp_path / "gone"))
+    shutil.rmtree(tmp_path / "gone")
+
+    gone = worktrees(repo)[1]
+
+    assert gone.prunable == "gitdir file points to non-existent location"
+    assert not gone.bare
+
+
+def test_worktrees_lists_a_bare_repository(repo: Git, tmp_path: Path) -> None:
+    repo.run("clone", "--quiet", "--bare", ".", str(tmp_path / "bare"))
+
+    (bare,) = worktrees(Git(tmp_path / "bare"))
+
+    assert (same(bare.path), bare.head, bare.branch, bare.bare, bare.detached) == (
+        same(tmp_path / "bare"),
+        None,
+        None,
+        True,
+        False,
+    )
+
+
+def test_worktrees_has_no_head_on_an_unborn_branch(tmp_path: Path) -> None:
+    Git(tmp_path).run("init", "--quiet", "-b", "new", "unborn")
+
+    (unborn,) = worktrees(Git(tmp_path / "unborn"))
+
+    assert (unborn.head, unborn.branch) == (None, "refs/heads/new")
 
 
 def test_status_reads_a_renamed_path_that_looks_like_a_header(repo: Git) -> None:

@@ -67,7 +67,9 @@ from git_client.worktree import (
     SubmoduleState,
     Unmerged,
     Untracked,
+    Worktree,
     status,
+    worktrees,
 )
 
 __all__ = [
@@ -117,6 +119,7 @@ __all__ = [
     "UnknownRevisionError",
     "Unmerged",
     "Untracked",
+    "Worktree",
     "WrongTypeError",
     "config",
     "decode",
@@ -136,4 +139,5 @@ __all__ = [
     "refs",
     "status",
     "update_refs",
+    "worktrees",
 ]

@@ -1,8 +1,9 @@
-"""What git says of a repository's worktrees: one's status."""
+"""What git says of a repository's worktrees: one's status, and the list of them."""
 
 from collections.abc import Iterator
 from dataclasses import KW_ONLY, dataclass
 from itertools import takewhile
+from pathlib import Path
 from typing import Literal
 
 from git_client.client import CLIENT_TIMEOUT, ReadOnlyGit, Timeout, decode, read_output
@@ -181,3 +182,48 @@ def _branch(fields: list[bytes]) -> StatusBranch:
         headers.get("branch.upstream"),
         counts,
     )
+
+
+@dataclass(frozen=True)
+class Worktree:
+    """A worktree of the repository: its path; its HEAD's commit (None if bare, or on an
+    unborn branch); the full name of its branch (None if detached or bare); whether it's the
+    bare repository or detached; and the reason it's locked and the reason git would prune
+    it, each "" if git gives none, and None if it isn't."""
+
+    path: Path
+    head: str | None
+    branch: str | None
+    bare: bool
+    detached: bool
+    locked: str | None
+    prunable: str | None
+
+
+@record_read("git")
+def worktrees(git: ReadOnlyGit, *, timeout: Timeout = CLIENT_TIMEOUT) -> list[Worktree]:
+    """The repository's worktrees, the main one first, from one `git worktree list
+    --porcelain -z` (git 2.36). Raises GitError if git fails (e.g. NotARepositoryError)."""
+    found: list[Worktree] = []
+    attributes: dict[str, str] = {}
+    for field in decode(
+        read_output(git, "worktree", "list", "--porcelain", "-z", timeout=timeout)
+    ).split("\0"):
+        if field:
+            key, _, value = field.partition(" ")
+            attributes[key] = value
+        elif attributes:  # an empty field ends each worktree's
+            head = attributes.get("HEAD")
+            found.append(
+                Worktree(
+                    Path(attributes["worktree"]),
+                    None if head is None or not head.strip("0") else head,
+                    attributes.get("branch"),
+                    "bare" in attributes,
+                    "detached" in attributes,
+                    attributes.get("locked"),
+                    attributes.get("prunable"),
+                )
+            )
+            attributes = {}
+    return found
