@@ -117,7 +117,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
-- `push(git, *args)` reports each destination and ref's status, including partial
+- `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
+  many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
+  with one `git push`, and reports each destination and ref's status, including partial
   success and full old and new object IDs for ref updates when Git reports them. A
   destination whose push failed outright (e.g. an unpacker error) is reported with `done`
   False.
