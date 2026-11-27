@@ -24,7 +24,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/history.py`: `commits`, `count` and `any_commit`, a `git rev-list` each for
   the commits a `Revisions` describes, parsed into `Commit`s.
 - `src/git_client/diffs.py`: `changed_paths` and `line_changes`, one `git diff-tree --stdin`
-  for many diffs, after one `git cat-file --batch-check` resolves their names.
+  for many diffs, after one `git cat-file --batch-check` resolves their names; and
+  `tree_entries`, a `git ls-tree -z`.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git

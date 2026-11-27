@@ -1,4 +1,5 @@
-"""What changed between trees, with one `git diff-tree --stdin` for many diffs."""
+"""What changed between trees, with one `git diff-tree --stdin` for many diffs, and what a tree
+holds."""
 
 import re
 from collections.abc import Callable, Sequence
@@ -12,6 +13,7 @@ from git_client.client import (
     decode,
     encode,
     object_header,
+    read_output,
     read_process,
     stdout_of,
 )
@@ -27,6 +29,8 @@ not at all, as git diffs one by default), or a pair, (old, new), each a commit o
 # A raw entry's fields, before its path: ":<old mode> <new mode> <old id> <new id> <status>",
 # the status a letter, and, for a rename or copy, its score.
 _RAW = re.compile(rb":([0-7]+) ([0-7]+) ([0-9a-f]+) ([0-9a-f]+) ([ACDMRTUX])([0-9]*)")
+# An ls-tree entry: "<mode> <type> <id>\t<path>".
+_TREE_ENTRY = re.compile(rb"([0-7]+) (blob|tree|commit) ([0-9a-f]+)\t(.+)", re.DOTALL)
 # A numstat entry's counts, before its path ("-" for a binary file's).
 _NUMSTAT = re.compile(rb"([0-9]+|-)\t([0-9]+|-)\t")
 
@@ -281,3 +285,44 @@ def _numstat_entry(output: bytes, at: int) -> tuple[LineChange, int] | None:
         paths.append(decode(output[at:end]))
         at = end + 1
     return LineChange(paths[-1], added, removed, paths[0] if renamed else None), at
+
+
+@dataclass(frozen=True)
+class TreeEntry:
+    """An entry of a tree, as `git ls-tree` gives it: its mode (as TreeChange's), its type
+    ("blob" a file or symlink, "tree" a directory, "commit" a submodule), its object id, and
+    its path from the tree's top."""
+
+    mode: str
+    type: Literal["blob", "tree", "commit"]
+    id: str
+    path: str
+
+
+@record_read("git")
+def tree_entries(
+    git: ReadOnlyGit,
+    tree: str,
+    paths: Sequence[str] = (),
+    *,
+    recursive: bool = False,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> list[TreeEntry]:
+    """The entries of `tree` (a revision that names a tree or a commit), in git's order, from
+    one `git ls-tree -z`: those at its top, or with `recursive`, every file (`-r`, which lists
+    no directories). With `paths` (each from the top, literally), only those: a directory's
+    entry, or with `recursive` or a path ending in "/", its files. git's ls-tree takes one
+    tree, so it's one process for each. Raises UnknownRevisionError if `tree` names no tree."""
+    args = ("ls-tree", "-z", "--full-tree", *(["-r"] if recursive else []))
+    # No "--": ls-tree would take it as a path. Nothing after --end-of-options is an option.
+    args += ("--end-of-options", tree, *paths)
+    # Paths as they are, whatever the environment says; --full-tree takes them from the top.
+    env = {"GIT_LITERAL_PATHSPECS": "1", "GIT_ICASE_PATHSPECS": "0"}
+    found: list[TreeEntry] = []
+    for field in read_output(git, *args, env=env, timeout=timeout).split(b"\0")[:-1]:
+        entry = _TREE_ENTRY.fullmatch(field)
+        if entry is None:
+            raise GitError(args, 0, f"ls-tree printed what it doesn't document: {field!r}")
+        mode, type, id, path = (decode(f) for f in entry.groups())
+        found.append(TreeEntry(mode, cast(Literal["blob", "tree", "commit"], type), id, path))
+    return found

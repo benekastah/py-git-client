@@ -809,7 +809,7 @@ class ReadOnlyGit:
     and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`, `config`,
     `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
     `git_common_dir`, `commits`, `count`, `any_commit`, `changed_paths`, `line_changes`,
-    `status`, `worktrees` and `CatFile`).
+    `tree_entries`, `status`, `worktrees` and `CatFile`).
     It has no public way to run a command of the caller's (no `run`, `process` and the like),
     so a tool that only reads can show that it does by making one: what it doesn't offer, it
     can't be asked to run (the library's private helpers can, as anything private can be

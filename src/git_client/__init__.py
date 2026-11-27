@@ -38,7 +38,16 @@ from git_client.client import (
     printable,
 )
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
-from git_client.diffs import ChangeStatus, Diff, LineChange, TreeChange, changed_paths, line_changes
+from git_client.diffs import (
+    ChangeStatus,
+    Diff,
+    LineChange,
+    TreeChange,
+    TreeEntry,
+    changed_paths,
+    line_changes,
+    tree_entries,
+)
 from git_client.errors import (
     ConfigLockedError,
     ConflictError,
@@ -135,6 +144,7 @@ __all__ = [
     "Timeout",
     "Track",
     "TreeChange",
+    "TreeEntry",
     "UnknownRevisionError",
     "Unmerged",
     "Untracked",
@@ -164,6 +174,7 @@ __all__ = [
     "push",
     "refs",
     "status",
+    "tree_entries",
     "update_refs",
     "worktrees",
 ]

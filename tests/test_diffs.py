@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -7,11 +8,13 @@ from git_client import (
     GitError,
     LineChange,
     TreeChange,
+    TreeEntry,
     UnknownRevisionError,
     WrongTypeError,
     changed_paths,
     hash_blobs,
     line_changes,
+    tree_entries,
 )
 from git_client.testing import FakeGit, GitCall
 
@@ -26,7 +29,7 @@ def make_diffs(git: Git) -> None:
     """Commits made of trees git builds, so paths no filesystem takes can be in them: `p0`, a
     root commit, and `p1` on it, which changes `a` (3 lines added, 1 removed), renames `keep`
     to `kept` (changing a line), makes `run` executable, and adds a binary file, `*`, a path
-    with a newline, one that isn't UTF-8, `dir/f` and a submodule, `sub`; and `m`, a merge
+    with a newline, one that isn't UTF-8, `:x`, `dir/f` and a submodule, `sub`; and `m`, a merge
     of p1 and p0 with p1's tree."""
     a0, a1, keep, kept, run, binary, other = hash_blobs(
         git,
@@ -53,6 +56,7 @@ def make_diffs(git: Git) -> None:
         ("100755", run, b"run"),
         ("100644", binary, b"bin"),
         ("100644", other, b"*"),
+        ("100644", other, b":x"),
         ("100644", other, b"new\nline"),
         ("100644", other, b"caf\xe9"),
         ("040000", tree(("100644", other, b"f")), b"dir"),
@@ -73,7 +77,7 @@ def statuses(changes: list[TreeChange]) -> list[tuple[str, str]]:
     return [(change.status, change.path) for change in changes]
 
 
-P1_PATHS = ["*", "a", "bin", "caf\udce9", "dir/f", "keep", "kept", "new\nline", "run", "sub"]
+P1_PATHS = ["*", ":x", "a", "bin", "caf\udce9", "dir/f", "keep", "kept", "new\nline", "run", "sub"]
 
 
 def test_changed_paths_lists_what_a_commit_changes_in_gits_order(diffs: Git) -> None:
@@ -161,6 +165,7 @@ HEADER = ZEROS.encode() + b"\0"
         HEADER + b":100644 100644 0 1 Q\0p\0",  # a status git doesn't document
         HEADER + b":100644 100644 0 1\0p\0",  # too few fields
         HEADER + b":100644 100644 0 1 M\0",  # no path
+        HEADER + b":100644 100644 0 1 M\0\0",  # an empty one
         HEADER + b":100644 100644 0 1 R90\0p\0",  # a rename with one path
         HEADER + b":100644 100644 0 1 R\0p\0q\0",  # a rename with no score
         HEADER + b":100644 100644 0 1 M90\0p\0",  # a score for what isn't a rename
@@ -213,3 +218,62 @@ def test_no_diffs_take_no_process() -> None:
 def test_changed_paths_refuses_one_diff_for_many() -> None:
     with pytest.raises(TypeError, match="not one"):
         changed_paths(FakeGit(), "p1")
+
+
+def test_tree_entries_lists_a_trees_entries(diffs: Git, git_calls: list[GitCall]) -> None:
+    entries = tree_entries(diffs.read_only(), "p1")
+
+    top = ["*", ":x", "a", "bin", "caf\udce9", "dir", "kept", "new\nline", "run", "sub"]
+    assert [entry.path for entry in entries] == top
+    by_path = {entry.path: entry for entry in entries}
+    assert by_path["a"] == TreeEntry("100644", "blob", diffs.run("rev-parse", "p1:a"), "a")
+    assert (by_path["run"].mode, by_path["run"].type) == ("100755", "blob")
+    assert (by_path["dir"].mode, by_path["dir"].type) == ("040000", "tree")
+    assert (by_path["sub"].mode, by_path["sub"].type) == ("160000", "commit")
+    assert [call[0] for call in git_calls[:1]] == ["ls-tree"]
+
+
+def test_tree_entries_recurses_if_asked(diffs: Git) -> None:
+    paths = [entry.path for entry in tree_entries(diffs, "p1^{tree}", recursive=True)]
+
+    assert "dir/f" in paths
+    assert "dir" not in paths
+
+
+def test_tree_entries_takes_only_the_paths_asked_for(
+    diffs: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "0")  # which would take ":x" as magic
+
+    def paths(*asked: str, recursive: bool = False) -> list[str]:
+        return [e.path for e in tree_entries(diffs, "p1", asked, recursive=recursive)]
+
+    assert paths("*", ":x", "dir", "nope", "-r") == ["*", ":x", "dir"]
+    assert paths("dir", recursive=True) == ["dir/f"]
+    assert paths("dir/") == ["dir/f"]
+    below = Path(diffs.directory, "below")
+    below.mkdir()
+    assert [e.path for e in tree_entries(Git(below), "p1", ["a"])] == ["a"]  # from the top
+
+
+@pytest.mark.parametrize("tree", ["nope", "-x"])
+def test_tree_entries_raises_for_a_name_that_names_no_tree(diffs: Git, tree: str) -> None:
+    with pytest.raises(UnknownRevisionError):
+        tree_entries(diffs, tree)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"100644 blob 0\0",  # no path
+        b"100644 blob 0\t\0",  # an empty one
+        b"100644 blob\ta\0",  # too few fields
+        b"100644 tag 0\ta\0",  # a type a tree can't hold
+    ],
+)
+def test_tree_entries_raises_for_output_git_doesnt_document(output: bytes) -> None:
+    git = FakeGit()
+    git.respond(["ls-tree"], output)
+
+    with pytest.raises(GitError, match="ls-tree printed"):
+        tree_entries(git, "p0")

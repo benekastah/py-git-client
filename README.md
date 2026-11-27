@@ -281,7 +281,7 @@ whatever `i18n.logOutputEncoding` says. A date is None where the commit records 
 datetime can't hold (a bad zone, a year past 9999), which git takes and fsck only warns of.
 `first_parent=True` follows only each merge's first parent.
 
-### Diffs
+### Diffs and trees
 
 `changed_paths` lists the paths each of many diffs changes, and `line_changes` how many lines
 each adds and removes there, with one `git cat-file --batch-check` to resolve the names and one
@@ -311,6 +311,24 @@ change what git reports. A name that is empty or holds a newline, a carriage ret
 raises ValueError. A `FakeGit` test responds to `["cat-file", "--batch-check"]` with a line for
 each name (`<id> commit 100`) and to `["diff-tree", "--stdin"]` with git's output. Merges'
 combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and patches aren't supported.
+
+`tree_entries` lists a tree's entries, from one `git ls-tree -z` (which takes one tree, so it's
+one process for each):
+
+```python
+from git_client import ReadOnlyGit, tree_entries
+
+reader = ReadOnlyGit("path/to/repo")
+for entry in tree_entries(reader, "main"):  # a tree, or a commit's; its top, in git's order
+    entry.mode, entry.type, entry.id, entry.path  # "100644", "blob" ("tree", "commit"), ...
+tree_entries(reader, "main", recursive=True)  # every file, in every directory (none of those)
+# Only these paths, from the top, literally: a directory's own entry, or with recursive=True
+# or a path ending in "/", its files.
+tree_entries(reader, "main", ["README.md", "src/"])
+```
+
+A name that names no tree raises `UnknownRevisionError`. A `FakeGit` test responds to
+`["ls-tree", "-z", "--full-tree"]` with git's output.
 
 ### Push results
 
@@ -428,15 +446,15 @@ A tool that only reads can show that it does with a `ReadOnlyGit`, which takes t
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
 `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-`git_common_dir`, `commits`, `count`, `any_commit`, `changed_paths`, `line_changes`, `status`,
-`worktrees` and `CatFile`. It has no public way to run a command of the caller's: no `run`,
-`run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it
-can't be asked to write: the library doesn't try to tell from a command line whether git would
-write (that's git's to decide, and it has no read-only mode to ask), it just doesn't take one.
-`Git` extends it, so a function that only reads takes a `ReadOnlyGit` and is given either; a
-type checker flags a call of `run` on one. A tool that reads with other commands (`log`, `diff`,
-...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a `Git`, and
-raises `TypeError` for a `ReadOnlyGit`.
+`git_common_dir`, `commits`, `count`, `any_commit`, `changed_paths`, `line_changes`,
+`tree_entries`, `status`, `worktrees` and `CatFile`. It has no public way to run a command of
+the caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`,
+which are `Git`'s. So it can't be asked to write: the library doesn't try to tell from a command
+line whether git would write (that's git's to decide, and it has no read-only mode to ask), it
+just doesn't take one. `Git` extends it, so a function that only reads takes a `ReadOnlyGit` and
+is given either; a type checker flags a call of `run` on one. A tool that reads with other
+commands (`log`, `diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given,
+so it takes a `Git`, and raises `TypeError` for a `ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")

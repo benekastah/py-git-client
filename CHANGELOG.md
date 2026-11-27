@@ -164,6 +164,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`git_stack/integrations.py:780`), `log --name-only` and `--name-status -z`, by `commits()`
   and `changed_paths` of their ids (a merge's paths, which `log` doesn't list by default,
   aren't listed either).
+- `tree_entries(git, tree, paths=(), *, recursive=False)` lists a tree's entries (`TreeEntry`:
+  mode, type, object id, path from the top), from one `git ls-tree -z --full-tree`, its paths
+  taken literally. A tool replaces its raw `ls-tree` runs and parsers: git-recommit's
+  `add_unchanged` (`git_recommit/session.py:333`, run per file: one call with all the paths
+  instead) and `_trees` (`oldcommits.py:255`, `recursive=True`), and git-stack's
+  `disjoint_source_paths` listing (`git_stack/integrations.py:801`).
 - `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
   `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
   in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`,
