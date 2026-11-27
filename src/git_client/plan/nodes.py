@@ -3,7 +3,7 @@
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the package.
 # pyright: reportPrivateUsage=false
 
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self, cast, override
 
@@ -88,10 +88,12 @@ class Node[T]:
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
     @classmethod
-    def execute_group(cls, nodes: Sequence[Any], plan: Plan) -> None:
+    def execute_group(cls, nodes: Sequence[Any], plan: Plan) -> Generator[None] | None:
         """Run the group (nodes of this class), and give each member its result (`_set`)
         or its own error (`_fail`). An exception it raises fails every member left without
-        either."""
+        either. One that runs git is a generator that starts its process (with Started),
+        yields while it runs, then collects it: the plan starts every group's process
+        before it collects any, so they run at once, in no thread but the caller's."""
         raise NotImplementedError
 
     def get(self) -> T:

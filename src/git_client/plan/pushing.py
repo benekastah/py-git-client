@@ -3,9 +3,10 @@
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the package.
 # pyright: reportPrivateUsage=false
 
-from collections.abc import Hashable, Iterable, Sequence
+from collections.abc import Generator, Hashable, Iterable, Sequence
 from typing import TYPE_CHECKING, Self, cast, override
 
+from git_client.client import Started
 from git_client.errors import GitError, PushRejectedError, error_for
 from git_client.plan.nodes import Effect, Node, lift
 from git_client.plan.resources import (
@@ -15,7 +16,14 @@ from git_client.plan.resources import (
     Resource,
     TrackingRef,
 )
-from git_client.pushing import PushRef, PushResult, PushStatus, PushUpdate, push
+from git_client.pushing import (
+    PushRef,
+    PushResult,
+    PushStatus,
+    PushUpdate,
+    push_arguments,
+    push_result,
+)
 
 if TYPE_CHECKING:
     from git_client.plan.running import Plan
@@ -88,13 +96,15 @@ class Push(Effect[tuple[PushRef, ...]]):
 
     @override
     @classmethod
-    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> Generator[None]:
         remote, atomic = cast(tuple[str, bool], nodes[0].batch_key(plan))
         updates = dict.fromkeys(
             PushUpdate(node._ref(), node._ref(), force=node.force.get(), lease=node.lease.get())
             for node in nodes
         )
-        result = push(plan.git, remote, updates, atomic=atomic)
+        with Started(plan.git, *push_arguments(remote, updates, atomic=atomic)) as started:
+            yield
+            result = push_result(started.result())
         # What a GitError shows as the command: push() doesn't say its own.
         command = ["push", remote, *(update.target for update in updates)]
         for node in nodes:

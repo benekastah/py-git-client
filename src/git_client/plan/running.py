@@ -5,8 +5,7 @@
 
 import graphlib
 import itertools
-from collections.abc import Hashable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Generator, Hashable
 
 from git_client.client import Git
 from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped
@@ -25,13 +24,14 @@ class Plan:
     with anything. Each round runs every node that may run, but for those that write, while
     a read may run: so reads run as early as they can, and then the writes that are left
     wait for nothing but each other, and share groups. A round's nodes don't conflict, so
-    its groups run at once, on up to `max_workers` more threads (the calling thread runs
-    one). Without `reorder`, nodes run one at a time, in program order.
+    its groups run at once: the plan starts every group's git process, then waits for each
+    in turn, in the calling thread (work in-process just runs). Without `reorder`, nodes
+    run one at a time, in program order.
 
-    Every process starts through `git` (its `process`), so its timeout, `stopping` and
-    process groups apply as to any of its commands. Ctrl-C reaches only a git the calling
-    thread runs (see ReadOnlyGit): on Ctrl-C, execute() waits for the git processes other
-    threads run to finish (or time out) before it raises KeyboardInterrupt.
+    Every process starts through `git` (its `popen`, see Started), so its timeout,
+    `stopping` and process groups apply as to any of its commands. On Ctrl-C, execute()
+    stops every git process the round started (as an interrupted command is stopped: see
+    ReadOnlyGit), then raises KeyboardInterrupt.
     """
 
     def __init__(
@@ -40,12 +40,10 @@ class Plan:
         *,
         atomic_pushes: bool = False,
         reorder: bool = True,
-        max_workers: int | None = None,
     ) -> None:
         self.git = git
         self.atomic_pushes = atomic_pushes
         self.reorder = reorder
-        self.max_workers = max_workers
         self.ops: list[Node[object]] = []
         self._access: dict[Node[object], Access | None] = {}
         self._key: dict[Node[object], Hashable] = {}
@@ -102,20 +100,15 @@ class Plan:
         self._access.clear()
         self._key.clear()
         groups_of: dict[Node[object], list[Node[object]]] = {}
-        with ThreadPoolExecutor(self.max_workers) as pool:
-            while left:
-                groups = self._round(left)
-                for group in groups:
-                    groups_of.update((node, group) for node in group)
-                *others, mine = groups or [[]]
-                futures = [pool.submit(self._run_group, group) for group in others]
-                self._run_group(mine)
-                for future in futures:
-                    future.result()
-                still = [node for node in left if not node._done and node._error is None]
-                if len(still) == len(left):  # each round finishes the first node left
-                    raise PlanError(f"no node of {left!r} could run")
-                left = still
+        while left:
+            groups = self._round(left)
+            for group in groups:
+                groups_of.update((node, group) for node in group)
+            self._run(groups)
+            still = [node for node in left if not node._done and node._error is None]
+            if len(still) == len(left):  # each round finishes the first node left
+                raise PlanError(f"no node of {left!r} could run")
+            left = still
         failures = {
             node: node._error
             for node in order
@@ -172,16 +165,38 @@ class Plan:
         a, b = self._access.get(earlier), self._access[node]
         return a is None or b is None or a.conflicts(b)
 
-    def _run_group(self, group: list[Node[object]]) -> None:
-        if not group:
-            return
+    def _run(self, groups: list[list[Node[object]]]) -> None:
+        """Run the groups: start each one's processes, then collect each (see
+        Node.execute_group). On an interrupt, stop every process started."""
+        running: list[tuple[list[Node[object]], Generator[None]]] = []
         try:
-            type(group[0]).execute_group(group, self)
-        # Whatever it raises is its members' failure.
-        except Exception as error:  # noqa: BLE001
+            for group in groups:
+                try:
+                    steps = type(group[0]).execute_group(group, self)
+                    if steps is not None:
+                        running.append((group, steps))
+                        next(steps, None)
+                # Whatever it raises is its members' failure.
+                except Exception as error:  # noqa: BLE001
+                    _fail(group, error)
+            for group, steps in running:
+                try:
+                    for _ in steps:
+                        pass
+                except Exception as error:  # noqa: BLE001
+                    _fail(group, error)
+        except BaseException:
+            for _, steps in running:
+                steps.close()  # which stops its processes
+            raise
+        for group in groups:
             for node in group:
-                if not node._done:
-                    node._fail(error)
-        for node in group:
-            if not node._done and node._error is None:
-                node._fail(PlanError(f"{node!r} was given no result"))
+                if not node._done and node._error is None:
+                    node._fail(PlanError(f"{node!r} was given no result"))
+
+
+def _fail(group: list[Node[object]], error: Exception) -> None:
+    """Fail the group's members left without a result with `error`."""
+    for node in group:
+        if not node._done:
+            node._fail(error)

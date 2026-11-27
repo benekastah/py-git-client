@@ -2,31 +2,29 @@
 # pyright: reportUnnecessaryTypeIgnoreComment=true
 import graphlib
 import random
-import threading
+import subprocess
 import time
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self, assert_type, override
+from typing import IO, Self, assert_type, override
 
 import pytest
 
-import git_client.plan.config
-import git_client.plan.pushing
 from git_client import (
+    Arg,
+    EnvValue,
     Git,
     GitError,
+    GitTimeoutError,
     PushDestination,
     PushRef,
     PushRejectedError,
     PushResult,
     PushStatus,
-    PushUpdate,
-    ReadOnlyGit,
     RemoteError,
-    config,
-    push,
 )
+from git_client.client import Started
 from git_client.plan import (
     CONFIG,
     Access,
@@ -500,22 +498,15 @@ def test_a_config_write_and_read_run_one_at_a_time(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
-
-    def recording_config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
-        events.append("start read")
-        time.sleep(0.05)  # so a write started meanwhile would show
-        entries = config(git)
-        events.append("end read")
-        return entries
-
-    monkeypatch.setattr(git_client.plan.config, "config", recording_config)
-    plan = Plan(repo)
+    collecting(events, monkeypatch)
+    plan = Plan(StartingGit(repo.directory, events))
     plan.add(SetConfig("example.key", "new", events=events))
-    plan.add(ConfigValue("example.key"))
+    read = plan.add(ConfigValue("example.key"))
 
     plan.execute()
 
-    assert [event.split()[0] for event in events] == ["start", "end", "start", "end"]
+    assert events == ["start write", "end write", "start --list", "collect"]
+    assert read.get() == "new"
 
 
 def test_a_read_waits_for_an_earlier_write_that_isnt_ready_yet(remotes: Git) -> None:
@@ -716,23 +707,17 @@ def test_a_read_sees_the_writes_added_before_it_and_none_after(repo: Git) -> Non
 
 
 def test_pushes_to_two_remotes_run_at_once(remotes: Git, monkeypatch: pytest.MonkeyPatch) -> None:
-    meeting = threading.Barrier(2, timeout=10)  # till the other starts too
-
-    def meeting_push(
-        git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
-    ) -> PushResult:
-        meeting.wait()
-        return push(git, remote, updates, atomic=atomic)
-
-    monkeypatch.setattr(git_client.plan.pushing, "push", meeting_push)
+    events: list[str] = []
+    collecting(events, monkeypatch)
     remotes.run("config", "example.remote", "mirror")
-    plan = Plan(remotes)
+    plan = Plan(StartingGit(remotes.directory, events))
     # The second's remote is read first: reads run before the pushes, which then run together.
     to_origin = plan.add(Push("origin", "a"))
     to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "a"))
 
     plan.execute()
 
+    assert events[-4:] == ["start origin", "start mirror", "collect", "collect"]
     assert [ref.status for ref in to_origin.get() + to_mirror.get()] == [PushStatus.UP_TO_DATE] * 2
 
 
@@ -834,3 +819,90 @@ def test_what_a_push_writes_conflicts_with() -> None:
     assert not pushing.conflicts(
         Access(frozenset({LocalRef("refs/heads/a"), LocalRef("refs/tags/a"), CONFIG}), frozenset())
     )
+
+
+class StartingGit(Git):
+    """A Git that notes each process it starts, and keeps them."""
+
+    def __init__(self, directory: str, events: list[str], timeout: float | None = None) -> None:
+        super().__init__(directory, timeout=timeout)
+        self.events = events
+        self.started: list[subprocess.Popen[bytes]] = []
+
+    @override
+    def popen(
+        self,
+        *args: Arg,
+        env: Mapping[str, EnvValue] | None = None,
+        stderr: int | IO[bytes] = subprocess.DEVNULL,
+    ) -> subprocess.Popen[bytes]:
+        process = super().popen(*args, env=env, stderr=stderr)
+        self.events.append(f"start {args[-2]}")
+        self.started.append(process)
+        return process
+
+
+def collecting(events: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Note in `events` each process the plan collects."""
+    result = Started.result
+
+    def noting(self: Started) -> subprocess.CompletedProcess[bytes]:
+        events.append("collect")
+        return result(self)
+
+    monkeypatch.setattr(Started, "result", noting)
+
+
+def test_independent_groups_start_together_and_are_collected_in_turn(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    collecting(events, monkeypatch)
+    plan = Plan(StartingGit(remotes.directory, events))
+    to_origin, to_mirror = plan.add(Push("origin", "a")), plan.add(Push("mirror", "a"))
+
+    plan.execute()
+
+    assert events == ["start origin", "start mirror", "collect", "collect"]
+    assert [ref.status for ref in to_origin.get() + to_mirror.get()] == [PushStatus.UP_TO_DATE] * 2
+
+
+def slow_pushes(git: Git) -> None:
+    """Make each push of `git` wait, in its pre-push hook, far longer than a test."""
+    hook = Path(git.directory) / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+
+def test_every_started_process_past_its_timeout_fails_its_node(remotes: Git) -> None:
+    slow_pushes(remotes)
+    events: list[str] = []
+    plan = Plan(StartingGit(remotes.directory, events, timeout=0.5))
+    first, second = plan.add(Push("origin", "a")), plan.add(Push("mirror", "a"))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert set(raised.value.failures) == {first, second}
+    assert all(isinstance(e, GitTimeoutError) for e in raised.value.failures.values())
+
+
+def test_an_interrupt_stops_every_started_process(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slow_pushes(remotes)
+
+    def interrupted(self: Started) -> subprocess.CompletedProcess[bytes]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Started, "result", interrupted)
+    git = StartingGit(remotes.directory, [])
+    plan = Plan(git)
+    plan.add(Push("origin", "a"))
+    plan.add(Push("mirror", "a"))
+
+    with pytest.raises(KeyboardInterrupt):
+        plan.execute()
+
+    assert len(git.started) == 2
+    assert all(process.poll() is not None for process in git.started)

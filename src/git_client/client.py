@@ -2,6 +2,7 @@
 text and paths to it as git expects them."""
 
 import contextlib
+import contextvars
 import enum
 import functools
 import os
@@ -12,7 +13,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import IO, Final, Literal
+from typing import IO, Final, Literal, Self
 
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
 from git_client.errors import (
@@ -445,6 +446,13 @@ def start_process(
     return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
 
 
+# Set while Started starts a process through popen: whether git gets a process group of its
+# own, as start_process gives one for the same timeout.
+_started_in_own_group: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
+    "_started_in_own_group", default=None
+)
+
+
 def start_popen(
     git: ReadOnlyGit,
     args: Sequence[Arg],
@@ -453,18 +461,89 @@ def start_popen(
     stderr: int | IO[bytes],
 ) -> subprocess.Popen[bytes]:
     """Start `command` (git's, for `args`) as Git.popen says: where every long-lived git
-    process starts, a ReadOnlyGit's and a Git's (git_calls wraps it)."""
+    process starts, a ReadOnlyGit's and a Git's (git_calls wraps it), and those Started
+    starts, to collect later."""
     refuse_if_stopping(git, args)
+    own_group = _started_in_own_group.get()
     return open_git_process(
         command,
         git.performance,
         args,
-        persistent=True,
+        persistent=own_group is None,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=stderr,
         env=environment,
+        process_group=0 if own_group else None,
     )
+
+
+class Started:
+    """A git process started now, through the client's `popen` (so a Git subclass that
+    overrides it, and git_calls, see it start), whose finished process `result()` gives
+    later, as `process(..., capture_output=True)` would: git's messages in English, stdout
+    captured, stderr too (in a temporary file, as popen takes no pipe for it); past the
+    client's timeout (counted from the start) stopped, raising GitTimeoutError; on an
+    interrupt, stopped; in a process group of its own where `process` would give it one.
+    Leaving its `with` block before the result stops it. For a caller that starts several
+    independent processes, then collects each in turn: none waits on another, so that can't
+    deadlock."""
+
+    def __init__(
+        self,
+        git: ReadOnlyGit,
+        *args: Arg,
+        input: bytes | None = None,
+        timeout: Timeout = CLIENT_TIMEOUT,
+    ) -> None:
+        seconds = git.timeout if timeout is CLIENT_TIMEOUT else timeout
+        self._args, self._input = args, input
+        self._own_group = _own_process_group(seconds, git.process_groups)
+        self._deadline = None if seconds is None else time.monotonic() + seconds
+        import tempfile  # here: importing it takes milliseconds every tool would pay
+
+        # Closed in __exit__, or here if git doesn't start.
+        self._errors = tempfile.TemporaryFile()  # noqa: SIM115
+        token = _started_in_own_group.set(self._own_group)
+        try:
+            self.process = read_popen(git, *args, stderr=self._errors)
+        except BaseException:
+            self._errors.close()
+            raise
+        finally:
+            _started_in_own_group.reset(token)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        if self.process.poll() is None:
+            _stop(self.process, self._own_group, interrupted=True)
+            _let_go_of_output(self.process)
+        self._errors.close()
+
+    def result(self) -> subprocess.CompletedProcess[bytes]:
+        """The finished process (see the class)."""
+        remaining = None if self._deadline is None else self._deadline - time.monotonic()
+        try:
+            output, _ = self.process.communicate(self._input, timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _stop(self.process, self._own_group, interrupted=False)
+            output, _ = _remaining_output(self.process)
+            raise GitTimeoutError(
+                self._args, None, decode(self._stderr()), decode(output or b"")
+            ) from None
+        except BaseException:  # e.g. KeyboardInterrupt
+            _stop(self.process, self._own_group, interrupted=True)
+            _let_go_of_output(self.process)
+            raise
+        return subprocess.CompletedProcess(
+            self.process.args, self.process.returncode, output, self._stderr()
+        )
+
+    def _stderr(self) -> bytes:
+        self._errors.seek(0)
+        return self._errors.read()
 
 
 def stdout_of(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:

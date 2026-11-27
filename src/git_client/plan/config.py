@@ -4,12 +4,12 @@
 # pyright: reportPrivateUsage=false
 
 import re
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, cast, override
 
-from git_client.batch import config
-from git_client.client import decode, error_from
+from git_client.batch import CONFIG_LIST, config_entries
+from git_client.client import Started, decode, error_from, stdout_of
 from git_client.plan.nodes import Map, Node, lift
 from git_client.plan.resources import CONFIG, Resource
 
@@ -47,8 +47,10 @@ class ConfigValue(Node[str | None]):
 
     @override
     @classmethod
-    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
-        entries = config(plan.git)
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> Generator[None]:
+        with Started(plan.git, *CONFIG_LIST) as started:
+            yield
+            entries = config_entries(stdout_of(CONFIG_LIST, started.result()))
         for node in nodes:
             values = entries.get(node.key.get())
             node._set((values[-1] or "") if values else None)
@@ -110,12 +112,14 @@ class TypedConfig[T](Node[T]):
 
     @override
     @classmethod
-    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> Generator[None]:
         keys = dict.fromkeys(node.key.get() for node in nodes)
         pattern = "|".join(_ERE_SPECIAL.sub(r"\\\g<0>", key) for key in keys)
         git_type = nodes[0].git_type
         args = ["config", "-z", f"--type={git_type}", "--get-regexp", f"^({pattern})$"]
-        result = plan.git.process(*args, capture_output=True)
+        with Started(plan.git, *args) as started:
+            yield
+            result = started.result()
         if result.returncode not in (0, 1):  # 1: none of them is set
             raise error_from(args, result)
         typed: dict[str, str] = {}
