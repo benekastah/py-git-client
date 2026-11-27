@@ -2,16 +2,18 @@
 # pyright: reportUnnecessaryTypeIgnoreComment=true
 import graphlib
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from pathlib import Path
-from typing import assert_type
+from typing import Self, assert_type, override
 
 import pytest
 
 import git_client.plan
 from git_client import Arg, Git, GitError, PushRejectedError, PushResult, PushStatus, push
 from git_client.plan import (
+    CONFIG,
     ConfigValue,
+    Effect,
     ExecutionException,
     Map,
     Node,
@@ -235,26 +237,107 @@ def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
     assert remote_tip(remotes, "origin", "b") == remotes.run("rev-parse", "HEAD")
 
 
-def test_pushes_ready_in_different_rounds_are_not_merged(
+def test_a_push_waits_for_another_to_the_same_remote_past_reads(
     remotes: Git, git_calls: list[GitCall]
 ) -> None:
     remotes.run("config", "example.push-with-force", "on")
     remotes.run("branch", "-f", "a", "HEAD~1")
     git_calls.clear()
     plan = Plan(remotes)
-    # b's force is known at once; a's once its config is read, a round later.
+    # b is ready at once; a once its config is read, which no push conflicts with.
     forced = plan.add(Push("origin", "a", force=ConfigValue("example.push-with-force").as_bool()))
     plain = plan.add(Push("origin", "b", force=False))
 
     plan.execute()
 
-    assert pushes(git_calls) == [
-        [*PUSH, "origin", "refs/heads/b:refs/heads/b"],
-        [*PUSH, "origin", "+refs/heads/a:refs/heads/a"],
-    ]
+    (push,) = pushes(git_calls)
+    assert sorted(push[4:]) == ["+refs/heads/a:refs/heads/a", "origin", "refs/heads/b:refs/heads/b"]
     assert [ref.status for ref in forced.get() + plain.get()] == [
         PushStatus.FORCED,
         PushStatus.UP_TO_DATE,
+    ]
+    assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD~1")
+
+
+class SetConfig(Effect[None]):
+    """Sets a config key: declares that it writes config."""
+
+    def __init__(self, key: str, value: str, *, after: Iterable[Node[object]] = ()) -> None:
+        self.key, self.value, self.after = key, value, list(after)
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return (CONFIG,)
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            plan.git.run("config", node.key, node.value)
+            node._set(None)
+
+
+def test_a_push_waits_for_no_node_that_writes_what_it_reads(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    remotes.run("branch", "c")
+    remotes.run("branch", "d")
+    git_calls.clear()
+    plan = Plan(remotes)
+    early = plan.add(Push("origin", "c"))
+    # Changes where origin pushes to, so c must push before it, as the graph has it.
+    moving = SetConfig("remote.origin.pushurl", "../mirror.git", after=[ConfigValue("x.y")])
+    late = plan.add(Push("origin", "d", force=ConfigValue("x.z").as_bool(), after=[moving]))
+
+    plan.execute()
+
+    assert [call[-1] for call in git_calls if call[:4] == PUSH or call[0] == "config"][-3:] == [
+        "refs/heads/c:refs/heads/c",
+        "../mirror.git",
+        "refs/heads/d:refs/heads/d",
+    ]
+    assert [ref.status for ref in early.get() + late.get()] == [PushStatus.CREATED] * 2
+    assert remote_tip(remotes, "origin", "c") == remote_tip(remotes, "mirror", "d")
+
+
+class Undeclared(Node[None]):
+    """Runs `git version` after `input`, declaring nothing of what it reads or writes."""
+
+    def __init__(self, input: Node[object]) -> None:
+        self.input = input
+
+    @override
+    def inputs(self) -> Iterable[Node[object]]:
+        return (self.input,)
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            plan.git.run("version")
+            node._set(None)
+
+
+def test_nothing_moves_past_a_node_that_declares_nothing(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    git_calls.clear()
+    plan = Plan(remotes)
+    plan.add(Push("origin", "a"))
+    plan.add(Undeclared(ConfigValue("x.y")))
+    later_force = Map(bool, ConfigValue("x.z").as_bool())
+    plan.add(Push("origin", "b", force=later_force))
+
+    plan.execute()
+
+    assert [call[-1] for call in git_calls if call[:4] == PUSH or call == ["version"]] == [
+        "refs/heads/a:refs/heads/a",
+        "version",
+        "refs/heads/b:refs/heads/b",
     ]
 
 

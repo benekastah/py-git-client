@@ -15,10 +15,12 @@ where git has a batch form), the groups on different lanes in parallel. Nodes ar
 replaced: a group writes each member's result back onto the member.
 
 Only data and `after=` order nodes: ops with no edge between them are independent, whatever
-order they were added in. So nodes merge only if they're ready in the same round: pushes that
-share their inputs (one `force` node, as above) are, but a push whose inputs are all plain
-values runs in the first round, and won't merge with one whose `force` comes from config,
-which is ready only once that's read.
+order they were added in. To run fewer processes, a ready group may wait for a node of its
+class that isn't ready yet (a push whose `force` is still to be read from config, say), but
+only where that gives the same result as running the graph in order: each node declares the
+resources it reads and writes (`Node.reads`, `Node.writes`; e.g. CONFIG, a remote's ref), and
+a node never moves past one it conflicts with (one writes what the other reads or writes), nor
+past an edge. A node that declares nothing conflicts with everything, so nothing moves past it.
 """
 
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the module.
@@ -96,6 +98,18 @@ class Node[T]:
         del plan
         return None
 
+    def reads(self, plan: Plan) -> Iterable[Hashable] | None:
+        """What the node reads (e.g. CONFIG), asked once its inputs are done, so the plan
+        knows which nodes it may run it before or after (see Plan). None, the default:
+        undeclared, as if it read and wrote everything, so it's never moved."""
+        del plan
+        return None
+
+    def writes(self, plan: Plan) -> Iterable[Hashable] | None:
+        """What the node writes, as `reads`."""
+        del plan
+        return None
+
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
     @classmethod
@@ -138,6 +152,10 @@ class Value[T](Node[T]):
         self._set(self.value)
 
 
+CONFIG = ("config",)
+"""The resource that what reads or writes git's config declares (see Node.reads)."""
+
+
 def lift[T](value: T | Node[T]) -> Node[T]:
     """`value` if it's a node already, else a Value of it."""
     if isinstance(value, Node):
@@ -150,7 +168,8 @@ class Map[T](Node[T]):
     (e.g. a branch name built from others), never one of git's decisions (config syntax,
     ref names, ...), which git makes. It can't add ops to the plan. It's never batched, and
     an exception it raises fails it like any other failure. `fn`'s parameters aren't typed
-    against `inputs`: Python can't map each input's type to `Node[...]`."""
+    against `inputs`: Python can't map each input's type to `Node[...]`. `fn` must be pure:
+    it reads and writes nothing but its arguments and result, as Map declares."""
 
     def __init__(self, fn: Callable[..., T], *inputs: Node[object]) -> None:
         self.fn = fn
@@ -159,6 +178,14 @@ class Map[T](Node[T]):
     @override
     def inputs(self) -> Iterable[Node[object]]:
         return self._inputs
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
 
     @override
     @classmethod
@@ -190,6 +217,14 @@ class ConfigValue(Node[str | None]):
     @override
     def batch_key(self, plan: Plan) -> Hashable:
         return None
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return (CONFIG,)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
 
     @override
     @classmethod
@@ -245,6 +280,14 @@ class TypedConfig[T](Node[T]):
     @override
     def batch_key(self, plan: Plan) -> Hashable:
         return self.git_type
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return (CONFIG,)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
 
     @override
     @classmethod
@@ -329,6 +372,17 @@ class Push(Effect[tuple[PushRef, ...]]):
     @override
     def lane(self, plan: Plan) -> Hashable | None:
         return Push, self.remote.get()
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        # The remote's config, and the local branch.
+        return CONFIG, ("ref", ".", self._ref())
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        # The remote's branch, and the remote-tracking ref git updates for it.
+        remote = self.remote.get()
+        return ("ref", remote, self._ref()), ("remote-tracking", remote, self._ref())
 
     def _ref(self) -> str:
         return f"refs/heads/{self.branch.get()}"
@@ -430,10 +484,12 @@ class Plan:
         graph, copies = self._crawl()
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
+        order = _Order(graph)
         groups_of: dict[Node[object], list[Node[object]]] = {}
+        held: list[Node[object]] = []
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
-                now = [*sorter.get_ready()]
+                now, held = order.choose([*held, *sorter.get_ready()], self)
                 self._run_round(now, graph, groups_of, pool)
                 for copy, original in copies:
                     if not copy._done:
@@ -482,3 +538,109 @@ class Plan:
             for node in group:
                 if not node._done and node._error is None:
                     node._fail(PlanError(f"{node!r} was given no result"))
+
+
+type _Resources = tuple[frozenset[Hashable], frozenset[Hashable]] | None
+"""What a node reads and writes, or None if it doesn't say."""
+
+
+class _Order:
+    """Which ready nodes a plan runs now, and which it holds back: a node may wait for a node
+    of its class that's not ready yet, so they can share a group, as long as the result is
+    the one running in graph order gives.
+
+    Running in graph order, a node runs at its level (one past its inputs' highest), and the
+    nodes of a level at once. So of two nodes whose resources conflict (one writes what the
+    other reads or writes, or either declares nothing), the one of the lower level runs
+    first, in an earlier round; nodes that don't conflict may run in any order. A node is
+    held back only while that stays true: once a node of a higher level that conflicts with
+    it is ready, it runs, and that node waits for the next round. A node never waits for one
+    that depends on it.
+    """
+
+    def __init__(self, graph: Graph) -> None:
+        self.graph = graph
+        self.level: dict[Node[object], int] = {}
+        for node in graphlib.TopologicalSorter(graph).static_order():
+            self.level[node] = 1 + max((self.level[input] for input in graph[node]), default=-1)
+        self.dependents: dict[Node[object], list[Node[object]]] = {node: [] for node in graph}
+        for node, inputs in graph.items():
+            for input in inputs:
+                self.dependents[input].append(node)
+        self.seen: set[Node[object]] = set()  # every node that's been ready
+        self.resources: dict[Node[object], _Resources] = {}
+
+    def choose(
+        self, ready: list[Node[object]], plan: Plan
+    ) -> tuple[list[Node[object]], list[Node[object]]]:
+        """The ready nodes to run now, and those to hold back."""
+        self.seen.update(ready)
+        movable: list[Node[object]] = []
+        now: list[Node[object]] = []
+        for node in ready:
+            # One done, or that won't run (it reads a node that failed), goes at once.
+            runs = not node._done and all(input._done for input in self.graph[node])
+            (movable if runs else now).append(node)
+        for node in movable:
+            if node not in self.resources:
+                reads, writes = node.reads(plan), node.writes(plan)
+                if reads is None or writes is None:
+                    self.resources[node] = None
+                else:
+                    self.resources[node] = (frozenset(reads), frozenset(writes))
+        groups: dict[Hashable, list[Node[object]]] = {}
+        for node in movable:
+            groups.setdefault((type(node), node.batch_key(plan)), []).append(node)
+        waiting = {
+            node for group in groups.values() if self._worth_waiting(group) for node in group
+        }
+        changed = True
+        while changed:  # till no node that would run must run after one waiting
+            changed = False
+            for node in movable:
+                for other in [*waiting]:
+                    if node not in waiting and self._before(other, node):
+                        waiting.discard(other)
+                        changed = True
+        if len(waiting) == len(movable):
+            waiting.clear()  # else nothing would run, and nothing become ready
+        held = [node for node in movable if node in waiting]
+        for node in sorted((node for node in movable if node not in waiting), key=self._level):
+            if any(self._before(other, node) for other in (*now, *held)):
+                held.append(node)  # one it conflicts with runs first
+            else:
+                now.append(node)
+        return now, held
+
+    def _level(self, node: Node[object]) -> int:
+        return self.level[node]
+
+    def _before(self, first: Node[object], then: Node[object]) -> bool:
+        """Whether `first` must run in an earlier round than `then`."""
+        if self.level[first] >= self.level[then]:
+            return False
+        if first not in self.resources or then not in self.resources:
+            return False  # one done already, or skipped, runs nothing
+        a, b = self.resources[first], self.resources[then]
+        return a is None or b is None or bool(a[1] & (b[0] | b[1]) or b[1] & a[0])
+
+    def _worth_waiting(self, group: list[Node[object]]) -> bool:
+        """Whether a node of the group's class that's not been ready yet, and depends on
+        none of it, might join it."""
+        if any(self.resources[node] is None for node in group):
+            return False
+        after = self._descendants(group)
+        return any(
+            type(other) is type(group[0]) and other not in self.seen and other not in after
+            for other in self.graph
+        )
+
+    def _descendants(self, nodes: list[Node[object]]) -> set[Node[object]]:
+        found: set[Node[object]] = set()
+        pending = [*nodes]
+        while pending:
+            for dependent in self.dependents[pending.pop()]:
+                if dependent not in found:
+                    found.add(dependent)
+                    pending.append(dependent)
+        return found
