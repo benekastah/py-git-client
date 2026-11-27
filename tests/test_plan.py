@@ -9,7 +9,18 @@ from typing import Self, assert_type, override
 import pytest
 
 import git_client.plan.pushing
-from git_client import Git, GitError, PushRejectedError, PushResult, PushStatus, PushUpdate, push
+from git_client import (
+    Git,
+    GitError,
+    PushDestination,
+    PushRef,
+    PushRejectedError,
+    PushResult,
+    PushStatus,
+    PushUpdate,
+    RemoteError,
+    push,
+)
 from git_client.plan import (
     CONFIG,
     ConfigValue,
@@ -23,6 +34,7 @@ from git_client.plan import (
     Value,
     lift,
 )
+from git_client.plan.pushing import push_failure
 from git_client.testing import GitCall
 from tests.conftest import Changes
 
@@ -461,3 +473,71 @@ def test_sequence_pushes_one_after_another(remotes: Git, git_calls: list[GitCall
         [*PUSH, "--", "origin", f"refs/heads/{branch}:refs/heads/{branch}"] for branch in "ab"
     ]
     assert second.after == [first]
+
+
+def test_a_push_to_a_remote_that_doesnt_exist_fails_every_branch(remotes: Git) -> None:
+    plan = Plan(remotes)
+    first, second = plan.add(Push("nowhere", "a")), plan.add(Push("nowhere", "b"))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert set(raised.value.failures) == {first, second}
+    assert all(isinstance(error, RemoteError) for error in raised.value.failures.values())
+
+
+def test_a_push_that_failed_with_nothing_rejected_fails_its_branch(remotes: Git) -> None:
+    # Git stops at the push URL it can't reach, having pushed to the first: every ref it
+    # reported is accepted, yet the push failed.
+    remotes.run("config", "--add", "remote.origin.pushurl", "../origin.git")
+    remotes.run("config", "--add", "remote.origin.pushurl", "../missing.git")
+    remotes.run("branch", "c")
+    plan = Plan(remotes)
+    branch = plan.add(Push("origin", "c"))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert raised.value.node is branch
+    assert isinstance(raised.value.__cause__, RemoteError)
+    assert remote_tip(remotes, "origin", "c") == remotes.run("rev-parse", "c")
+
+
+def test_a_branch_a_destination_didnt_finish_reporting_isnt_pushed() -> None:
+    # Real git rejects every ref of a destination that failed outright (e.g. an unpacker
+    # error), so this report is made by hand: one that ends early, with the branch accepted.
+    accepted = PushRef("refs/heads/a", "refs/heads/a", PushStatus.CREATED, "[new]", None, None)
+    rejected = PushRef("refs/heads/b", "refs/heads/b", PushStatus.REJECTED, "[x]", None, None)
+    report = PushResult(1, "", "", (PushDestination("A", (accepted, rejected), done=False),))
+
+    assert push_failure(report, "refs/heads/a", ["push"]) is GitError
+
+
+@pytest.mark.parametrize(
+    "destinations",
+    [
+        (),
+        (
+            PushDestination(
+                "A", (PushRef("b", "refs/heads/b", PushStatus.CREATED, "", None, None),), done=True
+            ),
+        ),
+    ],
+    ids=["no destination", "another ref"],
+)
+def test_a_branch_git_didnt_report_isnt_pushed(destinations: tuple[PushDestination, ...]) -> None:
+    # Made by hand: real git reports every ref it was given, or fails.
+    report = PushResult(0, "", "", destinations)
+
+    assert push_failure(report, "refs/heads/a", ["push"]) is GitError
+
+
+def test_typed_config_reads_the_last_value_of_a_key(repo: Git) -> None:
+    repo.run("config", "example.flag", "false")
+    repo.run("config", "--add", "example.flag", "true")
+    plan = Plan(repo)
+    flag = plan.add(ConfigValue("example.flag").as_bool())
+
+    plan.execute()
+
+    assert flag.get() is True

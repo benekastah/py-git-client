@@ -6,9 +6,9 @@
 from collections.abc import Hashable, Iterable, Sequence
 from typing import TYPE_CHECKING, Self, cast, override
 
-from git_client.errors import PushRejectedError, error_for
+from git_client.errors import GitError, PushRejectedError, error_for
 from git_client.plan.nodes import CONFIG, Effect, Node, TrackingRef, lift
-from git_client.pushing import PushRef, PushStatus, PushUpdate, push
+from git_client.pushing import PushRef, PushResult, PushStatus, PushUpdate, push
 
 if TYPE_CHECKING:
     from git_client.plan.running import Plan
@@ -96,33 +96,35 @@ class Push(Effect[tuple[PushRef, ...]]):
             for node in nodes
         )
         result = push(plan.git, remote, updates, atomic=atomic)
-        reports = [
-            (destination, ref) for destination in result.destinations for ref in destination.refs
-        ]
-        # Git failed though every ref it reported is pushed: for a destination it didn't
-        # report (see push).
-        unexplained = result.returncode != 0 and all(
-            destination.done and ref.status in _PUSHED for destination, ref in reports
-        )
         # What a GitError shows as the command: push() doesn't say its own.
         command = ["push", remote, *(update.target for update in updates)]
         for node in nodes:
-            mine = [(destination, ref) for destination, ref in reports if ref.target == node._ref()]
-            if (
-                mine
-                and not unexplained
-                and all(destination.done and ref.status in _PUSHED for destination, ref in mine)
-            ):
-                node._set(tuple(ref for _, ref in mine))
-                continue
-            rejected = any(ref.status is PushStatus.REJECTED for _, ref in mine)
-            error = (
-                PushRejectedError
-                if rejected
-                else error_for(result.stderr, result.stdout, command=command)
-            )
-            node._fail(error(command, result.returncode, result.stderr, result.stdout))
+            error = push_failure(result, node._ref(), command)
+            if error is None:
+                refs = (ref for d in result.destinations for ref in d.refs)
+                node._set(tuple(ref for ref in refs if ref.target == node._ref()))
+            else:
+                node._fail(error(command, result.returncode, result.stderr, result.stdout))
 
     @override
     def __repr__(self) -> str:
         return f"Push({self.remote!r}, {self.branch!r})"
+
+
+def push_failure(result: PushResult, target: str, command: list[str]) -> type[GitError] | None:
+    """The error for `target` in `result`, or None if it's pushed: PushRejectedError if git
+    rejected it; else the error git's message says, unless every destination finished its
+    report (see PushDestination.done) and pushed it, and git succeeded or rejected another
+    ref (if not, a destination git didn't report failed: see push)."""
+    reported = [ref for destination in result.destinations for ref in destination.refs]
+    if any(ref.target == target and ref.status is PushStatus.REJECTED for ref in reported):
+        return PushRejectedError
+    every_destination = result.destinations and all(
+        destination.done
+        and any(ref.target == target and ref.status in _PUSHED for ref in destination.refs)
+        for destination in result.destinations
+    )
+    explained = result.returncode == 0 or any(ref.status not in _PUSHED for ref in reported)
+    if every_destination and explained:
+        return None
+    return error_for(result.stderr, result.stdout, command=command)
