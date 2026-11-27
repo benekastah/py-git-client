@@ -129,7 +129,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `--format=%H%x00%an...` with `--date=raw` becomes the `Commit`'s fields, and `--cherry-pick
   --right-only a...b` becomes `Revisions(b, exclude=a, cherry_pick=True)`. `author` matches
   the author the commit records, with no mailmap, where `git log --author` reads one by default
-  (log.mailmap); and the top of the worktree is the path `""`, not `"."`, which raises.
+  (log.mailmap); and the top of the worktree is the path `""`: `"."` matches nothing, so
+  move-forward's derive.py, whose `PurePosixPath(path).parent` gives `"."` for top-level
+  files, passes `""` for them.
 - `config_values(git, *keys, type=None)` reads keys' values as git reads them as a type
   (`ConfigType`: `git config --type`'s), the last of each, or None where a key isn't set,
   with one `git config --get-regexp` per call, so one per type. It replaces a tool's

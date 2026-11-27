@@ -200,11 +200,10 @@ def test_commits_that_change_paths_from_the_top_taken_literally(
     assert found(Git(Path(history.directory) / "src"), "b") == ["second"]
 
 
-# git reports no path with these, which, taken literally, would match nothing.
-@pytest.mark.parametrize("path", [".", "./b", "src/.", "src/../b", ".."])
-def test_a_path_git_wouldnt_report_is_refused(path: str) -> None:
-    with pytest.raises(ValueError, match="not a path from the top"):
-        Revisions("main", paths=[path])
+# Taken literally, as git reports no path with them, these match nothing: the top is "".
+@pytest.mark.parametrize("path", [".", "./b", "src/.", "src/../src", ".."])
+def test_a_path_with_a_dot_part_matches_nothing(history: Git, path: str) -> None:
+    assert commits(history, Revisions("main", paths=[path])) == []
 
 
 def test_many_revisions_take_one_process(history: Git, git_calls: list[GitCall]) -> None:
