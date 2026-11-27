@@ -263,6 +263,8 @@ STATUS = ["--no-optional-locks", "status", "--porcelain=v2", "-z"]
         b"3 x\0",  # a kind git doesn't document
         b"1 .M N... a\0",  # an entry cut short
         b"2 R. N... 100644 100644 100644 0 0 R100 b\0",  # a rename with no original path
+        b"2 R N... 100644 100644 100644 0 0 R100 b\0a\0",  # a one-letter XY
+        b"u U N... 100644 100644 100644 100644 0 0 0 a\0",  # a one-letter XY
     ],
 )
 def test_status_raises_for_output_git_doesnt_document(output: bytes) -> None:
