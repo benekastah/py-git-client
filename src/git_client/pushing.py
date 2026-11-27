@@ -1,11 +1,38 @@
-"""Structured results from a single git push."""
+"""One git push of many refs, and what it did at each destination."""
 
 import enum
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import KW_ONLY, dataclass
 
-from git_client.client import CLIENT_TIMEOUT, Arg, EnvValue, Git, Timeout, decode
+from git_client.client import CLIENT_TIMEOUT, EnvValue, Git, Timeout, decode
+
+
+@dataclass(frozen=True)
+class PushUpdate:
+    """A ref for `push` to change at the remote: point `target` there at `source` (a local
+    ref or object, read by git as a refspec's source), or delete it if `source` is None.
+
+    `force` lets git make a change that isn't a fast-forward. `lease`, if given, has git make
+    it only if the remote's `target` is at that object now (`""`: only if it doesn't exist),
+    and then even if it isn't a fast-forward: git's `--force-with-lease=<target>:<lease>`.
+
+    Raises ValueError for a `source` that git would read otherwise in the refspec `push`
+    builds: one starting with `+` (it would force; `refs/heads/+x` names such a branch) or
+    `""` (it would delete).
+    """
+
+    target: str
+    source: str | None
+    _: KW_ONLY
+    force: bool = False
+    lease: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.source == "":
+            raise ValueError("an empty source would delete the target: give None to delete")
+        if self.source is not None and self.source.startswith("+"):
+            raise ValueError(f"source {self.source!r} would force: give force=True to force")
 
 
 class PushStatus(enum.StrEnum):
@@ -44,17 +71,24 @@ class PushRef:
 
 @dataclass(frozen=True)
 class PushDestination:
-    """A destination Git reported, with the URL as displayed by Git."""
+    """A destination Git reported, with the URL as displayed by Git.
+
+    `done` is whether Git ended its report with `Done`, which it leaves out when the push to
+    that destination failed outright (e.g. an unpacker error): its refs are then the rows Git
+    printed before it went on, which may not be all of them.
+    """
 
     url: str
     refs: tuple[PushRef, ...]
+    done: bool
 
 
 @dataclass(frozen=True)
 class PushResult:
-    """What one push did: its exit status, captured output and completed reports.
+    """What one push did: its exit status, captured output and each destination's report.
 
-    `destinations` holds only the destinations whose report Git finished (with `Done`).
+    `destinations` holds each destination Git began a report for, in order, finished or not
+    (see `PushDestination.done`).
     """
 
     returncode: int
@@ -99,55 +133,84 @@ def _parse_ref(line: str) -> PushRef | None:
 
 
 def _destinations(stdout: str) -> tuple[PushDestination, ...]:
-    done: list[PushDestination] = []
+    reported: list[PushDestination] = []
     url: str | None = None
     refs: list[PushRef] = []
-    for line in stdout.split("\n"):
+
+    def end_report(done: bool) -> None:
+        if url and refs:
+            reported.append(PushDestination(url, tuple(refs), done))
+
+    for line in stdout.removesuffix("\n").split("\n"):
         if line.startswith("To "):
+            end_report(done=False)  # Git began the next report without finishing this one.
             url = line.removeprefix("To ")
             refs = []
         elif line == "Done":
-            if url and refs:
-                done.append(PushDestination(url, tuple(refs)))
+            end_report(done=True)
             url = None
-        elif url is not None and not line.startswith(("branch ", "Would set upstream ")):
+        elif url is not None and not line.startswith("branch "):
             ref = _parse_ref(line)
             if ref is None:
                 url = None
             else:
                 refs.append(ref)
-    return tuple(done)
+    end_report(done=False)
+    return tuple(reported)
 
 
 def push(
     git: Git,
-    *args: Arg,
+    remote: str,
+    updates: Iterable[PushUpdate],
+    *,
+    atomic: bool = False,
+    set_upstream: bool = False,
+    no_verify: bool = False,
     env: Mapping[str, EnvValue] | None = None,
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> PushResult:
-    """Run one git push and return the completed destination reports even on failure.
+    """Make every update at `remote` (a remote's name or a URL) with one git push, and return
+    each destination's report, even if the push failed.
 
-    It runs `git -c core.abbrev=no push --porcelain *args`, so a `FakeGit` test
-    responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
+    Without `atomic`, git makes the updates it can and rejects the others; with it, each
+    destination gets all of them or none. `set_upstream` sets the upstream of each local
+    branch pushed (as `--set-upstream`); `no_verify` skips the pre-push hook. A remote with
+    several push URLs is pushed to at each, in turn. Git's push config still applies (e.g.
+    `push.followTags`, whose tags it reports too).
 
-    A missing report leaves that destination's outcome unknown. A reported ref
-    update or rejection is from Git's machine-readable output. Fast-forwards and
-    forced updates report the full old and new OIDs when Git supplies them.
-    Other statuses may omit one or both OIDs. An unacknowledged update has
-    UNKNOWN status. Dry-run statuses describe projected changes. Don't pass
-    `--quiet`: Git then reports a destination only when a ref fails, so the
-    ones that succeed are left out, even with one push URL. With several push
-    URLs, a successful destination's bare `Done` can also complete the report
-    of an earlier destination whose push failed outright (e.g. an unpacker
-    error), which then looks finished.
-    Git's output is captured and launch errors and timeouts are raised as usual.
+    It runs `git -c core.abbrev=no push --porcelain [options] -- <remote> <refspecs>`, so a
+    `FakeGit` test responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with
+    porcelain output. Raises ValueError without an update (git would push what its config
+    says to); launch errors and timeouts are raised as usual.
+
+    A reported ref update or rejection is from Git's machine-readable output.
+    Fast-forwards and forced updates report the full old and new OIDs when Git
+    supplies them. Other statuses may omit one or both OIDs. An unacknowledged
+    update has UNKNOWN status. A destination whose push failed outright (e.g. an
+    unpacker error) has `done` False, and Git goes on to the next push URL. One whose
+    push failed before Git reported any ref (e.g. the pre-push hook refused it) has no
+    report, and Git goes on too: a nonzero `returncode` while every destination listed is
+    done and accepted means an unlisted one failed, as `stderr` says. One Git can't reach
+    (e.g. not a repository) stops the push: it and the push URLs after it have no report.
     """
+    updates = list(updates)
+    if not updates:
+        raise ValueError("push was given no updates")
+    switches = {"--atomic": atomic, "--set-upstream": set_upstream, "--no-verify": no_verify}
     result = git.process(
         "-c",
         "core.abbrev=no",
         "push",
         "--porcelain",
-        *args,
+        *(switch for switch, on in switches.items() if on),
+        *(f"--force-with-lease={u.target}:{u.lease}" for u in updates if u.lease is not None),
+        "--",
+        remote,
+        *(
+            f"{'+' if u.force else ''}{'' if u.source is None else u.source}:{u.target}"
+            for u in updates
+        ),
         capture_output=True,
         env=env,
         timeout=timeout,
