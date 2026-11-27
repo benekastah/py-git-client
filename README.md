@@ -227,19 +227,46 @@ it's closed, though one that has to start (again) raises. `FakeGit` takes it too
 
 ### Push results
 
-Use `push(git, *args)` to run one push and get a `PushResult` even if Git exits
-with a nonzero status. The result has the exit status and captured output,
-plus the completed destination reports. Each report contains the destination
-as Git displayed it and the source, target and status for each reported ref.
-Fast-forward and forced updates include full old and new object IDs when Git
-reports them. An unacknowledged ref has unknown status. Dry-run reports
-describe projected changes. Don't pass `--quiet`: Git then reports a destination
-only when a ref fails, so the ones that succeed are left out, even with one push URL.
-With several push URLs, a successful destination's bare `Done` can also complete the
-report of an earlier destination whose push failed outright (e.g. an unpacker error),
-which then looks finished.
-`push` runs `git -c core.abbrev=no push --porcelain` with your arguments, so a `FakeGit`
-test responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
+`push` makes many changes to a remote's refs with one `git push`, and reads what git says
+it did at each destination (each push URL), even when some failed:
+
+```python
+git = Git("path/to/repo")
+result = push(
+    git,
+    "origin",  # a remote's name, or a URL
+    [
+        PushUpdate("refs/heads/a", "a"),  # origin's a to our a, if that's a fast-forward
+        PushUpdate("refs/heads/b", "b", force=True),  # even if it isn't
+        # Only if origin's main is still at that object ("": only if it has no main).
+        PushUpdate("refs/heads/main", "main", lease=git.run("rev-parse", "origin/main")),
+        # PushUpdate("refs/heads/old", None) would delete origin's old.
+    ],
+    atomic=True,  # all or none, at each destination; also set_upstream=True, no_verify=True
+)
+result.returncode  # git's exit status; result.stdout and result.stderr, what it printed
+for destination in result.destinations:  # in order, as git printed them
+    destination.url  # as git printed it
+    destination.done  # False: the push there failed outright (e.g. an unpacker error)
+    for ref in destination.refs:  # each ref git reported there
+        ref.target, ref.source, ref.status  # e.g. PushStatus.FAST_FORWARD, REJECTED
+        ref.old_oid, ref.new_oid  # full object ids, for a fast-forward or forced update
+```
+
+A `PushUpdate` whose source starts with `+` or is `""` raises ValueError: only `force`
+forces, and only None deletes.
+
+Without `atomic`, git makes the changes it can and rejects the others. A ref git didn't hear
+back about has status UNKNOWN. A destination whose push failed outright has `done` False,
+and git goes on to the next push URL. One whose push failed before git reported any ref
+(e.g. the pre-push hook refused it) has no report, and git goes on too: a nonzero
+`returncode` while every destination listed is done and accepted means an unlisted one
+failed, as `stderr` says. One git can't reach (e.g. not a repository) stops the push, so it
+and the push URLs after it have no report. Git's push config still applies (e.g.
+`push.followTags`, whose tags it reports too). Other switches (`--dry-run`, push options,
+...) aren't supported. `push` runs `git -c core.abbrev=no push --porcelain [options] --
+<remote> <refspecs>`, so a `FakeGit` test responds to `["-c", "core.abbrev=no", "push",
+"--porcelain"]` with porcelain output.
 
 ### Caching
 
