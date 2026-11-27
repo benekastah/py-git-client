@@ -7,7 +7,16 @@ from collections.abc import Hashable, Iterable, Sequence
 from typing import TYPE_CHECKING, Self, cast, override
 
 from git_client.errors import GitError, PushRejectedError, error_for
-from git_client.plan.nodes import CONFIG, Effect, Node, TrackingRef, lift
+from git_client.plan.nodes import Effect, Node, lift
+from git_client.plan.resources import (
+    CONFIG,
+    Access,
+    LocalRef,
+    RemoteRef,
+    Resource,
+    TrackingRef,
+    overlap,
+)
 from git_client.pushing import PushRef, PushResult, PushStatus, PushUpdate, push
 
 if TYPE_CHECKING:
@@ -30,8 +39,8 @@ class Push(Effect[tuple[PushRef, ...]]):
 
     The round's pushes to one remote with the same `atomic` (None: the plan's
     `atomic_pushes`) are one `push` with an update each: atomic, all or nothing; else each
-    branch succeeds or fails alone. Groups to one remote run one after another; to
-    different remotes, in parallel. A branch fails if git rejected it (PushRejectedError),
+    branch succeeds or fails alone. Pushes run one at a time, as their remote-tracking refs
+    may be the same (see TrackingRef). A branch fails if git rejected it (PushRejectedError),
     if a destination's report of it isn't done, or if git didn't report it, or failed with
     nothing rejected (as git's message says).
     """
@@ -62,19 +71,28 @@ class Push(Effect[tuple[PushRef, ...]]):
         return self.remote.get(), self._atomic(plan)
 
     @override
-    def lane(self, plan: Plan) -> Hashable | None:
-        return Push, self.remote.get()
-
-    @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         # The remote's config, and the local branch.
-        return CONFIG, ("ref", ".", self._ref())
+        return CONFIG, LocalRef(self._ref())
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
-        # The branch at the remote, whichever: two remotes may be one repository (a name and
-        # its URL, say), which only git could tell. And the remote-tracking ref git updates.
-        return ("ref", "remote", self._ref()), TrackingRef(self.remote.get(), self._ref())
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return RemoteRef(self._ref()), TrackingRef(self.remote.get(), self._ref())
+
+    @override
+    @classmethod
+    def keeps_order(cls, earlier: Access, later: Access) -> bool:
+        # Git reads what a push reads before it updates anything, and updates remote-tracking
+        # refs in the order of its refspecs (a group's order); two updates of one remote ref
+        # in one push fail.
+        if overlap(earlier.writes, later.reads):
+            return False
+        return all(
+            isinstance(first, TrackingRef) and isinstance(then, TrackingRef)
+            for first in earlier.writes
+            for then in later.writes
+            if overlap((first,), (then,))
+        )
 
     @override
     def waits(self, plan: Plan) -> bool:

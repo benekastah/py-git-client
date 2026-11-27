@@ -1,5 +1,4 @@
-"""A plan's nodes: what every node has, plain values, derived ones, and the resources nodes
-declare."""
+"""A plan's nodes: what every node has, plain values, derived ones, and effects."""
 
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the package.
 # pyright: reportPrivateUsage=false
@@ -7,6 +6,8 @@ declare."""
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self, cast, override
+
+from git_client.plan.resources import Access, Resource
 
 if TYPE_CHECKING:
     from git_client.plan.running import Plan
@@ -79,24 +80,35 @@ class Node[T]:
         del plan
         return None
 
-    def reads(self, plan: Plan) -> Iterable[Hashable] | None:
+    def reads(self, plan: Plan) -> Iterable[Resource] | None:
         """What the node reads (e.g. CONFIG), asked once its inputs are done, so the plan
         knows which nodes it may run it before or after (see Plan). None, the default:
         undeclared, as if it read and wrote everything, so it's never moved."""
         del plan
         return None
 
-    def writes(self, plan: Plan) -> Iterable[Hashable] | None:
+    def writes(self, plan: Plan) -> Iterable[Resource] | None:
         """What the node writes, as `reads`."""
         del plan
         return None
 
     def waits(self, plan: Plan) -> bool:
-        """Whether the node may wait for a node that isn't ready yet, to share its group
-        (see Plan): False for one whose group's result could differ from running its members
-        one after another (e.g. an atomic push). Asked once its inputs are done."""
+        """Whether the node may wait for a node of its class that isn't ready yet, to share
+        its group (see Plan): False, the default. A class says True only if a node that's
+        not ready yet can join a group (e.g. not the default `batch_key`'s one per node),
+        and a group gives what its members one by one would (not an atomic push). Asked
+        once its inputs are done."""
         del plan
-        return True
+        return False
+
+    @classmethod
+    def keeps_order(cls, earlier: Access, later: Access) -> bool:
+        """Whether a group that has a node with `earlier` access, of a lower level, and one
+        with `later` access, which conflict (see Plan), gives what running them in that
+        order would: the plan gives a group its members in level order. False, the
+        default: such nodes run in groups of their own."""
+        del earlier, later
+        return False
 
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
@@ -151,36 +163,6 @@ class Value[T](Node[T]):
         self._set(self.value)
 
 
-CONFIG = ("config",)
-"""The resource that what reads or writes git's config declares (see Node.reads)."""
-
-
-class Resource:
-    """A resource that may be the same as others it doesn't equal: `overlaps` says which.
-    Other resources are the same only if equal."""
-
-    def overlaps(self, other: Hashable) -> bool:
-        """Whether `other` may be the same resource (or share some of it)."""
-        return self == other
-
-
-@dataclass(frozen=True)
-class TrackingRef(Resource):
-    """The remote-tracking ref git updates as it pushes `ref` to `remote`: one of the same
-    remote's for the same ref, or any other remote's, since git maps each remote's refs by
-    its own fetch refspecs, which may share remote-tracking refs (and a name and its URL may
-    be one remote)."""
-
-    remote: str
-    ref: str
-
-    @override
-    def overlaps(self, other: Hashable) -> bool:
-        return isinstance(other, TrackingRef) and (
-            other.ref == self.ref or other.remote != self.remote
-        )
-
-
 def lift[T](value: T | Node[T]) -> Node[T]:
     """`value` if it's a node already, else a Value of it."""
     if isinstance(value, Node):
@@ -205,11 +187,11 @@ class Map[T](Node[T]):
         return self._inputs
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override

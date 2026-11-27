@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Self, cast, override
 
 from git_client.batch import config
 from git_client.client import decode, error_from
-from git_client.plan.nodes import CONFIG, Map, Node, lift
+from git_client.plan.nodes import Map, Node, lift
+from git_client.plan.resources import CONFIG, Resource
 
 if TYPE_CHECKING:
     from git_client.plan.running import Plan
@@ -37,11 +38,11 @@ class ConfigValue(Node[str | None]):
         return None
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         return (CONFIG,)
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override
@@ -100,11 +101,11 @@ class TypedConfig[T](Node[T]):
         return self.git_type
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         return (CONFIG,)
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override

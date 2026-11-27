@@ -6,31 +6,41 @@
 import graphlib
 import itertools
 from collections import deque
-from collections.abc import Hashable
 from concurrent.futures import ThreadPoolExecutor
 
 from git_client.client import Git
-from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Resource, Skipped
+from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped
+from git_client.plan.schedule import Schedule
 
 type Graph = dict[Node[object], tuple[Node[object], ...]]
 """Each node, with its inputs."""
 
 
 class Plan:
-    """Nodes to run with `git`, in as few processes as git's batch forms allow, independent
-    groups in parallel on up to `max_workers` more threads (the calling thread runs one).
-    `atomic_pushes` is what a Push's `atomic=None` means.
+    """Nodes to run with `git`, in as few processes as git's batch forms allow, groups that
+    can't conflict in parallel on up to `max_workers` more threads (the calling thread runs
+    one). `atomic_pushes` is what a Push's `atomic=None` means. With `reorder` (the
+    default), a group may wait for a node that isn't ready yet, to share a process, where
+    that gives what running the graph in order gives (see Schedule); without, nodes run in
+    graph order.
 
     Every process starts through `git` (its `process`), so its timeout, `stopping` and
     process groups apply as to any of its commands. Ctrl-C reaches only a git the calling
-    thread runs (see ReadOnlyGit).
+    thread runs (see ReadOnlyGit): on Ctrl-C, execute() waits for the git processes other
+    threads run to finish (or time out) before it raises KeyboardInterrupt.
     """
 
     def __init__(
-        self, git: Git, *, atomic_pushes: bool = False, max_workers: int | None = None
+        self,
+        git: Git,
+        *,
+        atomic_pushes: bool = False,
+        reorder: bool = True,
+        max_workers: int | None = None,
     ) -> None:
         self.git = git
         self.atomic_pushes = atomic_pushes
+        self.reorder = reorder
         self.max_workers = max_workers
         self.ops: list[Node[object]] = []
 
@@ -81,17 +91,25 @@ class Plan:
                 object.__setattr__(node, "_error", None)
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
-        order = _Order(graph, self)
+        schedule = Schedule(graph, self, reorder=self.reorder)
         groups_of: dict[Node[object], list[Node[object]]] = {}
         held: list[Node[object]] = []
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
-                now, held = order.choose([*held, *sorter.get_ready()])
-                self._run_round(now, order, groups_of, pool)
+                ready = [*held, *sorter.get_ready()]
+                lanes, held = schedule.round(ready)
+                for lane in lanes:
+                    for group in lane:
+                        groups_of.update((node, group) for node in group)
+                *others, mine = lanes or [[]]
+                futures = [pool.submit(self._run_lane, lane) for lane in others]
+                self._run_lane(mine)
+                for future in futures:
+                    future.result()
                 for copy, original in copies:
                     if not copy._done:
                         copy._copy_outcome(original)
-                sorter.done(*now)
+                sorter.done(*(node for node in ready if node not in held))
         failures = {
             node: node._error
             for node in graph
@@ -101,31 +119,6 @@ class Plan:
             first = next(iter(failures))
             group = groups_of.get(first, [first])
             raise ExecutionException(first, group, failures) from failures[first]
-
-    def _run_round(
-        self,
-        ready: list[Node[object]],
-        order: _Order,
-        groups_of: dict[Node[object], list[Node[object]]],
-        pool: ThreadPoolExecutor,
-    ) -> None:
-        """Run the ready nodes not done yet whose inputs are, in groups (each noted in
-        `groups_of`), each lane's groups in turn, the lanes at once."""
-        groups: dict[Hashable, list[Node[object]]] = {}
-        for node in ready:
-            if not node._done and node._error is None:
-                key = order.key[node]
-                groups_of[node] = groups.setdefault(key, [])
-                groups_of[node].append(node)
-        lanes: dict[Hashable, list[list[Node[object]]]] = {}
-        for group in groups.values():
-            lane = order.lane[group[0]]
-            lanes.setdefault(object() if lane is None else lane, []).append(group)
-        *others, mine = [*lanes.values()] or [[]]
-        futures = [pool.submit(self._run_lane, lane) for lane in others]
-        self._run_lane(mine)
-        for future in futures:
-            future.result()
 
     def _run_lane(self, groups: list[list[Node[object]]]) -> None:
         for group in groups:
@@ -139,144 +132,3 @@ class Plan:
             for node in group:
                 if not node._done and node._error is None:
                     node._fail(PlanError(f"{node!r} was given no result"))
-
-
-def _overlap(these: frozenset[Hashable], those: frozenset[Hashable]) -> bool:
-    """Whether any of these resources may be one of those."""
-    if these & those:
-        return True
-    return any(
-        (isinstance(this, Resource) and this.overlaps(that))
-        or (isinstance(that, Resource) and that.overlaps(this))
-        for this in these
-        for that in those
-    )
-
-
-type _Resources = tuple[frozenset[Hashable], frozenset[Hashable]] | None
-"""What a node reads and writes, or None if it doesn't say."""
-
-
-class _Order:
-    """Which ready nodes a plan runs now, and which it holds back: a node may wait for a node
-    of its class that's not ready yet, so they can share a group, as long as the result is
-    the one running in graph order gives.
-
-    Running in graph order, a node runs at its level (one past its inputs' highest), and the
-    nodes of a level at once. So of two nodes whose resources conflict (one writes what the
-    other reads or writes, or either declares nothing), the one of the lower level runs
-    first, in an earlier round; nodes that don't conflict may run in any order. A node is
-    held back only while that stays true: once a node of a higher level that conflicts with
-    it is ready, it runs, and that node waits for the next round. A node never waits for one
-    that depends on it.
-    """
-
-    def __init__(self, graph: Graph, plan: Plan) -> None:
-        self.graph = graph
-        self.plan = plan
-        self.level: dict[Node[object], int] = {}
-        for node in graphlib.TopologicalSorter(graph).static_order():
-            self.level[node] = 1 + max((self.level[input] for input in graph[node]), default=-1)
-        self.dependents: dict[Node[object], list[Node[object]]] = {node: [] for node in graph}
-        for node, inputs in graph.items():
-            for input in inputs:
-                self.dependents[input].append(node)
-        self.seen: set[Node[object]] = set()  # every node that's been ready
-        self.resources: dict[Node[object], _Resources] = {}
-        self.key: dict[Node[object], Hashable] = {}
-        self.lane: dict[Node[object], Hashable | None] = {}
-        self.waits: dict[Node[object], bool] = {}
-
-    def choose(self, ready: list[Node[object]]) -> tuple[list[Node[object]], list[Node[object]]]:
-        """The ready nodes to run now, and those to hold back."""
-        self.seen.update(ready)
-        movable: list[Node[object]] = []
-        now: list[Node[object]] = []
-        for node in ready:
-            # One done, or that won't run (it reads a node that failed), goes at once.
-            failed = next((input for input in self.graph[node] if not input._done), None)
-            if failed is not None:
-                node._skip(failed)
-            if node._done or node._error is not None or not self._ask(node):
-                now.append(node)
-            else:
-                movable.append(node)
-        groups: dict[Hashable, list[Node[object]]] = {}
-        for node in movable:
-            groups.setdefault(self.key[node], []).append(node)
-        waiting = {
-            node for group in groups.values() if self._worth_waiting(group) for node in group
-        }
-        changed = True
-        while changed:  # till no node that would run must run after one waiting
-            changed = False
-            for node in movable:
-                for other in [*waiting]:
-                    if node not in waiting and self._before(other, node):
-                        waiting.discard(other)
-                        changed = True
-        if len(waiting) == len(movable):
-            waiting.clear()  # else nothing would run, and nothing become ready
-        held = [node for node in movable if node in waiting]
-        for node in sorted((node for node in movable if node not in waiting), key=self._level):
-            if any(self._before(other, node) for other in (*now, *held)):
-                held.append(node)  # one it conflicts with runs first
-            else:
-                now.append(node)
-        return now, held
-
-    def _ask(self, node: Node[object]) -> bool:
-        """Ask the node what the plan needs to know (once its inputs are done), or fail it
-        with what it raises: whether it can run."""
-        if node in self.key:
-            return True
-        try:
-            key = (type(node), node.batch_key(self.plan))
-            lane = node.lane(self.plan)
-            reads, writes = node.reads(self.plan), node.writes(self.plan)
-            self.waits[node] = node.waits(self.plan)
-        # Whatever it raises is its failure.
-        except Exception as error:  # noqa: BLE001
-            node._fail(error)
-            return False
-        self.key[node], self.lane[node] = key, lane
-        if reads is None or writes is None:
-            self.resources[node] = None
-        else:
-            self.resources[node] = (frozenset(reads), frozenset(writes))
-        return True
-
-    def _level(self, node: Node[object]) -> int:
-        return self.level[node]
-
-    def _before(self, first: Node[object], then: Node[object]) -> bool:
-        """Whether `first` must run in an earlier round than `then`."""
-        if self.level[first] >= self.level[then]:
-            return False
-        if first not in self.resources or then not in self.resources:
-            return False  # one done already, or skipped, runs nothing
-        a, b = self.resources[first], self.resources[then]
-        if a is None or b is None:
-            return True
-        return _overlap(a[1], b[0] | b[1]) or _overlap(b[1], a[0])
-
-    def _worth_waiting(self, group: list[Node[object]]) -> bool:
-        """Whether a node of the group's class that's not been ready yet, and depends on
-        none of it, might join it."""
-        if any(self.resources[node] is None or not self.waits[node] for node in group):
-            return False
-        after = self._descendants(group)
-        return any(
-            type(other) is type(group[0]) and other not in self.seen and other not in after
-            for other in self.graph
-        )
-
-    def _descendants(self, nodes: list[Node[object]]) -> set[Node[object]]:
-        found: set[Node[object]] = set()
-        pending = [*nodes]
-        while pending:
-            for dependent in self.dependents[pending.pop()]:
-                if dependent not in found:
-                    found.add(dependent)
-                    pending.append(dependent)
-        return found

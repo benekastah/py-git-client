@@ -1,7 +1,10 @@
 # So the checks fail if a type error a test expects (an ignore below) goes away:
 # pyright: reportUnnecessaryTypeIgnoreComment=true
 import graphlib
+import itertools
+import random
 import threading
+import time
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +12,7 @@ from typing import Self, assert_type, override
 
 import pytest
 
+import git_client.plan.config
 import git_client.plan.pushing
 from git_client import (
     Git,
@@ -19,24 +23,32 @@ from git_client import (
     PushResult,
     PushStatus,
     PushUpdate,
+    ReadOnlyGit,
     RemoteError,
+    config,
     push,
 )
 from git_client.plan import (
     CONFIG,
+    Access,
     ConfigValue,
     Effect,
     ExecutionException,
+    LocalRef,
     Map,
     Node,
     NotExecuted,
     Plan,
     Push,
+    RemoteRef,
+    Resource,
     Skipped,
+    TrackingRef,
     Value,
     lift,
 )
 from git_client.plan.pushing import push_failure
+from git_client.plan.resources import overlap
 from git_client.testing import GitCall
 from tests.conftest import Changes
 
@@ -201,11 +213,11 @@ class Echo(Node[str]):
         return (self.source,)
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override
@@ -250,12 +262,12 @@ class Broken(Map[int]):
         return super().lane(plan)
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         self._ask("reads")
         return super().reads(plan)
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         self._ask("writes")
         return super().writes(plan)
 
@@ -406,24 +418,36 @@ def test_a_push_waits_for_another_to_the_same_remote_past_reads(
 
 
 class SetConfig(Effect[None]):
-    """Sets a config key: declares that it writes config."""
+    """Sets a config key, noting in `events` when it starts and ends: declares that it
+    writes config."""
 
-    def __init__(self, key: str, value: str, *, after: Iterable[Node[object]] = ()) -> None:
+    def __init__(
+        self,
+        key: str,
+        value: str,
+        *,
+        after: Iterable[Node[object]] = (),
+        events: list[str] | None = None,
+    ) -> None:
         self.key, self.value, self.after = key, value, list(after)
+        self.events = [] if events is None else events
 
     @override
-    def reads(self, plan: Plan) -> Iterable[Hashable]:
+    def reads(self, plan: Plan) -> Iterable[Resource]:
         return ()
 
     @override
-    def writes(self, plan: Plan) -> Iterable[Hashable]:
+    def writes(self, plan: Plan) -> Iterable[Resource]:
         return (CONFIG,)
 
     @override
     @classmethod
     def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
         for node in nodes:
+            node.events.append("start write")
+            time.sleep(0.05)  # so a read started meanwhile would show
             plan.git.run("config", node.key, node.value)
+            node.events.append("end write")
             node._set(None)
 
 
@@ -568,31 +592,322 @@ def test_pushes_to_two_remotes_keep_their_order(
     assert events == ["start origin", "end origin", "start mirror", "end mirror"]
 
 
-def test_pushes_to_two_remotes_run_at_once(
-    remotes: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
+def test_a_push_and_a_config_read_run_at_once(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    meeting = threading.Barrier(2, timeout=10)
+    meeting = threading.Barrier(2, timeout=10)  # till the other starts too
 
     def meeting_push(
         git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
     ) -> PushResult:
-        meeting.wait()  # till the other push starts too
+        meeting.wait()
         return push(git, remote, updates, atomic=atomic)
 
+    def meeting_config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
+        meeting.wait()
+        return config(git)
+
     monkeypatch.setattr(git_client.plan.pushing, "push", meeting_push)
-    remotes.run("config", "example.remote", "mirror")
-    git_calls.clear()
+    monkeypatch.setattr(git_client.plan.config, "config", meeting_config)
     plan = Plan(remotes)
-    # Both remotes come from config, so both pushes are ready in the same round.
-    to_origin = plan.add(Push(ConfigValue("example.unset").or_default("origin"), "a"))
-    to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "a"))
+    # A push reads config too, so neither changes what the other sees.
+    pushed = plan.add(Push("origin", "a"))
+    read = plan.add(ConfigValue("remote.origin.url"))
 
     plan.execute()
 
-    assert sorted(pushes(git_calls)) == [
-        [*PUSH, "--", remote, "refs/heads/a:refs/heads/a"] for remote in ("mirror", "origin")
+    assert [ref.status for ref in pushed.get()] == [PushStatus.UP_TO_DATE]
+    assert read.get() == "../origin.git"
+
+
+def test_pushes_to_two_remotes_run_one_at_a_time(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def recording_push(
+        git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
+    ) -> PushResult:
+        events.append(f"start {remote}")
+        time.sleep(0.05)  # so another push started meanwhile would show
+        result = push(git, remote, updates, atomic=atomic)
+        events.append(f"end {remote}")
+        return result
+
+    monkeypatch.setattr(git_client.plan.pushing, "push", recording_push)
+    plan = Plan(remotes)
+    # Ready together, but their remote-tracking refs may be the same.
+    plan.add(Push("origin", "a"))
+    plan.add(Push("mirror", "b"))
+
+    plan.execute()
+
+    assert [event.split()[0] for event in events] == ["start", "end", "start", "end"]
+
+
+def test_a_config_write_and_read_run_one_at_a_time(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def recording_config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
+        events.append("start read")
+        time.sleep(0.05)  # so a write started meanwhile would show
+        entries = config(git)
+        events.append("end read")
+        return entries
+
+    monkeypatch.setattr(git_client.plan.config, "config", recording_config)
+    plan = Plan(repo)
+    plan.add(SetConfig("example.key", "new", events=events))
+    plan.add(ConfigValue("example.key"))
+
+    plan.execute()
+
+    assert [event.split()[0] for event in events] == ["start", "end", "start", "end"]
+
+
+def test_no_node_runs_before_a_lower_one_it_may_conflict_with(remotes: Git) -> None:
+    # The review's example: push a may wait for push b, but what depends on it (the
+    # config write) isn't ready meanwhile, and the read of that config mustn't overtake it.
+    remotes.run("config", "example.k", "old")
+    plan = Plan(remotes)
+    pushed = plan.add(Push("origin", "a"))
+    plan.add(SetConfig("example.k", "new", after=[pushed]))
+    read = plan.add(ConfigValue(Map(str, Map(str, Value("example.k")))))
+    force = Map(bool, Map(bool, Map(bool, ConfigValue("x.z").as_bool())))
+    plan.add(Push("origin", "b", force=force))
+
+    plan.execute()
+
+    assert read.get() == "new"
+
+
+def test_a_ready_map_runs_at_once(repo: Git) -> None:
+    ran: list[str] = []
+
+    def record(name: str) -> Callable[[object], str]:
+        def run(value: object) -> str:
+            ran.append(name)
+            return str(value)
+
+        return run
+
+    plan = Plan(repo)
+    plan.add(Map(record("early"), Value(1)))
+    plan.add(Map(record("late"), Map(record("middle"), Map(record("first"), ConfigValue("x.y")))))
+
+    plan.execute()
+
+    assert ran == ["early", "first", "middle", "late"]
+
+
+def test_a_branch_pushed_twice_is_pushed_twice(remotes: Git, git_calls: list[GitCall]) -> None:
+    # One push can't push a ref twice: the later one may wait, but runs on its own.
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    git_calls.clear()
+    plan = Plan(remotes)
+    first = plan.add(Push("origin", "a"))
+    again = plan.add(Push("origin", "a", force=ConfigValue("x.y").as_bool(default=True)))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert [call[-1] for call in pushes(git_calls)] == [
+        "refs/heads/a:refs/heads/a",
+        "+refs/heads/a:refs/heads/a",
     ]
-    assert [ref.status for ref in to_origin.get() + to_mirror.get()] == [PushStatus.UP_TO_DATE] * 2
+    assert raised.value.node is first
+    assert isinstance(raised.value.__cause__, PushRejectedError)
+    assert [ref.status for ref in again.get()] == [PushStatus.FORCED]
+
+
+def test_pushes_to_one_remote_run_one_at_a_time(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def recording_push(
+        git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
+    ) -> PushResult:
+        events.append(f"start {atomic}")
+        time.sleep(0.05)  # so another push started meanwhile would show
+        result = push(git, remote, updates, atomic=atomic)
+        events.append(f"end {atomic}")
+        return result
+
+    monkeypatch.setattr(git_client.plan.pushing, "push", recording_push)
+    plan = Plan(remotes)
+    # Two groups, ready together, whose branches may share a remote-tracking ref.
+    plan.add(Push("origin", "a", atomic=True))
+    plan.add(Push("origin", "b"))
+
+    plan.execute()
+
+    assert [event.split()[0] for event in events] == ["start", "end", "start", "end"]
+
+
+def test_one_push_keeps_graph_order_for_a_shared_remote_tracking_ref(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    # Git maps c and d onto one remote-tracking ref (fetch would refuse; push doesn't), and
+    # updates it for each ref in turn: graph order pushes d, then c, so c's tip ends there.
+    remotes.run("config", "--unset-all", "remote.origin.fetch")
+    for branch in "cd":
+        remotes.run("config", "--add", "remote.origin.fetch", f"refs/heads/{branch}:refs/t")
+    remotes.run("branch", "c", "HEAD~1")
+    remotes.run("branch", "d", "HEAD")
+    git_calls.clear()
+    plan = Plan(remotes)
+    plan.add(Push("origin", "c", force=ConfigValue("x.y").as_bool()))
+    plan.add(Push("origin", "d"))
+
+    plan.execute()
+
+    (push_call,) = pushes(git_calls)
+    assert push_call[6:] == ["refs/heads/d:refs/heads/d", "refs/heads/c:refs/heads/c"]
+    assert remotes.run("rev-parse", "refs/t") == remotes.run("rev-parse", "HEAD~1")
+
+
+@dataclass(frozen=True)
+class Cell(Resource):
+    """A cell of a test's Cells."""
+
+    name: str
+
+
+class Put(Effect[int]):
+    """Sets a cell to its source's value plus one; puts run as one group, in order."""
+
+    def __init__(
+        self, cells: dict[str, int], name: str, source: Node[int], after: list[Node[object]]
+    ) -> None:
+        self.cells, self.name, self.source, self.after = cells, name, source, after
+
+    @override
+    def _reads(self) -> Iterable[Node[object]]:
+        return (self.source,)
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        return "put"
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return (Cell(self.name),)
+
+    @override
+    def waits(self, plan: Plan) -> bool:
+        return True
+
+    @override
+    @classmethod
+    def keeps_order(cls, earlier: Access, later: Access) -> bool:
+        return True  # it reads nothing, and writes in turn
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            node.cells[node.name] = node.source.get() + 1
+            node._set(node.cells[node.name])
+
+
+class Take(Effect[int]):
+    """A cell's value; takes run as one group."""
+
+    def __init__(self, cells: dict[str, int], name: str, after: list[Node[object]]) -> None:
+        self.cells, self.name, self.after = cells, name, after
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        return "take"
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return (Cell(self.name),)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def waits(self, plan: Plan) -> bool:
+        return True
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            node._set(node.cells.get(node.name, 0))
+
+
+def random_plan(seed: int, git: Git, reorder: bool) -> tuple[Plan, list[Node[int]], dict[str, int]]:
+    """A plan of random puts and takes, the same for a seed."""
+    rng = random.Random(seed)
+    cells: dict[str, int] = {}
+    nodes: list[Node[int]] = []
+    for _ in range(10):
+        name = rng.choice("xy")
+        after: list[Node[object]] = [node for node in nodes if rng.random() < 0.3]
+        if rng.random() < 0.5:
+            source = rng.choice([*nodes, Value(rng.randrange(10))])
+            nodes.append(Put(cells, name, source, after))
+        else:
+            nodes.append(Take(cells, name, after))
+    plan = Plan(git, reorder=reorder)
+    for node in nodes:
+        plan.add(node)
+    return plan, nodes, cells
+
+
+def levels_conflict(plan: Plan) -> bool:
+    """Whether two nodes of a level may conflict, whose order graph order leaves open."""
+    graph = plan.graph()
+    level: dict[Node[object], int] = {}
+    for node in graphlib.TopologicalSorter(graph).static_order():
+        level[node] = 1 + max((level[input] for input in graph[node]), default=-1)
+    cells = [
+        (node, node.name, isinstance(node, Put)) for node in graph if isinstance(node, Put | Take)
+    ]
+    return any(
+        level[a] == level[b] and name_a == name_b and (put_a or put_b)
+        for (a, name_a, put_a), (b, name_b, put_b) in itertools.combinations(cells, 2)
+    )
+
+
+def test_waiting_gives_what_graph_order_gives(repo: Git, monkeypatch: pytest.MonkeyPatch) -> None:
+    groups: list[str] = []
+    for cls in (Put, Take):
+        run = cls.execute_group
+
+        def counting(
+            nodes: Sequence[Node[int]], plan: Plan, run: Callable[..., None] = run
+        ) -> None:
+            groups.append("")
+            run(nodes, plan)
+
+        monkeypatch.setattr(cls, "execute_group", counting)
+    fewer = 0
+    for seed in range(300):
+        reference, reference_nodes, reference_cells = random_plan(seed, repo, reorder=False)
+        if levels_conflict(reference):
+            continue
+        groups.clear()
+        reference.execute()
+        in_order = len(groups)
+        plan, nodes, cells = random_plan(seed, repo, reorder=True)
+        groups.clear()
+        plan.execute()
+
+        assert [node.get() for node in nodes] == [node.get() for node in reference_nodes], seed
+        assert cells == reference_cells, seed
+        fewer += len(groups) < in_order
+    assert fewer  # waiting merged groups in some
 
 
 def test_sequence_pushes_one_after_another(remotes: Git, git_calls: list[GitCall]) -> None:
@@ -674,3 +989,33 @@ def test_typed_config_reads_the_last_value_of_a_key(repo: Git) -> None:
     plan.execute()
 
     assert flag.get() is True
+
+
+def test_a_group_that_would_run_both_before_and_after_another_splits(repo: Git) -> None:
+    # The two puts wait to share a group, and the take between them waits for a later take;
+    # once the second put is ready, all three run: the puts apart, around the take.
+    cells: dict[str, int] = {}
+    later = Map(int, Value(0))
+    first = Put(cells, "x", Value(1), after=[])
+    take = Take(cells, "x", after=[later])
+    second = Put(cells, "x", Value(5), after=[Map(int, later)])
+    plan = Plan(repo)
+    for node in (first, take, second, Take(cells, "y", after=[Map(int, Map(int, second))])):
+        plan.add(node)
+
+    plan.execute()
+
+    assert (first.get(), take.get(), second.get(), cells["x"]) == (2, 2, 6, 6)
+
+
+def test_a_remote_tracking_ref_may_be_any_other_but_a_branch_or_tag() -> None:
+    tracking = TrackingRef("origin", "refs/heads/a")
+
+    assert Access(frozenset(), frozenset({tracking})).conflicts(
+        Access(frozenset({TrackingRef("mirror", "refs/heads/b")}), frozenset())
+    )
+    assert overlap([tracking], [LocalRef("refs/remotes/origin/a")])
+    assert overlap([LocalRef("refs/t")], [tracking])
+    assert not overlap([tracking], [LocalRef("refs/heads/a"), LocalRef("refs/tags/a")])
+    assert overlap([RemoteRef("refs/heads/a")], [RemoteRef("refs/heads/a")])
+    assert not overlap([RemoteRef("refs/heads/a")], [tracking, CONFIG])
