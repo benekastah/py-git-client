@@ -6,12 +6,14 @@
 import graphlib
 import itertools
 from collections.abc import Generator, Hashable
+from typing import cast
 
 from git_client.client import Git
 from git_client.config_file import ConfigSet
 from git_client.plan.config import ConfigValue, WriteConfig
 from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped, Value
-from git_client.plan.resources import CONFIG, Access, overlap
+from git_client.plan.pushing import ConflictingPushes, Push
+from git_client.plan.resources import CONFIG, Access, LocalRef, RemoteRef, overlap
 
 
 class Plan:
@@ -25,11 +27,17 @@ class Plan:
     whose resources aren't known (it declares none, or its inputs haven't run) may conflict
     with anything. Each round runs every node that may run, but for those that write, while
     a read may run: so reads run as early as they can, and then the writes that are left
-    wait for nothing but each other, and share groups. A ConfigValue of a key an earlier
-    WriteConfig set needs no process: its value is the one set (see `_written`). A round's nodes don't conflict, so
+    wait for nothing but each other, and share groups. A round's nodes don't conflict, so
     its groups run at once: the plan starts every group's git process, then waits for each
-    in turn, in the calling thread (work in-process just runs). Without `reorder`, nodes
-    run one at a time, in program order.
+    in turn, in the calling thread (work in-process just runs). Some nodes need no process
+    (see `_known`): a ConfigValue of a key an earlier WriteConfig set is the value set, and
+    a push that repeats an earlier one of the same ref, with nothing between that could
+    change what it pushes, is that one. Without `reorder`, nodes run one at a time, in
+    program order.
+
+    Two pushes of one ref of one remote that differ, with nothing between known to change
+    what they push, are the author's mistake: ConflictingPushes, raised before anything
+    runs if both are known then, else failing the second.
 
     Every process starts through `git` (its `popen`, see Started), so its timeout,
     `stopping` and process groups apply as to any of its commands. On Ctrl-C, execute()
@@ -106,6 +114,7 @@ class Plan:
             object.__setattr__(node, "_error", None)
         self._access.clear()
         self._key.clear()
+        self._check_pushes(left)
         groups_of: dict[Node[object], list[Node[object]]] = {}
         while left:
             groups = self._round(left)
@@ -140,9 +149,8 @@ class Plan:
                 if not self._ask(node):
                     continue
                 if not any(self._conflict(earlier, node) for earlier in before):
-                    if self.reorder and (written := self._written(node)) is not None:
-                        node._set(written[0])  # known: no process
-                        continue
+                    if self._known(node):
+                        continue  # given its outcome: finished
                     may_run.append(node)
             before.append(node)
         if not self.reorder:
@@ -170,6 +178,60 @@ class Plan:
             None if reads is None or writes is None else Access(frozenset(reads), frozenset(writes))
         )
         return True
+
+    def _check_pushes(self, left: list[Node[object]]) -> None:
+        """Raise ConflictingPushes, before anything runs, for two pushes known now (all
+        their inputs done) that push one ref otherwise, with nothing between them known
+        not to change what they push."""
+        for node in left:
+            if all(input._done for input in node.inputs()):
+                self._ask(node)
+        for node in left:
+            if isinstance(node, Push) and node in self._key:
+                found = self._earlier_push(node)
+                if found is not None and not found[1]:
+                    earlier = found[0]
+                    if earlier._parameters(self) != node._parameters(self):
+                        raise ConflictingPushes(earlier, node)
+
+    def _known(self, node: Node[object]) -> bool:
+        """Give the node, which may run now, its outcome without running it, if the plan
+        knows it: a ConfigValue's from the plan's own write (see `_written`), a push's from
+        an earlier push it repeats (see `_earlier_push`); or fail a push that pushes one ref
+        otherwise. Whether it did."""
+        if not self.reorder and not isinstance(node, Push):
+            return False
+        if (written := self._written(node)) is not None:
+            node._set(written[0])
+            return True
+        found = self._earlier_push(node) if isinstance(node, Push) else None
+        if found is None or found[1]:
+            return False
+        earlier = found[0]
+        if earlier._parameters(self) != cast(Push, node)._parameters(self):
+            node._fail(ConflictingPushes(earlier, cast(Push, node)))
+            return True
+        if not self.reorder:
+            return False
+        for name in ("_done", "_result", "_error"):  # it's finished: they conflict
+            object.__setattr__(node, name, getattr(earlier, name))
+        return True
+
+    def _earlier_push(self, node: Push) -> tuple[Push, bool] | None:
+        """The nearest earlier Push of the node's ref of its remote, if any, and whether a
+        node between may have changed what they push (the local branch or the remote's)."""
+        remote, ref = node.remote.get(), node._ref()
+        pushed = (LocalRef(ref), RemoteRef(remote, ref))
+        changed = False
+        for earlier in reversed(self._order[: self._position[node]]):
+            if isinstance(earlier, Push) and earlier in self._key:
+                if (earlier.remote.get(), earlier._ref()) == (remote, ref):
+                    return earlier, changed
+            elif isinstance(earlier, Value):
+                continue
+            access = self._access.get(earlier)
+            changed = changed or access is None or overlap(access.writes, pushed)
+        return None
 
     def _written(self, node: Node[object]) -> tuple[str] | None:
         """For a ConfigValue, the value an earlier WriteConfig of this run set its key to (by

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Self, cast, override
 
 from git_client.client import Started
 from git_client.errors import GitError, PushRejectedError, error_for
-from git_client.plan.nodes import Effect, Node, lift
+from git_client.plan.nodes import Effect, Node, PlanError, lift
 from git_client.plan.resources import (
     CONFIG,
     LocalRef,
@@ -38,6 +38,17 @@ _PUSHED = {
 }
 
 
+class ConflictingPushes(PlanError):
+    """Two pushes of one ref of one remote that differ (source, force, lease or atomic),
+    with nothing between them that could change what they push: which to make is the
+    plan's author's to say. `first` and `second` are the pushes, in program order."""
+
+    def __init__(self, first: Push, second: Push) -> None:
+        super().__init__(f"{first!r} and {second!r} push one ref otherwise")
+        self.first = first
+        self.second = second
+
+
 class Push(Effect[tuple[PushRef, ...]]):
     """Push the branch `branch` to the same branch of `remote` (a name or URL), forced if
     `force` says so, or only if the remote's branch is at `lease` (see PushUpdate). Its
@@ -48,7 +59,7 @@ class Push(Effect[tuple[PushRef, ...]]):
     pushes run at once is the plan's choice, so an atomic push is outside its sequential
     semantics); else each branch succeeds or fails alone. Pushes don't conflict with each
     other (see TrackingRef), but for two of one ref of one remote, which git can't make in
-    one push, so they run in turn. A branch fails if git rejected it (PushRejectedError),
+    one push (see Plan for which of those run). A branch fails if git rejected it (PushRejectedError),
     if a destination's report of it isn't done, or if git didn't report it, or failed with
     nothing rejected (as git's message says).
     """
@@ -87,6 +98,16 @@ class Push(Effect[tuple[PushRef, ...]]):
     def writes(self, plan: Plan) -> Iterable[Resource]:
         remote = self.remote.get()
         return RemoteRef(remote, self._ref()), TrackingRef(remote, self._ref())
+
+    def _parameters(self, plan: Plan) -> tuple[object, ...]:
+        """What the push makes: its remote, ref, force, lease and atomic."""
+        return (
+            self.remote.get(),
+            self._ref(),
+            self.force.get(),
+            self.lease.get(),
+            self._atomic(plan),
+        )
 
     def _atomic(self, plan: Plan) -> bool:
         return plan.atomic_pushes if self.atomic is None else self.atomic

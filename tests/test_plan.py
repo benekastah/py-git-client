@@ -47,7 +47,7 @@ from git_client.plan import (
     WriteConfig,
     lift,
 )
-from git_client.plan.pushing import push_failure
+from git_client.plan.pushing import ConflictingPushes, push_failure
 from git_client.testing import GitCall
 from tests.conftest import Changes
 
@@ -547,24 +547,90 @@ def test_a_ready_map_runs_at_once(repo: Git) -> None:
     assert ran == ["early", "first", "middle", "late"]
 
 
-def test_a_branch_pushed_twice_is_pushed_twice(remotes: Git, git_calls: list[GitCall]) -> None:
-    # One push can't push a ref twice: the later one may wait, but runs on its own.
-    remotes.run("branch", "-f", "a", "HEAD~1")
+def test_identical_pushes_are_one(remotes: Git, git_calls: list[GitCall]) -> None:
+    remotes.run("branch", "c")
+    git_calls.clear()
+    plan = Plan(remotes)
+    first, again = plan.add(Push("origin", "c")), plan.add(Push("origin", "c"))
+
+    plan.execute()
+
+    assert len(pushes(git_calls)) == 1
+    assert first.get() == again.get()
+    assert [ref.status for ref in again.get()] == [PushStatus.CREATED]
+
+
+def test_a_ref_pushed_twice_otherwise_is_a_plan_error(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    git_calls.clear()
+    plan = Plan(remotes)
+    first, forced = plan.add(Push("origin", "a")), plan.add(Push("origin", "a", force=True))
+
+    with pytest.raises(ConflictingPushes) as raised:
+        plan.execute()
+
+    assert (raised.value.first, raised.value.second) == (first, forced)
+    assert git_calls == []
+
+
+def test_a_ref_pushed_twice_otherwise_as_config_says_fails_the_second(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
     git_calls.clear()
     plan = Plan(remotes)
     first = plan.add(Push("origin", "a"))
-    again = plan.add(Push("origin", "a", force=ConfigValue("x.y").as_bool(default=True)))
+    forced = plan.add(Push("origin", "a", force=ConfigValue("x.y").as_bool(default=True)))
 
     with pytest.raises(ExecutionException) as raised:
         plan.execute()
 
-    assert [call[-1] for call in pushes(git_calls)] == [
-        "refs/heads/a:refs/heads/a",
-        "+refs/heads/a:refs/heads/a",
+    assert raised.value.node is forced
+    assert isinstance(raised.value.__cause__, ConflictingPushes)
+    assert raised.value.__cause__.first is first
+    assert [ref.status for ref in first.get()] == [PushStatus.UP_TO_DATE]
+    assert len(pushes(git_calls)) == 1
+
+
+class MoveRef(Effect[None]):
+    """Points a ref of the repository at `to`: declares that it writes it."""
+
+    def __init__(self, ref: str, to: str) -> None:
+        self.ref, self.to, self.after = ref, to, []
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Resource]:
+        return ()
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Resource]:
+        return (LocalRef(self.ref),)
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        for node in nodes:
+            plan.git.run("update-ref", node.ref, node.to)
+            node._set(None)
+
+
+def test_a_ref_moved_between_two_pushes_is_pushed_twice(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    remotes.run("branch", "c", "HEAD~1")
+    git_calls.clear()
+    plan = Plan(remotes)
+    first = plan.add(Push("origin", "c"))
+    plan.add(MoveRef("refs/heads/c", remotes.run("rev-parse", "HEAD")))
+    again = plan.add(Push("origin", "c"))
+
+    plan.execute()
+
+    assert len(pushes(git_calls)) == 2
+    assert [ref.status for ref in first.get() + again.get()] == [
+        PushStatus.CREATED,
+        PushStatus.FAST_FORWARD,
     ]
-    assert raised.value.node is first
-    assert isinstance(raised.value.__cause__, PushRejectedError)
-    assert [ref.status for ref in again.get()] == [PushStatus.FORCED]
 
 
 @dataclass(frozen=True)

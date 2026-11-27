@@ -22,7 +22,9 @@ conflicts with everything):
 - a read runs as early as its inputs allow, but never before an earlier write of what it
   reads (a config read waits for an earlier config write);
 - pushes don't conflict with each other, so their order doesn't matter (see TrackingRef),
-  but for two of one ref of one remote, which run in add() order;
+  but for two of one ref of one remote: the same push again is the first, unless a node
+  between may change what it pushes (then it runs again, in turn), and two that differ
+  with nothing between are a ConflictingPushes error;
 - so a remote's pushes, once the reads they need have run, are one `git push`, and pushes to
   different remotes run at once;
 - a plain read of a key a WriteConfig set earlier in the plan starts no process: it's the
@@ -41,7 +43,7 @@ from git_client.plan.nodes import (
     Value,
     lift,
 )
-from git_client.plan.pushing import Push
+from git_client.plan.pushing import ConflictingPushes, Push
 from git_client.plan.resources import (
     CONFIG,
     Access,
@@ -58,6 +60,7 @@ __all__ = [
     "Access",
     "Config",
     "ConfigValue",
+    "ConflictingPushes",
     "Effect",
     "ExecutionException",
     "LocalRef",
