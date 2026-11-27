@@ -12,10 +12,10 @@ what git-stack, git-recommit and move-forward share for that:
   reading objects, which keeps answering after git exits on a name (e.g. `@{u}` without an
   upstream).
 - **Batched reads and writes**, each one process: every config entry (`config`), refs with
-  their upstreams, symbolic refs, HEAD and any other fields (`refs`), patch ids for many commands (`patch_ids`),
-  where git keeps many files in the git directory (`git_paths`), the git directory and the
-  common one (`git_dir`, `git_common_dir`), blobs as they are (`hash_blobs`), and ref updates
-  in one transaction (`update_refs`).
+  their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
+  commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
+  git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
@@ -43,7 +43,9 @@ from git_client import (
     Git,
     ObjectType,
     RefUpdate,
+    color_enabled,
     config,
+    config_values,
     git_common_dir,
     git_dir,
     git_paths,
@@ -98,11 +100,28 @@ remotes = config(git)["remote.origin.url"]  # every value of each key
 # For a key a user typed, run `git config --get <key>` (one process).
 default_branch = config(git).get("init.defaultbranch")
 push_remote = config(git).get("branch.Topic.pushremote")
-for ref in refs(git, "refs/heads/", fields=["upstream:track"]).values():
-    print(ref.name, ref.object, ref.upstream, ref.head, ref.fields["upstream:track"])
+# Values read by git as a type ("bool", "int", "bool-or-int", "bool-or-str", "path",
+# "expiry-date", "color"; none: as written), the last of each key's, or None if it isn't set:
+# {"commit.gpgsign": True, "merge.verifysignatures": None}. One git per call, so one per type;
+# keys as config() gives them. GitError for a value git can't read as the type.
+signing = config_values(git, "commit.gpgsign", "merge.verifysignatures", type="bool")
+# Whether to color output, as git decides for a setting, color.ui, and "auto" on a terminal.
+colored = color_enabled(git, "color.stack", stdout_is_tty=sys.stdout.isatty())
+for ref in refs(git, "refs/heads/").values():
+    print(ref.name, ref.object, ref.upstream, ref.head)
+# Typed attributes, each read only if asked (None otherwise), in the same one process: how
+# each branch stands against its upstream and what it pushes to, as git says it (a Track:
+# ahead, behind, or gone; None with none), the upstream's remote ("." for a local branch) and
+# name there, git's push destination and its remote, the committer date, and commits ahead of
+# and behind a base (git 2.41's %(ahead-behind:...); before, one more process per ref).
+both = refs(git, "refs/heads/", track=True, push_track=True, remotes=True, dates=True)
+counted = refs(git, "refs/heads/", ahead_behind="refs/heads/main")
+print(both["refs/heads/main"].track, counted["refs/heads/a"].ahead_behind)  # Track(), (0, 0)
+# for-each-ref's filters (contains, no_contains, merged, no_merged, points_at) and order:
+# the branches main has, newest first, then by name; the first 10.
+done = refs(git, "refs/heads/", merged="main", sort=["-committerdate", "refname"], count=10)
 
-# For a branch's short name, ask for the field "refname:lstrip=2", never "refname:short",
-# which comes back as "heads/v1" when a tag is named v1 too; and give git full ref names.
+# Give git full ref names: a short one is ambiguous when a tag has the same name.
 old = refs(git, "refs/heads/old")["refs/heads/old"].object
 update_refs(git, [RefUpdate("refs/heads/old", None, old=old)])  # all or none; only if unmoved
 
@@ -225,6 +244,43 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
+### Commits
+
+`commits` lists the commits git's revision walk finds, with what each says of itself, from one
+`git rev-list`; `count` and `any_commit` ask the same of git without listing them:
+
+```python
+from datetime import UTC, datetime
+
+from git_client import Git, Revisions, any_commit, commits, count
+
+git = Git("path/to/repo")
+# git's main..a: reachable from a (or each of several) and from none of the excludes.
+for commit in commits(git, Revisions("a", exclude="main"), reverse=True):  # oldest first
+    commit.id, commit.parents, commit.subject  # full ids; a merge's first parent first
+    commit.author.name, commit.author.email, commit.author.date  # an aware datetime, or None
+    commit.committer  # a Signature too; commit.message: None, unless messages=True
+mine = Revisions(
+    ["a", "b"],
+    exclude="main",
+    merges=False,  # True: only merges
+    since=datetime(2026, 1, 1, tzinfo=UTC),  # by the committer's date
+    author="<me@example.com>",  # a fixed string in "Name <email>", with no mailmap
+    paths=["src"],  # changing these paths, from the top of the worktree ("": all of it), literally
+)
+count(git, mine)  # how many
+any_commit(git, Revisions("a", exclude="main", merges=True))  # whether any: stops at the first
+# Leaving out each commit whose patch is already in main (git's --cherry-pick --right-only).
+commits(git, Revisions("a", exclude="main", cherry_pick=True), topo_order=True, max_count=10)
+```
+
+The revisions reach git on its stdin, as many as it takes, so none is read as an option: a
+`Revisions` refuses one that is empty, starts with `-`, or holds a newline, a carriage return
+or a NUL (ValueError), which git would read as something else. Each message is read as UTF-8
+whatever `i18n.logOutputEncoding` says. A date is None where the commit records none, or one a
+datetime can't hold (a bad zone, a year past 9999), which git takes and fsck only warns of.
+`first_parent=True` follows only each merge's first parent.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says
@@ -340,15 +396,16 @@ takes precedence over cached data.
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
-`git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `status`, `worktrees` and
-`CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`, `ok`,
-`succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
-write: the library doesn't try to tell from a command line whether git would write (that's git's
-to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends it, so
-a function that only reads takes a `ReadOnlyGit` and is given either; a type checker flags a
-call of `run` on one. A tool that reads with other commands (`log`, `diff`, ...) runs them with
-a `Git`. `patch_ids` runs the commands it's given, so it takes a `Git`, and raises `TypeError`
-for a `ReadOnlyGit`.
+`config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+`git_common_dir`, `commits`, `count`, `any_commit`, `status`, `worktrees` and `CatFile`. It has
+no public way to run a command of the caller's: no `run`, `run_bytes`, `ok`, `succeeds`,
+`passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to write: the
+library doesn't try to tell from a command line whether git would write (that's git's to decide,
+and it has no read-only mode to ask), it just doesn't take one. `Git` extends it, so a function
+that only reads takes a `ReadOnlyGit` and is given either; a type checker flags a call of `run`
+on one. A tool that reads with other commands (`log`, `diff`, ...) runs them with a `Git`.
+`patch_ids` runs the commands it's given, so it takes a `Git`, and raises `TypeError` for a
+`ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")

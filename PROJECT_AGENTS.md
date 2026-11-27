@@ -21,6 +21,8 @@ the shape of the code or a rule here changes.
   and active CatFile work. Uses one monotonic clock so callers can combine intervals.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
+- `src/git_client/history.py`: `commits`, `count` and `any_commit`, a `git rev-list` each for
+  the commits a `Revisions` describes, parsed into `Commit`s.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git

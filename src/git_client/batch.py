@@ -2,9 +2,11 @@
 
 import os
 import re
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
+from typing import Literal, overload
 
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -28,10 +30,11 @@ from git_client.client import (
     recall_where,
     remember_where,
     rev_parse_lines,
+    stdout_of,
     where_command,
     where_questions,
 )
-from git_client.errors import GitError
+from git_client.errors import GitError, UnknownRevisionError, WrongTypeError
 from git_client.performance import record_read
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -90,49 +93,335 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     return entries
 
 
+type ConfigType = Literal[
+    "bool", "int", "bool-or-int", "bool-or-str", "path", "expiry-date", "color"
+]
+"""How `config_values` has git read values: as `git config --type` names its types."""
+
+type ConfigValue = str | bool | int | Path
+
+# What a POSIX extended regular expression, as git reads `--get-regexp`'s, takes as special.
+_ERE_SPECIAL = re.compile(r"[.\[\\()*+?{|^$]")
+
+
+@overload
+def config_values(git: ReadOnlyGit, *keys: str, type: None = None) -> dict[str, str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool"]
+) -> dict[str, bool | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["int", "expiry-date"]
+) -> dict[str, int | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool-or-int"]
+) -> dict[str, bool | int | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool-or-str"]
+) -> dict[str, bool | str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["color"]
+) -> dict[str, str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["path"]
+) -> dict[str, Path | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: ConfigType | None
+) -> Mapping[str, ConfigValue | None]: ...
+@record_read("git")
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: ConfigType | None = None
+) -> dict[str, ConfigValue | None]:
+    """Each key's value, as `git config --get` gives it (the last one, from every config file
+    git reads), read by git as `type`, or None for a key that isn't set; from one `git config
+    --get-regexp`. As git reads them: "bool" a bool (a key with no value is True); "int" an int
+    ("1k" is 1024); "bool-or-int" and "bool-or-str" a bool where git reads one, else an int or
+    the value; "path" a Path with `~` expanded; "expiry-date" seconds since the epoch ("never"
+    is 0); "color" the terminal's escape sequence. With no type, the value as it is ("" for a
+    key with no value).
+
+    git reads one type per process, so values of several types take a call (a process) each.
+    A value git can't read as `type` raises GitError, for every key of the call.
+
+    The keys are as `config` gives them: section and name in lower case, the subsection as
+    written. "commit.gpgSign" finds nothing, with no error, and neither does a key that isn't
+    one (e.g. "nosection")."""
+    if not keys:
+        return {}
+    # git lowercases the pattern up to its first "." and after its last, to find a key given
+    # in any case: `.{0}`, matching nothing, takes those, so every key is matched as it is.
+    escaped = (_ERE_SPECIAL.sub(r"\\\g<0>", key) for key in keys)
+    pattern = "^.{0}(" + "|".join(escaped) + ").{0}$"
+    args = ("config", "-z", *([f"--type={type}"] if type else []), "--get-regexp", pattern)
+    result = read_process(git, *args, capture_output=True)
+    found: dict[str, ConfigValue | None] = dict.fromkeys(keys)
+    if result.returncode == 1 and not result.stdout and not result.stderr:
+        return found  # git found none of them
+    for entry in decode(stdout_of(args, result)).split("\0"):
+        if entry:
+            # A key, then its value after a newline; a key with no value has no newline.
+            key, _, value = entry.partition("\n")
+            found[key] = _typed(value, type)
+    return found
+
+
+def _typed(value: str, type: ConfigType | None) -> ConfigValue:
+    """A value as `git config --type=<type>` printed it."""
+    match type:
+        case "bool":
+            return value == "true"
+        case "int" | "expiry-date":
+            return int(value)
+        case "bool-or-int" | "bool-or-str" if value in ("true", "false"):
+            return value == "true"
+        case "bool-or-int":
+            return int(value)
+        case "path":
+            return Path(value)
+        case _:
+            return value
+
+
+@record_read("git")
+def color_enabled(git: ReadOnlyGit, key: str, *, stdout_is_tty: bool) -> bool:
+    """Whether to color output as git decides for a color setting (e.g. "color.stack", as
+    `config` gives keys), from `git config --get-colorbool`: by its value, or color.ui's
+    where it isn't set; for "auto" (the default), only where `stdout_is_tty` (or the
+    environment's GIT_PAGER_IN_USE says git's pager is running) and its TERM is set and isn't
+    "dumb". Raises GitError for a value git can't read."""
+    tty = "true" if stdout_is_tty else "false"
+    output = read_output(git, "config", "--get-colorbool", "--end-of-options", key, tty)
+    return decode(output).strip() == "true"
+
+
+@dataclass(frozen=True)
+class Track:
+    """How a branch stands against the ref it tracks (its upstream, or where it pushes), as
+    git says it (`%(upstream:track)`, `%(push:track)`): how many commits it has that the ref
+    hasn't (`ahead`) and the ref has that it hasn't (`behind`), or that the ref doesn't exist
+    (`gone`)."""
+
+    ahead: int = 0
+    behind: int = 0
+    gone: bool = False
+
+
+# A key `refs` sorts by, as `git for-each-ref --sort` takes it: "-" sorts it in reverse.
+type SortKey = Literal[
+    "refname",
+    "-refname",
+    "version:refname",
+    "-version:refname",
+    "committerdate",
+    "-committerdate",
+    "creatordate",
+    "-creatordate",
+]
+
+
 @dataclass(frozen=True)
 class Ref:
     """A ref, from `refs`: its full name, the object it points to, the full name of its
-    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), whether HEAD
-    is on it, and the other fields `refs` was asked for, by name."""
+    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), and whether
+    HEAD is on it.
+
+    The rest are None unless `refs` was asked for them. With `remotes`: the remote its
+    upstream is on ("." for a local branch, "" with no upstream) and the upstream's name
+    there; the full name of the remote-tracking ref git would push it to (`%(push)`, ""
+    where git would push it nowhere it tracks); and its configured push remote
+    (`%(push:remotename)`: its pushRemote, remote.pushDefault or remote; "" if none is set,
+    even where `push` names one, as with push.default=current and no remote set). With
+    `track` and `push_track`: how it stands against its upstream, or what it pushes to (None
+    where it has none). With `dates`: its commit's committer date (None for a ref to another
+    object, e.g. an annotated tag). With `ahead_behind`: how many commits it has that the base
+    hasn't and the base has that it hasn't (None for a ref to no commit, e.g. a tree)."""
 
     name: str
     object: str
     upstream: str
     symref: str
     head: bool
-    fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
+    upstream_remote: str | None = None
+    upstream_remote_ref: str | None = None
+    push: str | None = None
+    push_remote: str | None = None
+    track: Track | None = None
+    push_track: Track | None = None
+    committer_date: datetime | None = None
+    ahead_behind: tuple[int, int] | None = None
+
+
+# What git before 2.41 says of %(ahead-behind:...), which it doesn't know.
+_NO_AHEAD_BEHIND = re.compile(r"^fatal: unknown field name: ahead-behind:", re.MULTILINE)
+# What git 2.41 and newer say of an %(ahead-behind:<base>) whose base names nothing.
+_NO_BASE = re.compile(r"^fatal: failed to find '.*'$", re.MULTILINE)
 
 
 @record_read("git")
-def refs(git: ReadOnlyGit, *patterns: str, fields: Sequence[str] = ()) -> dict[str, Ref]:
+def refs(
+    git: ReadOnlyGit,
+    *patterns: str,
+    contains: str | None = None,
+    no_contains: str | None = None,
+    merged: str | None = None,
+    no_merged: str | None = None,
+    points_at: str | None = None,
+    sort: Sequence[SortKey] = (),
+    count: int | None = None,
+    remotes: bool = False,
+    track: bool = False,
+    push_track: bool = False,
+    dates: bool = False,
+    ahead_behind: str | None = None,
+) -> dict[str, Ref]:
     """The refs matching patterns (as `git for-each-ref` takes them, e.g. "refs/heads/"; all
-    refs if none), by full name, from one `git for-each-ref`. `fields` are other fields to
-    read, as `--format` names them without `%(...)` (e.g. "upstream:track",
-    "committerdate:iso-strict", "push:remotename"), each of whose values must be one line.
+    refs if none), by full name, in git's order, from one `git for-each-ref`.
 
-    For a branch's short name, ask for "refname:lstrip=2" (or "upstream:lstrip=2"), never
-    ":short", which git disambiguates when a tag has the same name ("heads/v1"); and give git
-    full ref names or object ids rather than short names."""
-    extra = "".join(f"%00%({name})" for name in fields)
-    listing = read_output(
-        git,
-        "for-each-ref",
-        f"--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)%00%(HEAD){extra}",
-        "--end-of-options",
-        *patterns,
-    )
+    Only those whose commit contains `contains` (or doesn't contain `no_contains`), whose
+    commit `merged` contains (or `no_merged` doesn't), or that point at `points_at`, as git's
+    options of those names filter them. `sort` orders them by each key in turn, the first
+    deciding (git's `--sort`, whose last decides), and `count` keeps the first so many (at
+    least 1: ValueError otherwise, as git would take 0 for all).
+
+    `remotes`, `track`, `push_track`, `dates` and `ahead_behind` (a base: a commit, or a
+    name for one) fill in the `Ref` attributes they name (see Ref). With git before 2.41,
+    which can't count against a base, `ahead_behind` runs one `git rev-list` per ref
+    (and one `git rev-parse` for the base), so that every count is against the same commit.
+    Raises ValueError for a base with ")", which a format can't hold, UnknownRevisionError
+    for a base that names nothing, and GitError if git fails otherwise.
+
+    Give git full ref names or object ids rather than short names, which can be ambiguous
+    (e.g. a tag named like a branch)."""
+    if count is not None and count < 1:
+        raise ValueError(f"refs can't keep fewer than 1 ref: count={count}")
+    if ahead_behind is not None and ")" in ahead_behind:
+        raise ValueError(f"refs can't count against a base with ')': {ahead_behind!r}")
+    options = [
+        f"--{option}={value}"
+        for option, value in (
+            ("contains", contains),
+            ("no-contains", no_contains),
+            ("merged", merged),
+            ("no-merged", no_merged),
+            ("points-at", points_at),
+        )
+        if value is not None
+    ]
+    # git's last key decides.
+    options += [f"--sort={key}" for key in reversed(sort)]
+    options += [] if count is None else [f"--count={count}"]
+    # The typed attributes asked for, each with its field, in the order they're read.
+    typed: list[tuple[str, str]] = []
+    if remotes:
+        typed += [
+            ("upstream_remote", "upstream:remotename"),
+            ("upstream_remote_ref", "upstream:remoteref"),
+            ("push_remote", "push:remotename"),
+        ]
+    typed += [("push", "push")] if remotes or push_track else []
+    typed += [("track", "upstream:track,nobracket")] if track else []
+    typed += [("push_track", "push:track,nobracket")] if push_track else []
+    typed += [("committer_date", "committerdate:iso-strict")] if dates else []
+    typed += [("ahead_behind", f"ahead-behind:{ahead_behind}")] if ahead_behind is not None else []
+
+    def listing(typed: list[tuple[str, str]]) -> str:
+        atoms = ["refname", "objectname", "upstream", "symref", "HEAD"]
+        atoms += [atom for _, atom in typed]
+        spec = "%00".join(f"%({atom})" for atom in atoms)
+        command = ["for-each-ref", f"--format={spec}", *options, "--end-of-options"]
+        return decode(read_output(git, *command, *patterns))
+
+    try:
+        listed, counted_alone = listing(typed), False
+    except GitError as error:
+        if ahead_behind is not None and _NO_BASE.search(error.stderr):
+            # As the fallback's rev-parse says it, so both say it the same way.
+            raise UnknownRevisionError(error.command, error.returncode, error.stderr) from None
+        if ahead_behind is None or not _NO_AHEAD_BEHIND.search(error.stderr):
+            raise
+        typed.pop()  # ahead_behind, counted below
+        listed, counted_alone = listing(typed), True
     found: dict[str, Ref] = {}
     # Only at "\n", as git ends each: a ref name can hold what splitlines and strip take as
     # line endings or space (e.g. U+2028).
-    for line in decode(listing).split("\n"):
+    for line in listed.split("\n"):
         if not line:
             continue
         name, object_id, upstream, symref, head, *values = line.split("\0")
+        said = dict(zip((key for key, _ in typed), values, strict=True))
+        date = said.get("committer_date")
         found[name] = Ref(
-            name, object_id, upstream, symref, head == "*", dict(zip(fields, values, strict=True))
+            name,
+            object_id,
+            upstream,
+            symref,
+            head == "*",
+            upstream_remote=said.get("upstream_remote"),
+            upstream_remote_ref=said.get("upstream_remote_ref"),
+            push=said.get("push"),
+            push_remote=said.get("push_remote"),
+            track=_track(said["track"], upstream) if track else None,
+            push_track=_track(said["push_track"], said["push"]) if push_track else None,
+            committer_date=datetime.fromisoformat(date) if date else None,
+            ahead_behind=_counts(said.get("ahead_behind", "")),
         )
+    if counted_alone and ahead_behind is not None:
+        alone = _ahead_behind_alone(git, ahead_behind, found.values())
+        found = {name: replace(ref, ahead_behind=alone[name]) for name, ref in found.items()}
     return found
+
+
+# What git's %(upstream:track,nobracket) says of a ref that's ahead, behind or both.
+_TRACK = re.compile(r"(?:ahead (?P<ahead>\d+))?(?:, )?(?:behind (?P<behind>\d+))?")
+
+
+def _track(said: str, tracked: str) -> Track | None:
+    """A Track from what git said of how a ref stands against the ref it tracks
+    (%(upstream:track,nobracket) or %(push:track,nobracket)), named `tracked` ("" if none):
+    nothing when they're the same, "gone" when `tracked` doesn't exist."""
+    if not tracked:
+        return None
+    if said == "gone":
+        return Track(gone=True)
+    found = _TRACK.fullmatch(said)
+    if found is None:
+        raise ValueError(f"git said a ref's tracking is {said!r}")
+    return Track(int(found["ahead"] or 0), int(found["behind"] or 0))
+
+
+def _counts(said: str) -> tuple[int, int] | None:
+    """Two counts from what git said, "<ahead> <behind>"; None if it said nothing."""
+    if not said:
+        return None
+    ahead, behind = said.split()
+    return int(ahead), int(behind)
+
+
+def _ahead_behind_alone(
+    git: ReadOnlyGit, base: str, found: Iterable[Ref]
+) -> dict[str, tuple[int, int] | None]:
+    """What %(ahead-behind:<base>) says of each ref, for a git before 2.41, which can't say
+    it: one `git rev-list --left-right --count` per ref against the commit base names (from
+    one `git rev-parse`), and None for a ref to no commit."""
+    commit = decode(
+        read_output(git, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}")
+    ).strip()
+    counts: dict[str, tuple[int, int] | None] = {}
+    for ref in found:
+        args = ("rev-list", "--left-right", "--count", "--end-of-options")
+        try:
+            counts[ref.name] = _counts(
+                decode(read_output(git, *args, f"{ref.object}^{{commit}}...{commit}"))
+            )
+        except WrongTypeError:  # e.g. a tag of a tree
+            counts[ref.name] = None
+    return counts
 
 
 @record_read("git")

@@ -592,6 +592,7 @@ class _FakeReadOnlyGit(ReadOnlyGit):
         capture_output: bool = False,
         input: bytes | None = None,
         stdout: int | IO[bytes] | IO[str] | None = None,
+        env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         # FakeGit's own, not a faked subclass's override, which a real Git's read_only() doesn't
@@ -602,6 +603,7 @@ class _FakeReadOnlyGit(ReadOnlyGit):
             capture_output=capture_output,
             input=input,
             stdout=stdout,
+            env=env,
             timeout=timeout,
         )
 
