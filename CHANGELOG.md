@@ -123,6 +123,21 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
+  lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
+  `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,
+  author and committer `Signature`s with aware dates, subject, and the whole message if asked;
+  a tool handles a `date` of None, for a commit that records no date or one a datetime can't
+  hold), from one `git rev-list` given the revisions on stdin. `count` and `any_commit` ask the
+  same with `--count` and `--max-count=1`. A tool replaces its raw `rev-list` and `log` calls
+  that list, count or test ranges: e.g. `git.run("rev-list", "--max-count=1", "--merges",
+  f"{base}..{tip}")` becomes `any_commit(git, Revisions(tip, exclude=base, merges=True))`,
+  `--format=%H%x00%an...` with `--date=raw` becomes the `Commit`'s fields, and `--cherry-pick
+  --right-only a...b` becomes `Revisions(b, exclude=a, cherry_pick=True)`. `author` matches
+  the author the commit records, with no mailmap, where `git log --author` reads one by default
+  (log.mailmap); and the top of the worktree is the path `""`: `"."` matches nothing, so
+  move-forward's derive.py, whose `PurePosixPath(path).parent` gives `"."` for top-level
+  files, passes `""` for them.
 - `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
   `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
   in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`,
