@@ -38,17 +38,37 @@ the shape of the code or a rule here changes.
 
 ## Rules for this project
 
-- **No required runtime dependencies.** The `pygit2` extra provides the opt-in native
-  backend for `ReadOnlyGit`. A default install needs only the standard library.
-- **A git client only: never reimplement git.** The library starts git and parses what git
-  prints. It never decides in Python what git decides: no walking objects, refs or worktrees,
-  no reading or editing files in a git directory, no ported algorithms or rules (merge-base,
-  config syntax, ref names, ...). Where git does an action for many things in one process
-  (`update-ref --stdin`, `cat-file --batch-command`, `for-each-ref`, `merge-tree --stdin`,
-  `rev-parse` with many arguments, ...), use git's way; where it doesn't, run more processes:
-  that's fine. Before adding a function, ask which git command answers it. Opt-in
-  object reads may ask libgit2 where its answer is equivalent to Git's. Git remains
-  the backend for all writes and the fallback for reads libgit2 can't answer.
+- **Keep runtime dependencies few and justified.** The maintainer isn't worried about them,
+  but each needs a reason and the maintainer's go-ahead before it's added. Today none is
+  required: the `pygit2` extra provides the opt-in native backend for `ReadOnlyGit`, and a
+  default install needs only the standard library.
+- **Git is the reference.** Policy (native reads exist only for objects named by full SHA-1
+  ids today, in `native.py`; there are no native writes):
+  - *Reads* go through pygit2 (libgit2) only where libgit2 answers exactly as git would,
+    proven by differential tests against real git (as the `rev-parse` parsing was). A read
+    libgit2 can't answer exactly is a git process: `--fork-point`, `--cherry-pick`,
+    `%(upstream:track)`, `--walk-reflogs`, `status`, partial clones, and anything that
+    depends on git config, hook or filter semantics.
+  - *Writes* go through pygit2 only where no behavior difference from git is expected;
+    wherever one is known, use git. Hooks must never be skipped, and libgit2 runs none: any
+    write that can trigger a hook (`update-ref`'s reference-transaction hook, commit, merge,
+    rebase, cherry-pick, checkout, reset, push, fetch, worktree commands), signs, runs
+    filters, merges (libgit2's merge isn't merge-ort) or uses the network is a git process.
+    Checking in Python that no hook is installed would itself reimplement git. Config writes
+    are git too.
+- **A git client only: never reimplement git.** The library starts git (or asks libgit2
+  where it's equivalent, above) and parses the answer. It never decides in Python what git
+  decides: no walking objects, refs or worktrees, no reading or editing files in a git
+  directory, no parsing git config, no ported algorithms or rules (merge-base, config
+  syntax, ref names, ...). Using libgit2 where it's equivalent isn't reimplementing; code of
+  ours that does any of those still is. Where git does an action for many things in one
+  process (`update-ref --stdin`, `cat-file --batch-command`, `for-each-ref`,
+  `merge-tree --stdin`, `rev-parse` with many arguments, ...), use git's way; where it
+  doesn't, run more processes: that's fine. Before adding a function, ask which git command
+  answers it.
+- **The API is typed.** Functions take typed arguments and keyword switches; callers never
+  pass command-line syntax around (`push` takes `PushUpdate`s and `atomic=...`, not
+  refspecs and `--atomic`). `Git.run` and `Git.run_bytes` are the raw escape hatch.
 - **Typed Git operations return parsed results.** Prefer plumbing or documented
   machine-readable formats. Cover the fields consumers need and extend the results as they
   need more. Arbitrary commands through `Git.run` and `Git.run_bytes` return raw output.
