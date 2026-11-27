@@ -59,9 +59,9 @@ class Push(Effect[tuple[PushRef, ...]]):
     pushes run at once is the plan's choice, so an atomic push is outside its sequential
     semantics); else each branch succeeds or fails alone. Pushes don't conflict with each
     other (see TrackingRef), but for two of one ref of one remote, which git can't make in
-    one push (see Plan for which of those run). A branch fails if git rejected it (PushRejectedError),
-    if a destination's report of it isn't done, or if git didn't report it, or failed with
-    nothing rejected (as git's message says).
+    one push (see Plan for which of those run). A branch fails if git rejected it
+    (PushRejectedError), if a destination's report of it isn't done, or if git didn't
+    report it, or failed with nothing rejected (as git's message says).
     """
 
     def __init__(
