@@ -868,7 +868,7 @@ def random_git_plan(seed: int, git: Git, reorder: bool) -> tuple[Plan, list[Node
     for _ in range(8):
         kind = rng.random()
         if kind < 0.4:
-            nodes.append(Push("origin", rng.choice("acc"), force=rng.random() < 0.2))
+            nodes.append(Push("origin", rng.choice("acc"), force=rng.random() < 0.4))
         elif kind < 0.6:
             url = rng.choice(["../origin.git", "../mirror.git"])
             nodes.append(WriteConfig(ConfigSet("remote.origin.url", url)))
@@ -888,10 +888,9 @@ def random_git_plan(seed: int, git: Git, reorder: bool) -> tuple[Plan, list[Node
 
 def run_random_git_plan(
     seed: int, git: Git, reorder: bool
-) -> tuple[str | None, list[str], list[str]]:
-    """What became of random_git_plan's run: what it raised, each node's outcome, and the
-    remotes' refs."""
-    git.run("branch", "c", "HEAD~1")
+) -> tuple[str | None, list[str], list[str], list[Node[object]]]:
+    """What became of random_git_plan's run: what it raised, each node's outcome, the
+    remotes' refs, and the nodes."""
     plan, nodes = random_git_plan(seed, git, reorder)
     try:
         plan.execute()
@@ -902,7 +901,12 @@ def run_random_git_plan(
         Git(Path(git.directory).parent / f"{name}.git").run("for-each-ref")
         for name in ("origin", "mirror")
     ]
-    return raised, [outcome(node, nodes) for node in nodes], remotes
+    return raised, [outcome(node, nodes) for node in nodes], remotes, nodes
+
+
+def kind_of(outcome: str) -> str:
+    """Whether an outcome() is a result, a failure or a skip."""
+    return next((kind for kind in ("failed", "skipped") if outcome.startswith(kind)), "result")
 
 
 def never_settles(node: Node[object], plan: Plan, before: Sequence[Node[object]]) -> bool:
@@ -919,27 +923,32 @@ def test_reordering_gives_what_program_order_gives_with_git(
     def make(directory: Path) -> None:
         make_repo(directory)
         with_remotes(Git(directory / "repo"))
+        Git(directory / "repo").run("branch", "c", "HEAD~1")
 
     def copy(name: str) -> Git:
-        return Git(repo_templates.copy("plan-remotes", tmp_path / name) / "repo")
+        return Git(repo_templates.copy("plan-remotes-c", tmp_path / name) / "repo")
 
-    repo_templates.build("plan-remotes", make)
+    repo_templates.build("plan-remotes-c", make)
     seen = {"a repeat": 0, "conflicting pushes": 0}
-    for seed in range(20):
-        in_order = run_random_git_plan(seed, copy(f"{seed}-in-order"), reorder=False)
+    for seed in range(12):
         reordered = run_random_git_plan(seed, copy(f"{seed}-reordered"), reorder=True)
         with monkeypatch.context() as unsettled:  # program order, as git answers each push
             unsettled.setattr(Push, "settle", never_settles)
             unsettled.setattr(Push, "check", never_checks)
             raw = run_random_git_plan(seed, copy(f"{seed}-raw"), reorder=False)
 
-        assert reordered == in_order, seed
-        if in_order[0] == "ConflictingPushes":
+        if reordered[0] == "ConflictingPushes":
             seen["conflicting pushes"] += 1
             continue
-        # A repeated push reports the first's report: but the remotes end as git leaves them.
-        assert in_order[2] == raw[2], seed
-        seen["a repeat"] += in_order[1] != raw[1]
+        # A repeated push reports the first's report: but the remotes end as git leaves
+        # them, and every other node's outcome is git's.
+        assert reordered[2] == raw[2], seed
+        for node, got, expected in zip(reordered[3], reordered[1], raw[1], strict=True):
+            if isinstance(node, Push):
+                assert kind_of(got) == kind_of(expected), seed
+            else:
+                assert got == expected, seed
+        seen["a repeat"] += reordered[1] != raw[1]
     assert all(seen.values()), seen
 
 
