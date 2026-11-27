@@ -34,11 +34,16 @@ class LocalRef(Resource):
 
 @dataclass(frozen=True)
 class RemoteRef(Resource):
-    """A ref at a remote (as a push names it: a name or a URL), by its full name there.
-    Two names for one repository are taken for two."""
+    """A ref at a remote (as a push names it: a name or a URL), by its full name there. It
+    overlaps the same ref at any remote: a remote's name and its URL, or two URLs, may be
+    one repository, which only git (or the server) could say."""
 
     remote: str
     ref: str
+
+    @override
+    def overlaps(self, other: Resource) -> bool:
+        return isinstance(other, RemoteRef) and other.ref == self.ref
 
 
 @dataclass(frozen=True)

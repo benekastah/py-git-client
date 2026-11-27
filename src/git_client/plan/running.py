@@ -10,7 +10,7 @@ from collections.abc import Generator, Hashable
 from git_client.client import Git
 from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped, Value
 from git_client.plan.pushing import ConflictingPushes, Push
-from git_client.plan.resources import Access, LocalRef, RemoteRef, overlap
+from git_client.plan.resources import Access, overlap
 
 
 class Plan:
@@ -26,17 +26,19 @@ class Plan:
     a read may run: so reads run as early as they can, and then the writes that are left
     wait for nothing but each other, and share groups. A round's nodes don't conflict, so
     its groups run at once: the plan starts every group's git process, then waits for each
-    in turn, in the calling thread (work in-process just runs). Some nodes need no process
-    (see `_known`): a push that repeats an earlier one of the same ref, with nothing between
-    that could change what it pushes, is that one. Without `reorder`, nodes run one at a time, in
-    program order.
+    in turn, in the calling thread (work in-process just runs). Without `reorder`, nodes
+    run one at a time, in program order.
 
-    Two pushes of one ref of one remote that differ, with nothing between known to change
-    what they push, are the author's mistake: ConflictingPushes, raised before anything
-    runs if both are known then, else failing the second.
+    Before either, the plan takes two pushes of one ref of one remote, with nothing between
+    that may change what they push or where (see `_earlier_push`), for one: the second is
+    the first, and reports the first's report (CREATED, say, where git, asked again, would
+    say UP_TO_DATE), failure included; and if they differ, the author's mistake:
+    ConflictingPushes, raised before anything runs if both are known then, else failing the
+    second.
 
-    Every process starts through `git` (its `popen`, see Started), so its timeout,
-    `stopping` and process groups apply as to any of its commands. On Ctrl-C, execute()
+    Every process starts through `git` (its `_start`, see Started), so its timeout,
+    `stopping` and process groups apply as to any of its commands; its `performance`
+    recorder times them. On Ctrl-C, execute()
     stops every git process the round started (as an interrupted command is stopped: see
     ReadOnlyGit), then raises KeyboardInterrupt.
     """
@@ -203,17 +205,19 @@ class Plan:
         if earlier._parameters(self) != node._parameters(self):
             node._fail(ConflictingPushes(earlier, node))
             return True
-        if not self.reorder:
-            return False
         for name in ("_done", "_result", "_error"):  # it's finished: they conflict
             object.__setattr__(node, name, getattr(earlier, name))
         return True
 
     def _earlier_push(self, node: Push) -> tuple[Push, bool] | None:
         """The nearest earlier Push of the node's ref of its remote, if any, and whether a
-        node between may have changed what they push (the local branch or the remote's)."""
+        node between may have changed what they push, or where: one that writes anything a
+        push reads or writes (the branch, the remote's ref, config such as the remote's
+        URL), or whose resources aren't known."""
         remote, ref = node.remote.get(), node._ref()
-        pushed = (LocalRef(ref), RemoteRef(remote, ref))
+        access = self._access[node]
+        assert access is not None  # a Push declares its resources
+        pushed = access.reads | access.writes
         changed = False
         for earlier in reversed(self._order[: self._position[node]]):
             if isinstance(earlier, Push) and earlier in self._key:
@@ -221,8 +225,8 @@ class Plan:
                     return earlier, changed
             elif isinstance(earlier, Value):
                 continue
-            access = self._access.get(earlier)
-            changed = changed or access is None or overlap(access.writes, pushed)
+            between = self._access.get(earlier)
+            changed = changed or between is None or overlap(between.writes, pushed)
         return None
 
     def _conflict(self, earlier: Node[object], node: Node[object]) -> bool:

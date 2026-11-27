@@ -546,10 +546,12 @@ def test_a_ready_map_runs_at_once(repo: Git) -> None:
     assert ran == ["early", "first", "middle", "late"]
 
 
-def test_identical_pushes_are_one(remotes: Git, git_calls: list[GitCall]) -> None:
+@pytest.mark.parametrize("reorder", [True, False])
+def test_identical_pushes_are_one(remotes: Git, git_calls: list[GitCall], reorder: bool) -> None:
+    # The second reports the first's report (it created the branch), in program order too.
     remotes.run("branch", "c")
     git_calls.clear()
-    plan = Plan(remotes)
+    plan = Plan(remotes, reorder=reorder)
     first, again = plan.add(Push("origin", "c")), plan.add(Push("origin", "c"))
 
     plan.execute()
@@ -781,7 +783,7 @@ def test_pushes_to_two_remotes_run_at_once(remotes: Git, monkeypatch: pytest.Mon
     plan = Plan(StartingGit(remotes.directory, events))
     # The second's remote is read first: reads run before the pushes, which then run together.
     to_origin = plan.add(Push("origin", "a"))
-    to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "a"))
+    to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "b"))
 
     plan.execute()
 
@@ -874,13 +876,11 @@ def test_what_a_push_writes_conflicts_with() -> None:
     tracking = TrackingRef("origin", "refs/heads/a")
     pushing = Access(frozenset(), frozenset({RemoteRef("origin", "refs/heads/a"), tracking}))
 
-    # Pushes don't conflict, but for one ref of one remote.
+    # Pushes don't conflict, but for one ref, of whichever remote: two may be one repository.
     assert not pushing.conflicts(
         Access(frozenset(), frozenset({RemoteRef("origin", "refs/heads/b"), tracking}))
     )
-    assert not pushing.conflicts(
-        Access(frozenset(), frozenset({RemoteRef("mirror", "refs/heads/a")}))
-    )
+    assert pushing.conflicts(Access(frozenset(), frozenset({RemoteRef("mirror", "refs/heads/a")})))
     assert pushing.conflicts(Access(frozenset(), frozenset({RemoteRef("origin", "refs/heads/a")})))
     # A remote-tracking ref may be any local ref but a branch or tag.
     assert pushing.conflicts(Access(frozenset({LocalRef("refs/remotes/origin/a")}), frozenset()))
@@ -925,7 +925,7 @@ def test_independent_groups_start_together_and_are_collected_in_turn(
     events: list[str] = []
     collecting(events, monkeypatch)
     plan = Plan(StartingGit(remotes.directory, events))
-    to_origin, to_mirror = plan.add(Push("origin", "a")), plan.add(Push("mirror", "a"))
+    to_origin, to_mirror = plan.add(Push("origin", "a")), plan.add(Push("mirror", "b"))
 
     plan.execute()
 
@@ -944,7 +944,7 @@ def test_every_started_process_past_its_timeout_fails_its_node(remotes: Git) -> 
     slow_pushes(remotes)
     events: list[str] = []
     plan = Plan(StartingGit(remotes.directory, events, timeout=0.5))
-    first, second = plan.add(Push("origin", "a")), plan.add(Push("mirror", "a"))
+    first, second = plan.add(Push("origin", "a")), plan.add(Push("mirror", "b"))
 
     with pytest.raises(ExecutionException) as raised:
         plan.execute()
@@ -965,7 +965,7 @@ def test_an_interrupt_stops_every_started_process(
     git = StartingGit(remotes.directory, [])
     plan = Plan(git)
     plan.add(Push("origin", "a"))
-    plan.add(Push("mirror", "a"))
+    plan.add(Push("mirror", "b"))
 
     with pytest.raises(KeyboardInterrupt):
         plan.execute()
@@ -1013,10 +1013,40 @@ def test_a_performance_recorder_sees_each_plan_process_start_and_end(remotes: Gi
     recorder = PerformanceRecorder()
     plan = Plan(Git(remotes.directory, performance=recorder))
     plan.add(Push("origin", "a"))
-    plan.add(Push("mirror", "a"))
+    plan.add(Push("mirror", "b"))
 
     plan.execute()
 
     processes = [event for event in recorder.events if "push" in event.args]
     assert len(processes) == 2
     assert all(event.end is not None and not event.persistent for event in processes)
+
+
+@pytest.mark.parametrize("reorder", [True, False])
+def test_a_push_after_its_remote_changes_is_pushed_again(remotes: Git, reorder: bool) -> None:
+    remotes.run("branch", "c")
+    plan = Plan(remotes, reorder=reorder)
+    first = plan.add(Push("origin", "c"))
+    plan.add(WriteConfig(ConfigSet("remote.origin.url", "../mirror.git")))
+    again = plan.add(Push("origin", "c", force=True))  # no ConflictingPushes: elsewhere
+
+    plan.execute()
+
+    assert [ref.status for ref in first.get() + again.get()] == [PushStatus.CREATED] * 2
+    assert remote_tip(remotes, "mirror", "c") == remotes.run("rev-parse", "c")
+
+
+def test_a_ref_pushed_by_a_remotes_name_and_by_its_url_is_pushed_in_turn(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    collecting(events, monkeypatch)
+    url = (Path(remotes.directory).parent / "origin.git").as_posix()
+    plan = Plan(StartingGit(remotes.directory, events))
+    by_name = plan.add(Push("origin", "a"))
+    by_url = plan.add(Push(url, "a", lease=remotes.run("rev-parse", "a")))
+
+    plan.execute()
+
+    assert events == ["start origin", "collect", f"start {url}", "collect"]
+    assert [ref.status for ref in by_name.get() + by_url.get()] == [PushStatus.UP_TO_DATE] * 2
