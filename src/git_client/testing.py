@@ -412,6 +412,7 @@ def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
     whichever fixture is set up first."""
     calls: list[GitCall] = []
     start_process, start_popen = git_client.client.start_process, git_client.client.start_popen
+    start_later = git_client.client.start_later
 
     def record(git: ReadOnlyGit, args: Sequence[Arg]) -> None:
         refuse_if_stopping(git, args)  # which starts nothing
@@ -430,9 +431,16 @@ def git_calls(monkeypatch: pytest.MonkeyPatch) -> list[GitCall]:
         record(git, args)
         return start_popen(git, args, *rest)
 
+    def recording_later(
+        git: ReadOnlyGit, args: Sequence[Arg], *rest: Any
+    ) -> subprocess.Popen[bytes]:
+        record(git, args)
+        return start_later(git, args, *rest)
+
     # Where every git process of every client starts.
     monkeypatch.setattr(git_client.client, "start_process", recording_process)
     monkeypatch.setattr(git_client.client, "start_popen", recording_popen)
+    monkeypatch.setattr(git_client.client, "start_later", recording_later)
     return calls
 
 
@@ -465,8 +473,9 @@ class FakeGit(Git):
     Assert the commands where they're the behavior (what's pushed, deleted or rewritten;
     `calls` also has what was sent on stdin, e.g. to `update-ref --stdin`); otherwise give
     realistic output and assert the result. It can't start long-lived processes (`popen`),
-    so CatFile needs a real Git. Like Git, it raises NotStartedError, recording nothing,
-    once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not a FakeGit) that
+    so CatFile needs a real Git. It answers the processes a plan (git_client.plan) starts as
+    it answers `process`, so a plan can run on it. Like Git, it raises NotStartedError,
+    recording nothing, once its `stopping` says so. Its `read_only()` is a ReadOnlyGit (not a FakeGit) that
     answers from the fake's responses and records in its `calls` (through FakeGit's own
     `process`, not a faked subclass's, as with a real Git): give that to code that only reads,
     so it has no public way to run a command of its own.
@@ -548,6 +557,13 @@ class FakeGit(Git):
             if command[: len(prefix)] == prefix:
                 return completed
         raise UnexpectedCommand(f"no response for git {' '.join(command)}")
+
+    def _start(
+        self, *args: Arg, output: IO[bytes], errors: IO[bytes], own_group: bool
+    ) -> subprocess.Popen[bytes] | subprocess.CompletedProcess[bytes]:
+        # A process to collect later (git_client.client.Started, e.g. a plan's): answered at
+        # once, as `process` answers.
+        return self.process(*args, capture_output=True)
 
     def popen(
         self,

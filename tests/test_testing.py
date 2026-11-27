@@ -23,6 +23,7 @@ from git_client import (
     config,
     find_git,
 )
+from git_client.plan import ConfigValue, ExecutionException, Plan, Push
 from git_client.testing import FakeGit, GitCall, RepoTemplates, UnexpectedCommand, real_git
 
 pytest_plugins = ["pytester"]
@@ -821,3 +822,30 @@ def test_fake_git_stands_in_for_a_projects_own_git(tmp_path: Path) -> None:
     git.stopped = True
     with pytest.raises(RuntimeError, match="stopped"):
         git.output("rev-parse", "HEAD")
+
+
+def test_a_fake_git_runs_a_plan_from_its_responses() -> None:
+    fake = FakeGit()
+    fake.respond(["config", "--list", "-z"], stdout="x.y\nyes\0")
+    plan = Plan(fake)
+    read = plan.add(ConfigValue("x.y"))
+    push = plan.add(Push("origin", "main"))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert read.get() == "yes"
+    assert raised.value.node is push
+    assert isinstance(raised.value.__cause__, UnexpectedCommand)
+    assert fake.commands == [
+        ["config", "--list", "-z"],
+        [
+            "-c",
+            "core.abbrev=no",
+            "push",
+            "--porcelain",
+            "--",
+            "origin",
+            "refs/heads/main:refs/heads/main",
+        ],
+    ]

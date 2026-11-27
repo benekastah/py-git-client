@@ -4,7 +4,7 @@ import graphlib
 import random
 import subprocess
 import time
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Self, assert_type, override
@@ -14,10 +14,10 @@ import pytest
 from git_client import (
     Arg,
     ConfigSet,
-    EnvValue,
     Git,
     GitError,
     GitTimeoutError,
+    PerformanceRecorder,
     PushDestination,
     PushRef,
     PushRejectedError,
@@ -890,7 +890,7 @@ def test_what_a_push_writes_conflicts_with() -> None:
 
 
 class StartingGit(Git):
-    """A Git that notes each process it starts, and keeps them."""
+    """A Git that notes each process it starts for a plan, and keeps them."""
 
     def __init__(self, directory: str, events: list[str], timeout: float | None = None) -> None:
         super().__init__(directory, timeout=timeout)
@@ -898,14 +898,12 @@ class StartingGit(Git):
         self.started: list[subprocess.Popen[bytes]] = []
 
     @override
-    def popen(
-        self,
-        *args: Arg,
-        env: Mapping[str, EnvValue] | None = None,
-        stderr: int | IO[bytes] = subprocess.DEVNULL,
-    ) -> subprocess.Popen[bytes]:
-        process = super().popen(*args, env=env, stderr=stderr)
+    def _start(
+        self, *args: Arg, output: IO[bytes], errors: IO[bytes], own_group: bool
+    ) -> subprocess.Popen[bytes] | subprocess.CompletedProcess[bytes]:
+        process = super()._start(*args, output=output, errors=errors, own_group=own_group)
         self.events.append(f"start {args[-2]}")
+        assert isinstance(process, subprocess.Popen)
         self.started.append(process)
         return process
 
@@ -1009,3 +1007,16 @@ def test_a_write_under_an_include_is_read_as_git_reads_it(repo: Git, tmp_path: P
     plan.execute()
 
     assert read.get() == "included"
+
+
+def test_a_performance_recorder_sees_each_plan_process_start_and_end(remotes: Git) -> None:
+    recorder = PerformanceRecorder()
+    plan = Plan(Git(remotes.directory, performance=recorder))
+    plan.add(Push("origin", "a"))
+    plan.add(Push("mirror", "a"))
+
+    plan.execute()
+
+    processes = [event for event in recorder.events if "push" in event.args]
+    assert len(processes) == 2
+    assert all(event.end is not None and not event.persistent for event in processes)

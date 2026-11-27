@@ -36,6 +36,7 @@ from git_client import (
     git_paths_and_head,
     printable,
 )
+from git_client.client import Started
 from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
@@ -1148,3 +1149,40 @@ def test_object_id_length_given_starts_no_git(
 def test_object_id_length_given_is_40_or_64(length: int) -> None:
     with pytest.raises(ValueError, match="40 or 64"):
         Git(object_id_length=length)
+
+
+def test_a_started_process_that_finished_in_time_isnt_timed_out_when_collected_late(
+    repo: Git, tmp_path: Path
+) -> None:
+    # More output than a pipe holds: a process writing it to a pipe nobody reads till its
+    # collection would still be running past its deadline.
+    entries = tmp_path / "entries"
+    entries.write_text("[x]\n" + "".join(f"\tk{i} = {'v' * 40}\n" for i in range(5000)))
+    git = Git(repo.directory, timeout=0.3)
+
+    with Started(git, "config", "--file", entries.as_posix(), "--list") as started:
+        time.sleep(0.6)
+        result = started.result()
+
+    assert result.returncode == 0
+    assert result.stdout.count(b"\n") == 5000
+
+
+def test_a_started_process_reads_nothing_on_its_stdin(repo: Git) -> None:
+    with Started(Git(repo.directory, timeout=5), "hash-object", "--stdin") as started:
+        result = started.result()
+
+    assert result.stdout.strip() == repo.run("hash-object", "--stdin", input="").encode()
+
+
+def test_a_started_process_running_past_its_deadline_is_stopped(repo: Git) -> None:
+    git = Git(repo.directory, timeout=0.2)
+    hook = Path(repo.directory) / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    with (
+        Started(git, "commit", "--allow-empty", "-qm", "slow") as started,
+        pytest.raises(GitTimeoutError),
+    ):
+        started.result()

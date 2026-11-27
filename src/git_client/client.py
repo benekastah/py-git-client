@@ -2,7 +2,6 @@
 text and paths to it as git expects them."""
 
 import contextlib
-import contextvars
 import enum
 import functools
 import os
@@ -446,13 +445,6 @@ def start_process(
     return subprocess.CompletedProcess(process.args, process.returncode, output, errors)
 
 
-# Set while Started starts a process through popen: whether git gets a process group of its
-# own, as start_process gives one for the same timeout.
-_started_in_own_group: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
-    "_started_in_own_group", default=None
-)
-
-
 def start_popen(
     git: ReadOnlyGit,
     args: Sequence[Arg],
@@ -461,89 +453,119 @@ def start_popen(
     stderr: int | IO[bytes],
 ) -> subprocess.Popen[bytes]:
     """Start `command` (git's, for `args`) as Git.popen says: where every long-lived git
-    process starts, a ReadOnlyGit's and a Git's (git_calls wraps it), and those Started
-    starts, to collect later."""
+    process starts, a ReadOnlyGit's and a Git's (git_calls wraps it)."""
     refuse_if_stopping(git, args)
-    own_group = _started_in_own_group.get()
     return open_git_process(
         command,
         git.performance,
         args,
-        persistent=own_group is None,
+        persistent=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=stderr,
+        env=environment,
+    )
+
+
+def start_later(
+    git: ReadOnlyGit,
+    args: Sequence[Arg],
+    command: list[str] | list[bytes],
+    environment: dict[str, str],
+    output: IO[bytes],
+    errors: IO[bytes],
+    own_group: bool,
+) -> subprocess.Popen[bytes]:
+    """Start `command` (git's, for `args`) for Started: reading nothing, writing to `output`
+    and `errors` (files, which never fill as a pipe does), in a process group of its own if
+    `own_group`. Where every process Started starts begins (git_calls wraps it)."""
+    refuse_if_stopping(git, args)
+    return open_git_process(
+        command,
+        git.performance,
+        args,
+        persistent=False,
+        stdin=subprocess.DEVNULL,
+        stdout=output,
+        stderr=errors,
         env=environment,
         process_group=0 if own_group else None,
     )
 
 
 class Started:
-    """A git process started now, through the client's `popen` (so a Git subclass that
-    overrides it, and git_calls, see it start), whose finished process `result()` gives
-    later, as `process(..., capture_output=True)` would: git's messages in English, stdout
-    captured, stderr too (in a temporary file, as popen takes no pipe for it); past the
-    client's timeout (counted from the start) stopped, raising GitTimeoutError; on an
-    interrupt, stopped; in a process group of its own where `process` would give it one.
-    Leaving its `with` block before the result stops it. For a caller that starts several
-    independent processes, then collects each in turn: none waits on another, so that can't
-    deadlock."""
+    """A git process started now, whose finished process `result()` gives later, as
+    `process(..., capture_output=True)` would: git's messages in English, its stdout and
+    stderr captured (in temporary files, so a process waiting to be collected never waits
+    on a full pipe), reading nothing; a process still running past the client's timeout
+    (counted from the start) when collected is stopped, raising GitTimeoutError; on an
+    interrupt, it's stopped; in a process group of its own where `process` would give it
+    one. Leaving its `with` block before the result stops it. For a caller that starts
+    several independent processes, then collects each in turn.
 
-    def __init__(
-        self,
-        git: ReadOnlyGit,
-        *args: Arg,
-        input: bytes | None = None,
-        timeout: Timeout = CLIENT_TIMEOUT,
-    ) -> None:
-        seconds = git.timeout if timeout is CLIENT_TIMEOUT else timeout
-        self._args, self._input = args, input
-        self._own_group = _own_process_group(seconds, git.process_groups)
-        self._deadline = None if seconds is None else time.monotonic() + seconds
+    It starts through the client's `_start` (not `process` or `popen`), which FakeGit
+    answers from its responses. A tool times these processes with the client's
+    `performance` recorder (each process's start and observed exit), not by overriding
+    `process` or `popen`, which don't see them."""
+
+    def __init__(self, git: ReadOnlyGit, *args: Arg) -> None:
         import tempfile  # here: importing it takes milliseconds every tool would pay
 
+        self._args = args
+        self._own_group = _own_process_group(git.timeout, git.process_groups)
+        self._deadline = None if git.timeout is None else time.monotonic() + git.timeout
         # Closed in __exit__, or here if git doesn't start.
+        self._output = tempfile.TemporaryFile()  # noqa: SIM115
         self._errors = tempfile.TemporaryFile()  # noqa: SIM115
-        token = _started_in_own_group.set(self._own_group)
         try:
-            self.process = read_popen(git, *args, stderr=self._errors)
+            self._running = git._start(  # pyright: ignore[reportPrivateUsage]
+                *args, output=self._output, errors=self._errors, own_group=self._own_group
+            )
         except BaseException:
-            self._errors.close()
+            self._close()
             raise
-        finally:
-            _started_in_own_group.reset(token)
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exception: object) -> None:
-        if self.process.poll() is None:
-            _stop(self.process, self._own_group, interrupted=True)
-            _let_go_of_output(self.process)
-        self._errors.close()
+        process = self._running
+        if isinstance(process, subprocess.Popen) and process.poll() is None:
+            _stop(process, self._own_group, interrupted=True)
+        self._close()
 
     def result(self) -> subprocess.CompletedProcess[bytes]:
         """The finished process (see the class)."""
-        remaining = None if self._deadline is None else self._deadline - time.monotonic()
-        try:
-            output, _ = self.process.communicate(self._input, timeout=remaining)
-        except subprocess.TimeoutExpired:
-            _stop(self.process, self._own_group, interrupted=False)
-            output, _ = _remaining_output(self.process)
-            raise GitTimeoutError(
-                self._args, None, decode(self._stderr()), decode(output or b"")
-            ) from None
-        except BaseException:  # e.g. KeyboardInterrupt
-            _stop(self.process, self._own_group, interrupted=True)
-            _let_go_of_output(self.process)
-            raise
+        process = self._running
+        if not isinstance(process, subprocess.Popen):
+            return process
+        if process.poll() is None:
+            remaining = None if self._deadline is None else self._deadline - time.monotonic()
+            try:
+                process.wait(None if remaining is None else max(remaining, 0))
+            except subprocess.TimeoutExpired:
+                _stop(process, self._own_group, interrupted=False)
+                raise GitTimeoutError(
+                    self._args,
+                    None,
+                    decode(self._read(self._errors)),
+                    decode(self._read(self._output)),
+                ) from None
+            except BaseException:  # e.g. KeyboardInterrupt
+                _stop(process, self._own_group, interrupted=True)
+                raise
         return subprocess.CompletedProcess(
-            self.process.args, self.process.returncode, output, self._stderr()
+            process.args, process.returncode, self._read(self._output), self._read(self._errors)
         )
 
-    def _stderr(self) -> bytes:
-        self._errors.seek(0)
-        return self._errors.read()
+    @staticmethod
+    def _read(file: IO[bytes]) -> bytes:
+        file.seek(0)
+        return file.read()
+
+    def _close(self) -> None:
+        self._output.close()
+        self._errors.close()
 
 
 def stdout_of(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) -> bytes:
@@ -1138,6 +1160,22 @@ class ReadOnlyGit:
             stderr,
         )
 
+    def _start(
+        self, *args: Arg, output: IO[bytes], errors: IO[bytes], own_group: bool
+    ) -> subprocess.Popen[bytes] | subprocess.CompletedProcess[bytes]:
+        """Start git for Started (see there), with ReadOnlyGit's environment and `-c`: the
+        process, or (from a fake) the finished one."""
+        command = args if args[0] == "config" else (*_NO_FSMONITOR, *args)
+        return start_later(
+            self,
+            args,
+            command_line(self, command),
+            environment_for(self, None, english=True, read_only=True),
+            output,
+            errors,
+            own_group,
+        )
+
 
 class Git(ReadOnlyGit):
     """Runs any git command in `directory`, as `git -C <directory>` does: a ReadOnlyGit, with
@@ -1148,7 +1186,8 @@ class Git(ReadOnlyGit):
     Every process it starts, its reads' too (`resolve`, `refs`, `config`, `CatFile`, ...),
     starts through its `process` or `popen`, so a subclass that overrides them (e.g. to time
     each) sees them all; but not those of the ReadOnlyGit its `read_only()` gives, a client of
-    its own."""
+    its own, nor those Started starts to collect later (a plan's), which its `performance`
+    recorder times, as it times every process."""
 
     def read_only(self, *, native: bool = False) -> ReadOnlyGit:
         """A new ReadOnlyGit with this client's current settings, cache and recorder.
@@ -1188,6 +1227,20 @@ class Git(ReadOnlyGit):
         """One of the library's long-lived reads, through `popen`, which a subclass may
         override."""
         return self.popen(*args, stderr=stderr)
+
+    def _start(
+        self, *args: Arg, output: IO[bytes], errors: IO[bytes], own_group: bool
+    ) -> subprocess.Popen[bytes] | subprocess.CompletedProcess[bytes]:
+        """Start git for Started (see there), as `process` runs it with `capture_output`."""
+        return start_later(
+            self,
+            args,
+            self.command(*args),
+            self.environment(None, english=True),
+            output,
+            errors,
+            own_group,
+        )
 
     def command(self, *args: Arg) -> list[str] | list[bytes]:
         """git's command line. On Windows, as str, as the OS keeps it. Elsewhere, as bytes:
