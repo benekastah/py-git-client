@@ -132,6 +132,21 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   HEAD, branch, bare, detached, and the reasons it's locked or prunable). A tool replaces its
   `git status --porcelain` runs and parsers (emptiness becomes `not status(...).entries`),
   and its `git worktree list --porcelain` runs and parsers.
+- `is_ancestor(git, ancestor, descendant)`, `merge_base(git, a, b)`, `merge_bases(git, a, b)`,
+  `independent(git, *commits)` and `fork_point(git, upstream, commit)` ask `git merge-base`
+  (`--is-ancestor`, plain, `--all`, `--independent`, `--fork-point`) with typed results: a
+  bool, an id or None, a list of ids, a list of ids, an id or None. git's no (exit 1) is
+  False, None or []; any other failure raises (`UnknownRevisionError` for a name that names
+  nothing, `WrongTypeError` for one that names no commit). They replace a tool's
+  `ok`/`succeeds("merge-base", "--is-ancestor", ...)` (git-stack `git_stack/git.py:679`,
+  `700`, `705`; git-recommit `git_recommit/git.py:141`; move-forward
+  `src/move_forward/plugins/git/actions.py:275`), `run("merge-base", ...)` (git-stack
+  `core.py:1087`, `stack.py:3915`; git-recommit `revisions.py:35`), `--all` (git-stack
+  `core.py:723`), `--independent` (`stack.py:4005`) and `--fork-point` (`stack.py:567`). A
+  tool whose wrapper answered False or "" for a name that names nothing (git-recommit's
+  `succeeds`, git-stack's `check=False`) catches `UnknownRevisionError` where it relied on
+  that. git-stack's `core.py:723` and `check_ancestry`, which pass `env=` for one call, use a
+  client made with that `env`.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,

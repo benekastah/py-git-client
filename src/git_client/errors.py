@@ -306,7 +306,9 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
             "| - not something we can merge|Failed to resolve '.*' as a valid ref"
             # Of a full id the repository lacks, as some commands say it.
             "|Not a valid commit name |Invalid revision range |Does not point to a valid commit '"
-            "| is not a valid object$|Could not parse object '|^fatal: unknown commit ",
+            "| is not a valid object$|Could not parse object '|^fatal: unknown commit "
+            # merge-base --fork-point's, of a name that names no ref.
+            "|^fatal: No such ref: '",
             re.MULTILINE,
         ),
     ),

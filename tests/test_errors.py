@@ -68,6 +68,7 @@ MISSING = "0123" * 10
         ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
         ("merge-base", "HEAD", MISSING),  # Not a valid commit name
         ("merge-base", "--is-ancestor", MISSING, "HEAD"),
+        ("merge-base", "--fork-point", "no-such-branch", "HEAD"),  # No such ref
         ("log", f"HEAD..{MISSING}"),  # Invalid revision range
         ("rebase", "--onto", MISSING, "HEAD"),  # Does not point to a valid commit
         ("commit-tree", "-p", MISSING, "HEAD^{tree}"),  # <id> is not a valid object
