@@ -317,18 +317,17 @@ takes precedence over cached data.
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
-arguments as `Git` and offers the library's fixed read operations:
-`resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
-one: `refs`, `config`, `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`,
-`git_dir`, `git_common_dir` and `CatFile`. It has no public way to run a command of the
-caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which
-are `Git`'s. So it can't be asked to write: the library doesn't try to tell from a command
-line whether git would write (that's git's to decide, and it has no read-only mode to ask), it
-just doesn't take one. `Git` extends
-it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
-flags a call of `run` on one. A tool that reads with other commands (`log`, `status`,
-`diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a
-`Git`, and raises `TypeError` for a `ReadOnlyGit`.
+arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`,
+`prefix()`, `cdup()` and `object_id_length()`, and the functions that take one: `refs`,
+`config`, `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+`git_common_dir` and `CatFile`. It has no public way to run a command of the caller's: no
+`run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s.
+So it can't be asked to write: the library doesn't try to tell from a command line whether git
+would write (that's git's to decide, and it has no read-only mode to ask), it just doesn't take
+one. `Git` extends it, so a function that only reads takes a `ReadOnlyGit` and is given either;
+a type checker flags a call of `run` on one. A tool that reads with other commands (`log`,
+`status`, `diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it
+takes a `Git`, and raises `TypeError` for a `ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")
