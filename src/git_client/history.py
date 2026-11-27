@@ -1,4 +1,5 @@
-"""Commits git lists by a revision walk, with one `git rev-list` for each question."""
+"""Commits git lists by a revision walk, with one `git rev-list` for each question, and where
+refs have been, from their reflogs, with one `git log --walk-reflogs`."""
 
 import re
 from collections.abc import Sequence
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 
 from git_client.client import CLIENT_TIMEOUT, ReadOnlyGit, Timeout, decode, encode, read_output
+from git_client.errors import GitError
 from git_client.performance import record_read
 
 # Each commit's fields, each ended by a NUL, which none of them can hold (git stops a message at
@@ -16,6 +18,12 @@ _FORMAT = "".join(f"{field}%x00" for field in _FIELDS)
 # A date as `--date=raw` prints it, with a zone a datetime can hold: git prints what the commit
 # records, which can be anything (fsck only warns of a bad zone, or no date at all).
 _RAW_DATE = re.compile(r"(\d+) ([+-])([01]\d|2[0-3])([0-5]\d)")
+
+# Each reflog entry's fields, apart by a NUL, and each entry ended by one (-z): its selector
+# (`<the ref as given>@{<index>}`), the commit, who moved the ref, and why. None can hold a
+# NUL, and git writes a reflog's message on one line.
+_REFLOG_FIELDS = ("%gD", "%H", "%gn", "%ge", "%gs")
+_SELECTOR = re.compile(r"(.*)@\{(\d+)\}", re.ASCII | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -243,3 +251,60 @@ def any_commit(
     """Whether `revisions` describes any commit, from one `git rev-list --max-count=1`, which
     stops at the first (see `commits`)."""
     return bool(_rev_list(git, revisions, "--max-count=1", timeout=timeout).strip())
+
+
+@dataclass(frozen=True)
+class ReflogEntry:
+    """An entry of a ref's reflog, as git reads it: `index`, its place in the reflog (0 the
+    newest: the ref's `@{index}`); `id`, the commit the ref was moved to; `name` and `email`,
+    who moved it (git's identity then); and `message`, why, as git wrote it (e.g. "commit:
+    fix", "rebase (finish): refs/heads/a onto <id>"). Text is UTF-8, as git wrote it; bytes
+    that aren't are kept as surrogates (see `decode`)."""
+
+    index: int
+    id: str
+    name: str
+    email: str
+    message: str
+
+
+@record_read("git")
+def reflogs(
+    git: ReadOnlyGit, *refs: str, timeout: Timeout = CLIENT_TIMEOUT
+) -> dict[str, list[ReflogEntry]]:
+    """Each ref's reflog, newest first, by the ref as given (each once, in the order given,
+    e.g. "refs/heads/main", "main" or "HEAD"): [] for a ref with none. One `git log
+    --walk-reflogs` for all of them (none for no refs), so git's rules apply: it shows only
+    entries of commits it can read, and none past what `git reflog expire` removed.
+
+    Raises UnknownRevisionError if a ref names nothing (failing them all), and ValueError for
+    one that is empty, holds a NUL, or holds "@{", which git would read as a reflog selector
+    (e.g. "main@{1}") rather than a ref."""
+    names = list(dict.fromkeys(refs))
+    for name in names:
+        if not name or "\0" in name or "@{" in name:
+            raise ValueError(f"not a ref: {name!r}")
+    found: dict[str, list[ReflogEntry]] = {name: [] for name in names}
+    if not names:
+        return found
+    args = (
+        "log",
+        "--walk-reflogs",
+        "-z",
+        "--no-show-signature",  # which log.showSignature would print among the entries
+        f"--format={'%x00'.join(_REFLOG_FIELDS)}",
+        "--end-of-options",
+        *names,
+        "--",
+    )
+    fields = decode(read_output(git, *args, timeout=timeout)).split("\0")
+    per_entry = len(_REFLOG_FIELDS)
+    if len(fields) % per_entry != 1 or fields[-1]:
+        raise GitError(args, 0, f"log printed entries it doesn't document: {fields!r}")
+    for start in range(0, len(fields) - 1, per_entry):
+        selector, commit_id, name, email, message = fields[start : start + per_entry]
+        parsed = _SELECTOR.fullmatch(selector)
+        if parsed is None or parsed[1] not in found:
+            raise GitError(args, 0, f"log printed a selector it wasn't asked for: {selector!r}")
+        found[parsed[1]].append(ReflogEntry(int(parsed[2]), commit_id, name, email, message))
+    return found

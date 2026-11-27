@@ -281,6 +281,29 @@ whatever `i18n.logOutputEncoding` says. A date is None where the commit records 
 datetime can't hold (a bad zone, a year past 9999), which git takes and fsck only warns of.
 `first_parent=True` follows only each merge's first parent.
 
+### Reflogs
+
+`reflogs` reads where refs have been, from their reflogs, with one `git log --walk-reflogs`
+for all of them:
+
+```python
+from git_client import Git, reflogs
+
+git = Git("path/to/repo")
+for ref, entries in reflogs(git, "refs/heads/b", "HEAD").items():  # by each ref as given
+    for entry in entries:  # newest first; [] for a ref with no reflog
+        entry.index  # its place: the ref's @{index}, 0 the newest
+        entry.id, entry.message  # the commit the ref moved to, and why, as git wrote it
+        entry.name, entry.email  # who moved it
+```
+
+A ref that names nothing raises `UnknownRevisionError`, for the whole call; one that is empty
+or holds `@{` (a reflog selector, e.g. `main@{1}`) raises ValueError. git prints neither an
+entry's old id nor, beside its index, its date, so an entry has neither. `reflogs` runs `git
+log --walk-reflogs -z --no-show-signature --format=<fields> --end-of-options <refs> --`, so a
+`FakeGit` test responds to `["log", "--walk-reflogs"]` with each entry's selector, id, name,
+email and message, each ended by a NUL.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says

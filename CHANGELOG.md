@@ -132,6 +132,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   HEAD, branch, bare, detached, and the reasons it's locked or prunable). A tool replaces its
   `git status --porcelain` runs and parsers (emptiness becomes `not status(...).entries`),
   and its `git worktree list --porcelain` runs and parsers.
+- `reflogs(git, *refs)` reads many refs' reflogs with one `git log --walk-reflogs`: by each
+  ref as given, its entries newest first, each a `ReflogEntry` (index, the commit's id, who
+  moved the ref, and git's message as written); [] for a ref with no reflog. It replaces
+  git-stack's one `log --walk-reflogs` per branch in `reflog_tips` (`git_stack/git.py:1233`,
+  `entry.id` for `%H`) and `finished_rebase` (`git.py:1242`, which compares `entry.message`
+  with its `rebase (finish): ...` text itself), so a tool can read all its branches' reflogs
+  at once. Unlike those, run with `check=False`, a ref that names nothing raises
+  `UnknownRevisionError`, failing the whole call: a tool passes only refs that exist, or
+  catches it.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,

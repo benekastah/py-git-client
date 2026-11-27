@@ -7,15 +7,18 @@ import pytest
 from git_client import (
     Commit,
     Git,
+    GitError,
     ReadOnlyGit,
+    ReflogEntry,
     Revisions,
     Signature,
     UnknownRevisionError,
     any_commit,
     commits,
     count,
+    reflogs,
 )
-from git_client.testing import GitCall
+from git_client.testing import FakeGit, GitCall
 
 # The repo_from fixture's type (see conftest.py).
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
@@ -250,3 +253,103 @@ def test_count_and_any_commit(history: Git) -> None:
     assert count(history, Revisions("side", exclude="main")) == 0
     assert any_commit(history.read_only(), Revisions("main", exclude="first", merges=True))
     assert not any_commit(history, Revisions("side", exclude="first", merges=True))
+
+
+def make_moves(git: Git) -> None:
+    """From make_repo's first commit: `topic`, made there by Test, then moved by Mover to a
+    commit on it, `moved`; `quiet`, with no reflog; and `-x`, a branch whose name starts
+    with "-"."""
+    moved = git.run("commit-tree", "-p", "main", "-m", "moved", "main^{tree}")
+    git.run("update-ref", "-m", "made: here", "refs/heads/topic", "main")
+    mover = {"GIT_COMMITTER_NAME": "Mover", "GIT_COMMITTER_EMAIL": "m@e"}
+    git.run("update-ref", "-m", "déplacé: on", "refs/heads/topic", moved, env=mover)
+    git.run("-c", "core.logAllRefUpdates=false", "update-ref", "refs/heads/quiet", "main")
+    git.run("update-ref", "-m", "dash", "refs/heads/-x", "main")
+
+
+@pytest.fixture
+def moves(repo_from: RepoFrom) -> Git:
+    return repo_from("moves", make_moves)
+
+
+def test_reflogs_reads_many_refs_newest_first_with_one_process(
+    moves: Git, git_calls: list[GitCall]
+) -> None:
+    found = reflogs(moves.read_only(), "refs/heads/topic", "main", "quiet")
+
+    assert [call[0] for call in git_calls] == ["log"]
+    first, moved = moves.run("rev-parse", "main", "topic").split()
+    assert found == {
+        "refs/heads/topic": [
+            ReflogEntry(0, moved, "Mover", "m@e", "déplacé: on"),
+            ReflogEntry(1, first, "Test", "test@example.com", "made: here"),
+        ],
+        "main": [ReflogEntry(0, first, "Test", "test@example.com", "commit (initial): first")],
+        "quiet": [],  # a ref with no reflog
+    }
+
+
+def test_reflogs_gives_each_name_once_as_given(moves: Git) -> None:
+    found = reflogs(moves, "topic", "refs/heads/topic", "topic", "-x")
+
+    assert list(found) == ["topic", "refs/heads/topic", "-x"]
+    assert [entry.message for entry in found["topic"]] == ["déplacé: on", "made: here"]
+    assert found["refs/heads/topic"] == found["topic"]
+    assert [entry.message for entry in found["-x"]] == ["dash"]
+
+
+def test_reflogs_prints_no_signature_whatever_the_config(moves: Git) -> None:
+    tree = moves.run("rev-parse", "main^{tree}")
+    signature = "gpgsig -----BEGIN PGP SIGNATURE-----\n x\n -----END PGP SIGNATURE-----\n"
+    content = f"tree {tree}\nauthor A <a@e> 1 +0000\ncommitter A <a@e> 1 +0000\n{signature}\ns\n"
+    signed = moves.run("hash-object", "-t", "commit", "-w", "--stdin", input=content)
+    moves.run("update-ref", "-m", "signed", "refs/heads/signed", signed)
+    moves.run("config", "log.showSignature", "true")
+    # Which prints its usage, as gpg would its verdict, among the entries.
+    moves.run("config", "gpg.program", "git")
+
+    found = reflogs(moves, "refs/heads/signed")
+
+    assert found == {
+        "refs/heads/signed": [ReflogEntry(0, signed, "Test", "test@example.com", "signed")]
+    }
+
+
+def test_reflogs_of_no_refs_starts_no_git(git_calls: list[GitCall]) -> None:
+    assert reflogs(FakeGit()) == {}
+    assert git_calls == []
+
+
+def test_reflogs_of_an_unknown_ref_raises(moves: Git) -> None:
+    with pytest.raises(UnknownRevisionError):
+        reflogs(moves, "main", "nothing")
+
+
+# Each would reach git as something else: a reflog selector, or no name at all.
+@pytest.mark.parametrize("name", ["", "main@{1}", "main@{u}", "ma\0in"])
+def test_reflogs_refuses_what_isnt_a_ref(name: str) -> None:
+    with pytest.raises(ValueError, match="not a ref"):
+        reflogs(FakeGit(), "main", name)
+
+
+REFLOG = ["log", "--walk-reflogs"]
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0",  # a field short
+        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x\0",  # a field over
+        b"main\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # no index
+        b"main@{now}\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # not an index
+        "main@{\u0663}\0".encode() + b"1" * 40 + b"\0T\0t@e\0m\0",  # a digit, not ASCII
+        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x",  # an entry unended
+        b"other@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # a ref not asked for
+    ],
+)
+def test_reflogs_raises_for_output_git_doesnt_document(output: bytes) -> None:
+    git = FakeGit()
+    git.respond(REFLOG, output)
+
+    with pytest.raises(GitError, match="log printed"):
+        reflogs(git, "main")
