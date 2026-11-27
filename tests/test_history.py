@@ -7,6 +7,7 @@ import pytest
 from git_client import (
     Commit,
     Git,
+    ReadOnlyGit,
     Revisions,
     Signature,
     UnknownRevisionError,
@@ -40,7 +41,7 @@ def _commit(git: Git, message: bytes, when: int, **env: str) -> None:
 def make_history(git: Git) -> None:
     """On make_repo's first commit (tagged `first`): `side`'s s1 and s3, which add src/c and
     src/d; main's `second`, by Other, which adds b, then a merge of side; and `copy`, from
-    first, with s1's change picked. Each committed so many thousand seconds after EPOCH
+    first, with s1's change picked. Side's are authored in a zone west of UTC. Each committed so many thousand seconds after EPOCH
     as its subject names (the merge 4, the pick 5), so the two lines' dates interleave."""
     git.run("tag", "first")
     git.run("switch", "--quiet", "-c", "side")
@@ -48,7 +49,7 @@ def make_history(git: Git) -> None:
     for when, name in ((1000, "c"), (3000, "d")):
         (Path(git.directory) / "src" / name).write_bytes(b"x\n")
         git.run("add", "src")
-        _commit(git, f"s{when // 1000}\n".encode(), when)
+        _commit(git, f"s{when // 1000}\n".encode(), when, GIT_AUTHOR_DATE="1700000000 -0730")
     git.run("switch", "--quiet", "main")
     (Path(git.directory) / "b").write_bytes(b"b\n")
     git.run("add", "b")
@@ -84,6 +85,11 @@ def test_commits_lists_a_range_newest_first_with_what_git_says_of_each(history: 
         "Test", "test@example.com", datetime.fromtimestamp(EPOCH + 2000, UTC)
     )
     assert second.message is None
+    [_, s1] = commits(history, Revisions("side", exclude="first"))
+    west = timezone(-timedelta(hours=7, minutes=30))
+    assert s1.author.date
+    assert s1.author.date == datetime(2023, 11, 14, 14, 43, 20, 0, west)
+    assert s1.author.date.utcoffset() == -timedelta(hours=7, minutes=30)
 
 
 # Dates git prints as the commit records them, which fsck only warns of, and a datetime can't
@@ -173,16 +179,19 @@ def test_since_must_say_its_zone() -> None:
 def test_commits_that_change_paths_from_the_top_taken_literally(
     history: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Which would take the marks commits gives each path as part of its name.
+    # Which would take the marks commits gives each path as part of its name, and match a
+    # path that differs only in case.
     monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "1")
+    monkeypatch.setenv("GIT_ICASE_PATHSPECS", "1")
 
-    def found(git: Git, *paths: str) -> list[str]:
+    def found(git: ReadOnlyGit, *paths: str) -> list[str]:
         return subjects(commits(git, Revisions("main", exclude="first", paths=paths)))
 
-    assert found(history, "src") == ["s3", "s1"]
-    subdirectory = Git(Path(history.directory) / "src")
-    assert found(subdirectory, "b") == ["second"]
-    assert found(history, "*") == []  # no file named *
+    for git in (history, history.read_only()):
+        assert found(git, "src") == ["s3", "s1"]
+        assert found(git, "*") == []  # no file named *
+        assert found(git, "B") == []  # nor B
+    assert found(Git(Path(history.directory) / "src"), "b") == ["second"]
 
 
 def test_many_revisions_take_one_process(history: Git, git_calls: list[GitCall]) -> None:
