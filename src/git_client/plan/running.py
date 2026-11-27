@@ -6,14 +6,11 @@
 import graphlib
 import itertools
 from collections.abc import Generator, Hashable
-from typing import cast
 
 from git_client.client import Git
-from git_client.config_file import ConfigSet
-from git_client.plan.config import ConfigValue, WriteConfig
 from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped, Value
 from git_client.plan.pushing import ConflictingPushes, Push
-from git_client.plan.resources import CONFIG, Access, LocalRef, RemoteRef, overlap
+from git_client.plan.resources import Access, LocalRef, RemoteRef, overlap
 
 
 class Plan:
@@ -30,9 +27,8 @@ class Plan:
     wait for nothing but each other, and share groups. A round's nodes don't conflict, so
     its groups run at once: the plan starts every group's git process, then waits for each
     in turn, in the calling thread (work in-process just runs). Some nodes need no process
-    (see `_known`): a ConfigValue of a key an earlier WriteConfig set is the value set, and
-    a push that repeats an earlier one of the same ref, with nothing between that could
-    change what it pushes, is that one. Without `reorder`, nodes run one at a time, in
+    (see `_known`): a push that repeats an earlier one of the same ref, with nothing between
+    that could change what it pushes, is that one. Without `reorder`, nodes run one at a time, in
     program order.
 
     Two pushes of one ref of one remote that differ, with nothing between known to change
@@ -196,20 +192,16 @@ class Plan:
 
     def _known(self, node: Node[object]) -> bool:
         """Give the node, which may run now, its outcome without running it, if the plan
-        knows it: a ConfigValue's from the plan's own write (see `_written`), a push's from
-        an earlier push it repeats (see `_earlier_push`); or fail a push that pushes one ref
-        otherwise. Whether it did."""
-        if not self.reorder and not isinstance(node, Push):
+        knows it: a push's from an earlier push it repeats (see `_earlier_push`); or fail a
+        push that pushes one ref otherwise. Whether it did."""
+        if not isinstance(node, Push):
             return False
-        if (written := self._written(node)) is not None:
-            node._set(written[0])
-            return True
-        found = self._earlier_push(node) if isinstance(node, Push) else None
+        found = self._earlier_push(node)
         if found is None or found[1]:
             return False
         earlier = found[0]
-        if earlier._parameters(self) != cast(Push, node)._parameters(self):
-            node._fail(ConflictingPushes(earlier, cast(Push, node)))
+        if earlier._parameters(self) != node._parameters(self):
+            node._fail(ConflictingPushes(earlier, node))
             return True
         if not self.reorder:
             return False
@@ -231,31 +223,6 @@ class Plan:
                 continue
             access = self._access.get(earlier)
             changed = changed or access is None or overlap(access.writes, pushed)
-        return None
-
-    def _written(self, node: Node[object]) -> tuple[str] | None:
-        """For a ConfigValue, the value an earlier WriteConfig of this run set its key to (by
-        the same name), if nothing between could have changed it (a write of another key
-        can't), or None. It takes that nothing of higher precedence than the repository's
-        config (worktree config, `-c`, GIT_CONFIG_* variables) sets the key: git would read
-        that instead."""
-        if not isinstance(node, ConfigValue):
-            return None
-        key = node.key.get()
-        for earlier in reversed(self._order[: self._position[node]]):
-            if isinstance(earlier, WriteConfig):
-                written = earlier.change.key
-                if written.lower() != key.lower():
-                    continue  # another key, whichever case git gives its parts
-                if written == key and isinstance(earlier.change, ConfigSet) and earlier._done:
-                    return (earlier.change.value,)
-                return None  # unset, failed, or maybe the key under another name
-            access = self._access.get(earlier)
-            harmless = isinstance(earlier, Value) or (
-                access is not None and not overlap(access.writes, (CONFIG,))
-            )
-            if not harmless:
-                return None
         return None
 
     def _conflict(self, earlier: Node[object], node: Node[object]) -> bool:

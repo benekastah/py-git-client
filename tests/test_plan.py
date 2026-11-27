@@ -14,7 +14,6 @@ import pytest
 from git_client import (
     Arg,
     ConfigSet,
-    ConfigUnset,
     EnvValue,
     Git,
     GitError,
@@ -978,57 +977,35 @@ def test_an_interrupt_stops_every_started_process(
 
 
 @pytest.mark.parametrize("reorder", [True, False])
-def test_a_read_of_a_key_just_set_is_what_was_set(
-    repo: Git, git_calls: list[GitCall], reorder: bool
+def test_a_read_after_the_plans_own_write_asks_git(
+    repo: Git, tmp_path: Path, git_calls: list[GitCall], reorder: bool
 ) -> None:
+    # The key the plan sets is set again by a file the plan then includes: git reads that.
+    included = tmp_path / "included"
+    included.write_text("[x]\n\ty = included\n", encoding="utf-8")
     git_calls.clear()
     plan = Plan(repo, reorder=reorder)
-    plan.add(WriteConfig(ConfigSet("example.k", "new")))
-    plan.add(WriteConfig(ConfigSet("example.other", "x")))
-    read = plan.add(ConfigValue("example.k"))
+    plan.add(WriteConfig(ConfigSet("x.y", "set")))
+    plan.add(WriteConfig(ConfigSet("include.path", included.as_posix())))
+    read = plan.add(ConfigValue("x.y"))
 
     plan.execute()
 
-    assert read.get() == "new"
-    reads = [call for call in git_calls if call == ["config", "--list", "-z"]]
-    assert len(reads) == (0 if reorder else 1)  # program order reads it; reordering knows it
-
-
-def test_a_typed_read_of_a_key_just_set_asks_git(repo: Git, git_calls: list[GitCall]) -> None:
-    git_calls.clear()
-    plan = Plan(repo)
-    plan.add(WriteConfig(ConfigSet("example.flag", "on")))
-    flag = plan.add(ConfigValue("example.flag").as_bool())
-
-    plan.execute()
-
-    assert flag.get() is True
-    assert [call[2] for call in git_calls if call[:2] == ["config", "-z"]] == ["--type=bool"]
-
-
-def test_a_read_of_a_key_just_unset_asks_git(repo: Git, git_calls: list[GitCall]) -> None:
-    repo.run("config", "--global", "example.k", "global")
-    git_calls.clear()
-    plan = Plan(repo)
-    plan.add(WriteConfig(ConfigSet("example.k", "new")))
-    plan.add(WriteConfig(ConfigUnset("example.k")))
-    read = plan.add(ConfigValue("example.k"))
-
-    plan.execute()
-
-    assert read.get() == "global"
+    assert read.get() == "included"
     assert ["config", "--list", "-z"] in git_calls
 
 
-def test_a_read_of_a_key_whose_set_failed_asks_git(repo: Git) -> None:
-    repo.run("config", "example.k", "one")
-    repo.run("config", "--add", "example.k", "two")  # git refuses to set a key with two
+def test_a_write_under_an_include_is_read_as_git_reads_it(repo: Git, tmp_path: Path) -> None:
+    # The repository includes, after its own x.y, a file that sets x.y: a write of x.y
+    # changes the first, and git reads the included one.
+    included = tmp_path / "included"
+    included.write_text("[x]\n\ty = included\n", encoding="utf-8")
+    repo.run("config", "x.y", "old")
+    repo.run("config", "include.path", included.as_posix())
     plan = Plan(repo)
-    write = plan.add(WriteConfig(ConfigSet("example.k", "new")))
-    read = plan.add(ConfigValue("example.k"))
+    plan.add(WriteConfig(ConfigSet("x.y", "new")))
+    read = plan.add(ConfigValue("x.y"))
 
-    with pytest.raises(ExecutionException) as raised:
-        plan.execute()
+    plan.execute()
 
-    assert raised.value.node is write
-    assert read.get() == "two"
+    assert read.get() == "included"

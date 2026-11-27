@@ -26,9 +26,10 @@ conflicts with everything):
   between may change what it pushes (then it runs again, in turn), and two that differ
   with nothing between are a ConflictingPushes error;
 - so a remote's pushes, once the reads they need have run, are one `git push`, and pushes to
-  different remotes run at once;
-- a plain read of a key a WriteConfig set earlier in the plan starts no process: it's the
-  value set (not a typed read, whose conversion is git's, nor one after an unset).
+  different remotes run at once.
+
+A read is always git's: the plan doesn't decide in Python what git would answer (e.g. a
+config read after the plan's own write, which an include may override).
 """
 
 from git_client.plan.config import ConfigValue, TypedConfig, WriteConfig
