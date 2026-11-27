@@ -64,6 +64,7 @@ from git_client.pushing import (
     PushUpdate,
     push,
 )
+from git_client.remotes import FetchRef, FetchRefspec, FetchResult, FetchStatus, fetch
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -95,6 +96,10 @@ __all__ = [
     "ConflictError",
     "CorruptObjectError",
     "EnvValue",
+    "FetchRef",
+    "FetchRefspec",
+    "FetchResult",
+    "FetchStatus",
     "Git",
     "GitCache",
     "GitError",
@@ -143,6 +148,7 @@ __all__ = [
     "count",
     "decode",
     "encode",
+    "fetch",
     "find_git",
     "git_common_dir",
     "git_dir",

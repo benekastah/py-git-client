@@ -123,6 +123,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
+  with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
+  *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
+  reported, with its `FetchStatus` and old and new ids; `refs` None before git 2.41, where it
+  runs fetch again without `--porcelain`). git-stack replaces `fetch --prune <remote>`
+  (`git_stack/git.py:1223`, printing the result's output where it passed it through) and
+  `fetch --quiet --no-write-fetch-head <remote> <refspecs>` (`git_stack/stack.py:3039`,
+  `git_stack/adapters/github.py:580`); move-forward, `fetch --quiet <remote>` and `fetch --quiet
+  . <commit>:refs/heads/<branch>` (`src/move_forward/plugins/git/actions.py:260`, `283`).
 - `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
   worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
   doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,
