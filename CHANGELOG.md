@@ -127,7 +127,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   that list, count or test ranges: e.g. `git.run("rev-list", "--max-count=1", "--merges",
   f"{base}..{tip}")` becomes `any_commit(git, Revisions(tip, exclude=base, merges=True))`,
   `--format=%H%x00%an...` with `--date=raw` becomes the `Commit`'s fields, and `--cherry-pick
-  --right-only a...b` becomes `Revisions(b, exclude=a, cherry_pick=True)`.
+  --right-only a...b` becomes `Revisions(b, exclude=a, cherry_pick=True)`. `author` matches
+  the author the commit records, with no mailmap, where `git log --author` reads one by default
+  (log.mailmap); and the top of the worktree is the path `""`, not `"."`, which raises.
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial

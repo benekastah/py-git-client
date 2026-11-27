@@ -246,8 +246,8 @@ mine = Revisions(
     exclude="main",
     merges=False,  # True: only merges
     since=datetime(2026, 1, 1, tzinfo=UTC),  # by the committer's date
-    author="<me@example.com>",  # a fixed string in "Name <email>"
-    paths=["src"],  # changing these paths, from the top of the worktree, taken literally
+    author="<me@example.com>",  # a fixed string in "Name <email>", with no mailmap
+    paths=["src"],  # changing these paths, from the top of the worktree ("": all of it), literally
 )
 count(git, mine)  # how many
 any_commit(git, Revisions("a", exclude="main", merges=True))  # whether any: stops at the first

@@ -63,10 +63,13 @@ class Revisions:
       git: by the committer's date, not the author's). An aware datetime: a naive one raises
       ValueError, rather than be taken for local time.
     - `author`: only commits whose author, as `Name <email>`, contains this text (a fixed
-      string, not a pattern: `--fixed-strings --author`).
+      string, not a pattern: `--fixed-strings --author`), as the commit records it: the
+      mailmap, which `git log --author` reads by default, maps no one.
     - `paths`: only commits that change one of these (and history simplified as git's
       pathspec limiting does), each a path from the top of the worktree, as git reports one,
-      taken as it is, even if it holds `*` or `:`.
+      taken as it is, even if it holds `*` or `:`. The top itself is `""` (all of it); a path
+      with a `.` or `..` part, which git reports none with, raises ValueError (so does
+      `"."`, which would match nothing).
 
     Raises ValueError for a revision that is empty, starts with "-", or holds a newline, a
     carriage return or a NUL, which git would read as something else.
@@ -97,6 +100,9 @@ class Revisions:
         exclude = (exclude,) if isinstance(exclude, str) else tuple(exclude)
         if cherry_pick and (len(include), len(exclude)) != (1, 1):
             raise ValueError("cherry_pick takes one include and one exclude")
+        for path in paths:
+            if any(part in (".", "..") for part in path.split("/")):
+                raise ValueError(f"not a path from the top, as git reports one: {path!r}")
         if since is not None and since.utcoffset() is None:
             raise ValueError(f"since is naive, so its zone is unknown: {since!r}")
         # Given to git a line each, where an empty one ends the revisions (dropping the rest),

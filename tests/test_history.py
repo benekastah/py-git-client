@@ -41,8 +41,9 @@ def _commit(git: Git, message: bytes, when: int, **env: str) -> None:
 def make_history(git: Git) -> None:
     """On make_repo's first commit (tagged `first`): `side`'s s1 and s3, which add src/c and
     src/d; main's `second`, by Other, which adds b, then a merge of side; and `copy`, from
-    first, with s1's change picked. Side's are authored in a zone west of UTC. Each committed so many thousand seconds after EPOCH
-    as its subject names (the merge 4, the pick 5), so the two lines' dates interleave."""
+    first, with s1's change picked. Side's are authored in a zone west of UTC. Each committed so
+    many thousand seconds after EPOCH as its subject names (the merge 4, the pick 5), so the two
+    lines' dates interleave."""
     git.run("tag", "first")
     git.run("switch", "--quiet", "-c", "side")
     (Path(git.directory) / "src").mkdir()
@@ -163,6 +164,10 @@ def test_commits_by_author_text_and_committer_date(history: Git) -> None:
     assert found(Revisions("main", author="<o@e>")) == ["second"]
     # A fixed string, not a pattern, which "o.e" would be.
     assert found(Revisions("main", author="o.e")) == []
+    # As the commit records it: the mailmap (which `git log` reads by default) maps no one.
+    (Path(history.directory) / ".mailmap").write_text("New <n@e> <o@e>\n", encoding="utf-8")
+    assert found(Revisions("main", author="<n@e>")) == []
+    assert found(Revisions("main", author="<o@e>")) == ["second"]
     # By the committer's date (second's author's is later).
     since = datetime.fromtimestamp(EPOCH + 3000, UTC)
     assert found(Revisions("main", exclude="first", since=since)) == ["Merge branch 'side'", "s3"]
@@ -189,9 +194,17 @@ def test_commits_that_change_paths_from_the_top_taken_literally(
 
     for git in (history, history.read_only()):
         assert found(git, "src") == ["s3", "s1"]
+        assert len(found(git, "")) == 4  # the top: the whole worktree
         assert found(git, "*") == []  # no file named *
         assert found(git, "B") == []  # nor B
     assert found(Git(Path(history.directory) / "src"), "b") == ["second"]
+
+
+# git reports no path with these, which, taken literally, would match nothing.
+@pytest.mark.parametrize("path", [".", "./b", "src/.", "src/../b", ".."])
+def test_a_path_git_wouldnt_report_is_refused(path: str) -> None:
+    with pytest.raises(ValueError, match="not a path from the top"):
+        Revisions("main", paths=[path])
 
 
 def test_many_revisions_take_one_process(history: Git, git_calls: list[GitCall]) -> None:
