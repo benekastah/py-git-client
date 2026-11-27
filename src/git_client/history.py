@@ -1,5 +1,6 @@
 """Commits git lists by a revision walk, with one `git rev-list` for each question."""
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -12,16 +13,22 @@ from git_client.performance import record_read
 _FIELDS = ("%H", "%P", "%an", "%ae", "%ad", "%cn", "%ce", "%cd", "%s")
 _FORMAT = "".join(f"{field}%x00" for field in _FIELDS)
 
+# A date as `--date=raw` prints it, with a zone a datetime can hold: git prints what the commit
+# records, which can be anything (fsck only warns of a bad zone, or no date at all).
+_RAW_DATE = re.compile(r"(\d+) ([+-])([01]\d|2[0-3])([0-5]\d)")
+
 
 @dataclass(frozen=True)
 class Signature:
     """Who authored or committed a commit, and when, as the commit says: `date` is aware, in
     the commit's own time zone. Like any datetime's, its `==` compares instants, so the same
-    moment in two zones is equal: `date.utcoffset()` tells them apart."""
+    moment in two zones is equal: `date.utcoffset()` tells them apart. It's None where the
+    commit records no date, or one a datetime can't hold (a zone that isn't `+HHMM` of a
+    real offset, a year past 9999), which git takes, and fsck only warns of."""
 
     name: str
     email: str
-    date: datetime
+    date: datetime | None
 
 
 @dataclass(frozen=True)
@@ -162,13 +169,19 @@ def commits(
 
 
 def _signature(name: str, email: str, date: str) -> Signature:
-    """A Signature from git's fields, the date raw: seconds since the epoch and a zone."""
-    seconds, zone = date.split()
-    sign = -1 if zone.startswith("-") else 1
-    offset = timedelta(hours=int(zone[1:3]), minutes=int(zone[3:5])) * sign
-    # From the epoch, which, unlike fromtimestamp, takes a date before 1970 on Windows too.
-    instant = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=int(seconds))
-    return Signature(name, email, instant.astimezone(timezone(offset)))
+    """A Signature from git's fields, the date raw: seconds since the epoch and a zone, or
+    None where it isn't one a datetime can hold."""
+    found = _RAW_DATE.fullmatch(date)
+    if found is None:
+        return Signature(name, email, None)
+    seconds, sign, hours, minutes = found.groups()
+    offset = timedelta(hours=int(hours), minutes=int(minutes)) * (-1 if sign == "-" else 1)
+    try:
+        # From the epoch, which, unlike fromtimestamp, takes a date before 1970 on Windows too.
+        instant = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=int(seconds))
+        return Signature(name, email, instant.astimezone(timezone(offset)))
+    except OverflowError:  # past the year 9999
+        return Signature(name, email, None)
 
 
 def _rev_list(git: ReadOnlyGit, revisions: Revisions, *options: str, timeout: Timeout) -> bytes:

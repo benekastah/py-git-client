@@ -117,17 +117,17 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
-- `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False,
-  messages=False)` lists the commits a typed `Revisions` describes (includes, excludes,
-  `merges`, `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id,
-  parents, author and committer `Signature`s with aware dates, subject, and the whole message
-  if asked), from one `git rev-list` given the revisions on stdin. `count` and `any_commit`
-  ask the same with `--count` and `--max-count=1`. A tool replaces its raw `rev-list` and
-  `log` calls that list, count or test ranges: e.g. `git.run("rev-list", "--max-count=1",
-  "--merges", f"{base}..{tip}")` becomes `any_commit(git, Revisions(tip, exclude=base,
-  merges=True))`, `--format=%H%x00%an...` with `--date=raw` becomes the `Commit`'s fields,
-  and `--cherry-pick --right-only a...b` becomes `Revisions(b, exclude=a,
-  cherry_pick=True)`.
+- `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
+  lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
+  `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,
+  author and committer `Signature`s with aware dates, subject, and the whole message if asked;
+  a tool handles a `date` of None, for a commit that records no date or one a datetime can't
+  hold), from one `git rev-list` given the revisions on stdin. `count` and `any_commit` ask the
+  same with `--count` and `--max-count=1`. A tool replaces its raw `rev-list` and `log` calls
+  that list, count or test ranges: e.g. `git.run("rev-list", "--max-count=1", "--merges",
+  f"{base}..{tip}")` becomes `any_commit(git, Revisions(tip, exclude=base, merges=True))`,
+  `--format=%H%x00%an...` with `--date=raw` becomes the `Commit`'s fields, and `--cherry-pick
+  --right-only a...b` becomes `Revisions(b, exclude=a, cherry_pick=True)`.
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial

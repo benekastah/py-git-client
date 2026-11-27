@@ -239,7 +239,7 @@ git = Git("path/to/repo")
 # git's main..a: reachable from a (or each of several) and from none of the excludes.
 for commit in commits(git, Revisions("a", exclude="main"), reverse=True):  # oldest first
     commit.id, commit.parents, commit.subject  # full ids; a merge's first parent first
-    commit.author.name, commit.author.email, commit.author.date  # an aware datetime
+    commit.author.name, commit.author.email, commit.author.date  # an aware datetime, or None
     commit.committer  # a Signature too; commit.message: None, unless messages=True
 mine = Revisions(
     ["a", "b"],
@@ -258,8 +258,9 @@ commits(git, Revisions("a", exclude="main", cherry_pick=True), topo_order=True, 
 The revisions reach git on its stdin, as many as it takes, so none is read as an option: a
 `Revisions` refuses one that is empty, starts with `-`, or holds a newline, a carriage return
 or a NUL (ValueError), which git would read as something else. Each message is read as UTF-8
-whatever `i18n.logOutputEncoding` says. `first_parent=True` follows only each merge's first
-parent.
+whatever `i18n.logOutputEncoding` says. A date is None where the commit records none, or one a
+datetime can't hold (a bad zone, a year past 9999), which git takes and fsck only warns of.
+`first_parent=True` follows only each merge's first parent.
 
 ### Push results
 

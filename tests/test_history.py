@@ -78,11 +78,30 @@ def test_commits_lists_a_range_newest_first_with_what_git_says_of_each(history: 
     assert second.parents == (history.run("rev-parse", "first"),)
     zone = timezone(timedelta(hours=1, minutes=30))
     assert second.author == Signature("Other", "o@e", datetime(2023, 11, 14, 23, 43, 20, 0, zone))
+    assert second.author.date
     assert second.author.date.utcoffset() == timedelta(hours=1, minutes=30)
     assert second.committer == Signature(
         "Test", "test@example.com", datetime.fromtimestamp(EPOCH + 2000, UTC)
     )
     assert second.message is None
+
+
+# Dates git prints as the commit records them, which fsck only warns of, and a datetime can't
+# hold: a zone out of range or not 4 digits, no date at all, a year past 9999.
+@pytest.mark.parametrize(
+    "date",
+    ["1700000000 +9999", "1700000000 +0060", "1700000000 +123456", "", "99999999999999 +0000"],
+)
+def test_a_date_a_datetime_cant_hold_is_none(history: Git, date: str) -> None:
+    tree, first = history.run("rev-parse", "first^{tree}", "first").split()
+    ident = f"A <a@e> {date}".rstrip()
+    content = f"tree {tree}\nparent {first}\nauthor {ident}\ncommitter C <c@e> {EPOCH} +0000\n\nx\n"
+    made = history.run("hash-object", "-t", "commit", "--literally", "-w", "--stdin", input=content)
+
+    [commit] = commits(history, Revisions(made, exclude="first"))
+
+    assert (commit.author.name, commit.author.email, commit.author.date) == ("A", "a@e", None)
+    assert commit.committer.date == datetime.fromtimestamp(EPOCH, UTC)
 
 
 def test_commits_gives_each_message_as_it_is_when_asked_in_utf8(history: Git) -> None:
