@@ -125,30 +125,16 @@ def test_refs_names_a_branch_fully_even_when_a_tag_has_its_name(repo: Git) -> No
     assert branch.upstream == "refs/heads/main"
 
 
-def test_refs_reads_the_fields_asked_for_in_the_same_process(repo: Git) -> None:
-    repo.run("branch", "--quiet", "topic")
-    repo.run("branch", "--quiet", "--set-upstream-to", "main", "topic")
-    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
-
-    found = refs(repo, "refs/heads/", fields=("upstream:track", "subject"))
-
-    assert found["refs/heads/topic"].fields == {"upstream:track": "[behind 1]", "subject": "first"}
-    assert found["refs/heads/main"].fields == {"upstream:track": "", "subject": "second"}
-
-
 def test_refs_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) -> None:
-    # In a commit's subject rather than a branch's name, which macOS and Windows can't store.
-    # Written with hash-object, as commit-tree would store the byte as Latin-1's é in UTF-8.
-    headers = repo.run("cat-file", "commit", "HEAD").split("\n\n")[0]
-    commit = repo.run(
-        "hash-object", "-t", "commit", "-w", "--stdin", input=f"{headers}\n\ncaf\udce9\n"
-    )
-    repo.run("update-ref", "refs/heads/topic", commit)
+    # In an upstream's name in the config rather than a branch's name, which macOS and Windows
+    # can't store: Latin-1's é, which isn't UTF-8.
+    repo.run("config", "branch.main.remote", ".")
+    repo.run("config", "branch.main.merge", "refs/heads/caf\udce9")
 
-    fields = refs(repo, "refs/heads/topic", fields=["subject"])["refs/heads/topic"].fields
+    upstream = refs(repo, "refs/heads/main")["refs/heads/main"].upstream
 
-    assert fields == {"subject": "caf\udce9"}
-    assert printable(fields["subject"]) == "caf\ufffd"
+    assert upstream == "refs/heads/caf\udce9"
+    assert printable(upstream) == "refs/heads/caf\ufffd"
 
 
 def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:

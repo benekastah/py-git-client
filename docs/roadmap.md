@@ -17,5 +17,3 @@ is done, remove it in the same change. What's wrong with what's built is in
   rev-list --left-right --count` per branch that tracks a local branch (rare), each against
   its own base (`<remote>/<branch>`, which git's `%(push)` names only under some
   `push.default`s); one process for several pairs would replace them.
-- **`refs()`'s raw `fields`.** Tools still pass `--format` names; once they use the typed
-  attributes, `fields` goes, in a release that says so.

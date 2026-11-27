@@ -3,7 +3,7 @@
 import os
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -120,8 +120,8 @@ type SortKey = Literal[
 @dataclass(frozen=True)
 class Ref:
     """A ref, from `refs`: its full name, the object it points to, the full name of its
-    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), whether HEAD
-    is on it, and the other fields `refs` was asked for, by name.
+    upstream (or ""), the full name of the ref it's a symbolic ref to (or ""), and whether
+    HEAD is on it.
 
     The rest are None unless `refs` was asked for them. With `remotes`: the remote its
     upstream is on ("." for a local branch, "" with no upstream) and the upstream's name
@@ -137,7 +137,6 @@ class Ref:
     upstream: str
     symref: str
     head: bool
-    fields: dict[str, str] = field(default_factory=dict[str, str], hash=False)
     upstream_remote: str | None = None
     upstream_remote_ref: str | None = None
     push: str | None = None
@@ -156,7 +155,6 @@ _NO_AHEAD_BEHIND = re.compile(r"^fatal: unknown field name: ahead-behind:", re.M
 def refs(
     git: ReadOnlyGit,
     *patterns: str,
-    fields: Sequence[str] = (),
     contains: str | None = None,
     no_contains: str | None = None,
     merged: str | None = None,
@@ -185,11 +183,8 @@ def refs(
     Raises ValueError for a base with ")", which a format can't hold, and GitError if git
     fails (e.g. the base names no commit).
 
-    `fields` are other fields to read, as `--format` names them without `%(...)` (e.g.
-    "subject"), each of whose values must be one line. For a branch's short name, ask for
-    "refname:lstrip=2" (or "upstream:lstrip=2"), never ":short", which git disambiguates when
-    a tag has the same name ("heads/v1"); and give git full ref names or object ids rather
-    than short names."""
+    Give git full ref names or object ids rather than short names, which can be ambiguous
+    (e.g. a tag named like a branch)."""
     if ahead_behind is not None and ")" in ahead_behind:
         raise ValueError(f"refs can't count against a base with ')': {ahead_behind!r}")
     options = [
@@ -221,7 +216,7 @@ def refs(
     typed += [("ahead_behind", f"ahead-behind:{ahead_behind}")] if ahead_behind is not None else []
 
     def listing(typed: list[tuple[str, str]]) -> str:
-        atoms = ["refname", "objectname", "upstream", "symref", "HEAD", *fields]
+        atoms = ["refname", "objectname", "upstream", "symref", "HEAD"]
         atoms += [atom for _, atom in typed]
         spec = "%00".join(f"%({atom})" for atom in atoms)
         command = ["for-each-ref", f"--format={spec}", *options, "--end-of-options"]
@@ -241,8 +236,7 @@ def refs(
         if not line:
             continue
         name, object_id, upstream, symref, head, *values = line.split("\0")
-        given = dict(zip(fields, values[: len(fields)], strict=True))
-        said = dict(zip((key for key, _ in typed), values[len(fields) :], strict=True))
+        said = dict(zip((key for key, _ in typed), values, strict=True))
         date = said.get("committer_date")
         found[name] = Ref(
             name,
@@ -250,7 +244,6 @@ def refs(
             upstream,
             symref,
             head == "*",
-            given,
             upstream_remote=said.get("upstream_remote"),
             upstream_remote_ref=said.get("upstream_remote_ref"),
             push=said.get("push"),

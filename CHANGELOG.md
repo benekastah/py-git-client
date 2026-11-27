@@ -8,6 +8,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `refs()` no longer takes `fields` (raw `--format` names), and `Ref` has no `fields`: a
+  tool asks for the typed attributes instead. move-forward's `push_target`
+  (`plugins/git/client.py:289`, `push:remotename`, `upstream:remotename` and
+  `upstream:remoteref`) passes `remotes=True` and reads `push_remote`, `upstream_remote` and
+  `upstream_remote_ref`. A tool (or test) that built a `Ref` with `fields` as its sixth
+  argument drops it.
 - All Git subprocesses close extra inheritable file descriptors or handles. Remove the
   `close_fds` keyword from calls to `Git`, `ReadOnlyGit` and `FakeGit`, and remove imports
   of `CLOSE_FDS`.
@@ -132,7 +138,7 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `track=True` for all branches at once), `chain_to_restack`'s `--contains --merged`
   (`core.py:809`), `find_parent`'s `--merged --no-merged` (`stack.py:3992`), and its
   `rev-parse --abbrev-ref <b>@{upstream}` (`core.py:1153`, `1275`: `upstream`, which `refs()`
-  always reads). A raw `fields=["upstream:track"]` still works.
+  always reads).
 
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
