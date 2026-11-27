@@ -268,6 +268,41 @@ and the push URLs after it have no report. Git's push config still applies (e.g.
 <remote> <refspecs>`, so a `FakeGit` test responds to `["-c", "core.abbrev=no", "push",
 "--porcelain"]` with porcelain output.
 
+### Status
+
+`status` reads a worktree's status from one `git status --porcelain=v2 -z`. It takes a
+`ReadOnlyGit`:
+
+```python
+reader = ReadOnlyGit("path/to/repo")
+found = status(
+    reader,
+    untracked="all",  # git's --untracked-files: "no", "normal" or "all"; None: its config
+    ignored="no",  # or "traditional" or "matching", as git's --ignored
+    ignore_submodules=None,  # or "none", "untracked", "dirty" or "all"; None: its config
+    renames=None,  # True or False: --renames or --no-renames; None: its config
+    branch=True,  # also read where HEAD is, into found.branch
+)
+for entry in found.entries:  # paths from the worktree's top, as git gives them
+    match entry:
+        case Renamed():  # a Changed, with entry.original and entry.similarity
+            entry.index, entry.worktree  # e.g. "R" and "."
+        case Changed() | Unmerged():  # Unmerged: a conflict
+            entry.index, entry.worktree, entry.submodule  # e.g. "." and "M", None
+        case Untracked() | Ignored():
+            entry.path
+assert found.branch is not None
+found.branch.head, found.branch.upstream  # "main", "origin/main"; None if detached, or none
+found.branch.ahead_behind  # (0, 0); None without an upstream
+```
+
+git runs `status` with `--no-optional-locks`, so it doesn't refresh the index, as a plain `git
+status` would, writing the stat information it found stale. That makes it a read, but a
+repository whose index is stale pays for that at each call. A `ReadOnlyGit`'s
+`-c core.fsmonitor=false` also keeps an fsmonitor from speeding it up; a `Git` keeps it.
+A `FakeGit` test responds to `["--no-optional-locks", "status", "--porcelain=v2", "-z"]` with
+git's output.
+
 ### Caching
 
 By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`
@@ -298,17 +333,17 @@ takes precedence over cached data.
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
-arguments as `Git` and offers the library's fixed read operations:
-`resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
-one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
-`CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`,
-`ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
-write: the library doesn't try to tell from a command line whether git would write (that's
-git's to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends
-it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
-flags a call of `run` on one. A tool that reads with other commands (`log`, `status`,
-`diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a
-`Git`, and raises `TypeError` for a `ReadOnlyGit`.
+arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
+`cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
+`git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `status` and `CatFile`. It has
+no public way to run a command of the caller's: no `run`, `run_bytes`, `ok`, `succeeds`,
+`passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to write: the
+library doesn't try to tell from a command line whether git would write (that's git's to decide,
+and it has no read-only mode to ask), it just doesn't take one. `Git` extends it, so a function
+that only reads takes a `ReadOnlyGit` and is given either; a type checker flags a call of `run`
+on one. A tool that reads with other commands (`log`, `diff`, ...) runs them with a `Git`.
+`patch_ids` runs the commands it's given, so it takes a `Git`, and raises `TypeError` for a
+`ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")

@@ -117,6 +117,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
+  worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
+  doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,
+  `Renamed`, `Unmerged`, `Untracked`, `Ignored`, with a `SubmoduleState`), and with
+  `branch`, HEAD's commit, branch, upstream and ahead/behind counts. A tool replaces its
+  `git status --porcelain` runs and parsers (emptiness becomes `not status(...).entries`).
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial

@@ -25,6 +25,7 @@ the shape of the code or a rule here changes.
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git
   reported at each destination (`PushResult`, parsed from `--porcelain`).
+- `src/git_client/worktree.py`: `status`, a worktree's (`git status --porcelain=v2 -z`).
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
