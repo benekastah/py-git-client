@@ -9,7 +9,7 @@ from typing import Self, assert_type, override
 import pytest
 
 import git_client.plan
-from git_client import Arg, Git, GitError, PushRejectedError, PushResult, PushStatus, push
+from git_client import Git, GitError, PushRejectedError, PushResult, PushStatus, PushUpdate, push
 from git_client.plan import (
     CONFIG,
     ConfigValue,
@@ -220,8 +220,8 @@ def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
         plan.execute()
 
     (push,) = pushes(git_calls)
-    assert push[:5] == [*PUSH, "origin"]
-    assert sorted(push[5:]) == [
+    assert push[:6] == [*PUSH, "--", "origin"]
+    assert sorted(push[6:]) == [
         "+refs/heads/a:refs/heads/a",
         "refs/heads/b:refs/heads/b",
         "refs/heads/c:refs/heads/c",
@@ -251,7 +251,8 @@ def test_a_push_waits_for_another_to_the_same_remote_past_reads(
     plan.execute()
 
     (push,) = pushes(git_calls)
-    assert sorted(push[4:]) == ["+refs/heads/a:refs/heads/a", "origin", "refs/heads/b:refs/heads/b"]
+    assert push[4:6] == ["--", "origin"]
+    assert sorted(push[6:]) == ["+refs/heads/a:refs/heads/a", "refs/heads/b:refs/heads/b"]
     assert [ref.status for ref in forced.get() + plain.get()] == [
         PushStatus.FORCED,
         PushStatus.UP_TO_DATE,
@@ -354,12 +355,72 @@ def test_an_atomic_push_is_all_or_nothing(remotes: Git, git_calls: list[GitCall]
         plan.execute()
 
     atomic, alone_push = sorted(pushes(git_calls), key=lambda call: "--atomic" not in call)
-    assert atomic[:6] == [*PUSH, "--atomic", "origin"]
-    assert sorted(atomic[6:]) == ["+refs/heads/a:refs/heads/a", "refs/heads/b:refs/heads/b"]
-    assert alone_push == [*PUSH, "origin", "refs/heads/main:refs/heads/main"]
+    assert atomic[:7] == [*PUSH, "--atomic", "--", "origin"]
+    assert sorted(atomic[7:]) == ["+refs/heads/a:refs/heads/a", "refs/heads/b:refs/heads/b"]
+    assert alone_push == [*PUSH, "--", "origin", "refs/heads/main:refs/heads/main"]
     assert set(raised.value.failures) == {forced, rejected}
     assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD")
     assert [ref.status for ref in alone.get()] == [PushStatus.CREATED]
+
+
+def test_a_push_with_a_lease_fails_if_the_remote_moved(remotes: Git) -> None:
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    plan = Plan(remotes)
+    stale = plan.add(Push("origin", "a", lease=remotes.run("rev-parse", "HEAD~1")))
+    leased = plan.add(Push("origin", "b", lease=remotes.run("rev-parse", "HEAD")))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert raised.value.node is stale
+    assert isinstance(raised.value.__cause__, PushRejectedError)
+    assert [ref.status for ref in leased.get()] == [PushStatus.UP_TO_DATE]
+
+
+def test_an_atomic_push_waits_for_no_later_one(remotes: Git, git_calls: list[GitCall]) -> None:
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    remotes.run("branch", "c")
+    git_calls.clear()
+    plan = Plan(remotes, atomic_pushes=True)
+    # Run in graph order, c's push isn't in a's, which git rejects: so c's mustn't wait.
+    created = plan.add(Push("origin", "c"))
+    rejected = plan.add(Push("origin", "a", force=ConfigValue("x.y").as_bool()))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    assert [call[-1] for call in pushes(git_calls)] == [
+        "refs/heads/c:refs/heads/c",
+        "refs/heads/a:refs/heads/a",
+    ]
+    assert raised.value.node is rejected
+    assert [ref.status for ref in created.get()] == [PushStatus.CREATED]
+
+
+def test_pushes_to_two_remotes_keep_their_order(
+    remotes: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def recording_push(
+        git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
+    ) -> PushResult:
+        events.append(f"start {remote}")
+        result = push(git, remote, updates, atomic=atomic)
+        events.append(f"end {remote}")
+        return result
+
+    monkeypatch.setattr(git_client.plan, "push", recording_push)
+    remotes.run("config", "example.remote", "mirror")
+    plan = Plan(remotes)
+    # Their remote-tracking refs may be the same (git maps them by each remote's fetch
+    # refspecs), so the push to origin, the earlier, mustn't wait for the one to mirror.
+    plan.add(Push("origin", "a"))
+    plan.add(Push(ConfigValue("example.remote").or_default("origin"), "b"))
+
+    plan.execute()
+
+    assert events == ["start origin", "end origin", "start mirror", "end mirror"]
 
 
 def test_pushes_to_two_remotes_run_at_once(
@@ -367,9 +428,11 @@ def test_pushes_to_two_remotes_run_at_once(
 ) -> None:
     meeting = threading.Barrier(2, timeout=10)
 
-    def meeting_push(git: Git, *args: Arg) -> PushResult:
+    def meeting_push(
+        git: Git, remote: str, updates: Iterable[PushUpdate], *, atomic: bool
+    ) -> PushResult:
         meeting.wait()  # till the other push starts too
-        return push(git, *args)
+        return push(git, remote, updates, atomic=atomic)
 
     monkeypatch.setattr(git_client.plan, "push", meeting_push)
     remotes.run("config", "example.remote", "mirror")
@@ -382,7 +445,7 @@ def test_pushes_to_two_remotes_run_at_once(
     plan.execute()
 
     assert sorted(pushes(git_calls)) == [
-        [*PUSH, remote, "refs/heads/a:refs/heads/a"] for remote in ("mirror", "origin")
+        [*PUSH, "--", remote, "refs/heads/a:refs/heads/a"] for remote in ("mirror", "origin")
     ]
     assert [ref.status for ref in to_origin.get() + to_mirror.get()] == [PushStatus.UP_TO_DATE] * 2
 
@@ -395,6 +458,6 @@ def test_sequence_pushes_one_after_another(remotes: Git, git_calls: list[GitCall
     plan.execute()
 
     assert pushes(git_calls) == [
-        [*PUSH, "origin", f"refs/heads/{branch}:refs/heads/{branch}"] for branch in "ab"
+        [*PUSH, "--", "origin", f"refs/heads/{branch}:refs/heads/{branch}"] for branch in "ab"
     ]
     assert second.after == [first]

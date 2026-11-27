@@ -21,6 +21,9 @@ only where that gives the same result as running the graph in order: each node d
 resources it reads and writes (`Node.reads`, `Node.writes`; e.g. CONFIG, a remote's ref), and
 a node never moves past one it conflicts with (one writes what the other reads or writes), nor
 past an edge. A node that declares nothing conflicts with everything, so nothing moves past it.
+Resources that may be the same without being equal (`Resource.overlaps`, e.g. two remotes'
+remote-tracking refs) count as conflicting. A node whose group could give another result
+than its members one by one (an atomic push: `Node.waits`) never waits.
 """
 
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the module.
@@ -38,7 +41,7 @@ from typing import Any, Self, cast, override
 from git_client.batch import config
 from git_client.client import Git, decode, error_from
 from git_client.errors import PushRejectedError, error_for
-from git_client.pushing import PushRef, PushStatus, push
+from git_client.pushing import PushRef, PushStatus, PushUpdate, push
 
 
 class PlanError(Exception):
@@ -110,6 +113,13 @@ class Node[T]:
         del plan
         return None
 
+    def waits(self, plan: Plan) -> bool:
+        """Whether the node may wait for a node that isn't ready yet, to share its group
+        (see Plan): False for one whose group's result could differ from running its members
+        one after another (e.g. an atomic push). Asked once its inputs are done."""
+        del plan
+        return True
+
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
     @classmethod
@@ -154,6 +164,32 @@ class Value[T](Node[T]):
 
 CONFIG = ("config",)
 """The resource that what reads or writes git's config declares (see Node.reads)."""
+
+
+class Resource:
+    """A resource that may be the same as others it doesn't equal: `overlaps` says which.
+    Other resources are the same only if equal."""
+
+    def overlaps(self, other: Hashable) -> bool:
+        """Whether `other` may be the same resource (or share some of it)."""
+        return self == other
+
+
+@dataclass(frozen=True)
+class TrackingRef(Resource):
+    """The remote-tracking ref git updates as it pushes `ref` to `remote`: one of the same
+    remote's for the same ref, or any other remote's, since git maps each remote's refs by
+    its own fetch refspecs, which may share remote-tracking refs (and a name and its URL may
+    be one remote)."""
+
+    remote: str
+    ref: str
+
+    @override
+    def overlaps(self, other: Hashable) -> bool:
+        return isinstance(other, TrackingRef) and (
+            other.ref == self.ref or other.remote != self.remote
+        )
 
 
 def lift[T](value: T | Node[T]) -> Node[T]:
@@ -334,16 +370,15 @@ _PUSHED = {
 
 class Push(Effect[tuple[PushRef, ...]]):
     """Push the branch `branch` to the same branch of `remote` (a name or URL), forced if
-    `force` says so. Its result is what git reported for the branch: a PushRef for each of
-    the remote's push URLs.
+    `force` says so, or only if the remote's branch is at `lease` (see PushUpdate). Its
+    result is what git reported for the branch: a PushRef for each of the remote's push URLs.
 
     The round's pushes to one remote with the same `atomic` (None: the plan's
-    `atomic_pushes`) are one `git push` with a refspec each (`+` for those forced): with
-    `--atomic` if atomic, all or nothing; else each branch succeeds or fails alone. Groups
-    to one remote run one after another; to different remotes, in parallel. A branch fails
-    if git reported it rejected (PushRejectedError) or didn't report it (the error git's
-    message says). With several push URLs, a destination whose push failed outright may go
-    unnoticed (see `push`).
+    `atomic_pushes`) are one `push` with an update each: atomic, all or nothing; else each
+    branch succeeds or fails alone. Groups to one remote run one after another; to
+    different remotes, in parallel. A branch fails if git rejected it (PushRejectedError),
+    if a destination's report of it isn't done, or if git didn't report it, or failed with
+    nothing rejected (as git's message says).
     """
 
     def __init__(
@@ -352,22 +387,24 @@ class Push(Effect[tuple[PushRef, ...]]):
         branch: str | Node[str],
         *,
         force: bool | Node[bool] = False,
+        lease: str | None | Node[str | None] = None,
         atomic: bool | None = None,
         after: Iterable[Node[object]] = (),
     ) -> None:
         self.remote = lift(remote)
         self.branch = lift(branch)
         self.force = lift(force)
+        self.lease = lift(lease)
         self.atomic = atomic
         self.after = list(after)
 
     @override
     def _reads(self) -> Iterable[Node[object]]:
-        return (self.remote, self.branch, self.force)
+        return (self.remote, self.branch, self.force, self.lease)
 
     @override
     def batch_key(self, plan: Plan) -> Hashable:
-        return self.remote.get(), plan.atomic_pushes if self.atomic is None else self.atomic
+        return self.remote.get(), self._atomic(plan)
 
     @override
     def lane(self, plan: Plan) -> Hashable | None:
@@ -380,9 +417,17 @@ class Push(Effect[tuple[PushRef, ...]]):
 
     @override
     def writes(self, plan: Plan) -> Iterable[Hashable]:
-        # The remote's branch, and the remote-tracking ref git updates for it.
-        remote = self.remote.get()
-        return ("ref", remote, self._ref()), ("remote-tracking", remote, self._ref())
+        # The branch at the remote, whichever: two remotes may be one repository (a name and
+        # its URL, say), which only git could tell. And the remote-tracking ref git updates.
+        return ("ref", "remote", self._ref()), TrackingRef(self.remote.get(), self._ref())
+
+    @override
+    def waits(self, plan: Plan) -> bool:
+        # An atomic push of more branches can fail where one of fewer wouldn't.
+        return not self._atomic(plan)
+
+    def _atomic(self, plan: Plan) -> bool:
+        return plan.atomic_pushes if self.atomic is None else self.atomic
 
     def _ref(self) -> str:
         return f"refs/heads/{self.branch.get()}"
@@ -391,28 +436,37 @@ class Push(Effect[tuple[PushRef, ...]]):
     @classmethod
     def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
         remote, atomic = cast(tuple[str, bool], nodes[0].batch_key(plan))
-        refspecs = dict.fromkeys(
-            f"{'+' if node.force.get() else ''}{node._ref()}:{node._ref()}" for node in nodes
+        updates = dict.fromkeys(
+            PushUpdate(node._ref(), node._ref(), force=node.force.get(), lease=node.lease.get())
+            for node in nodes
         )
-        args = [*(["--atomic"] if atomic else []), remote, *refspecs]
-        result = push(plan.git, *args)
-        command = ["-c", "core.abbrev=no", "push", "--porcelain", *args]
+        result = push(plan.git, remote, updates, atomic=atomic)
+        reports = [
+            (destination, ref) for destination in result.destinations for ref in destination.refs
+        ]
+        # Git failed though every ref it reported is pushed: for a destination it didn't
+        # report (see push).
+        unexplained = result.returncode != 0 and all(
+            destination.done and ref.status in _PUSHED for destination, ref in reports
+        )
+        # What a GitError shows as the command: push() doesn't say its own.
+        command = ["push", remote, *(update.target for update in updates)]
         for node in nodes:
-            refs = tuple(
-                ref
-                for destination in result.destinations
-                for ref in destination.refs
-                if ref.target == node._ref()
+            mine = [(destination, ref) for destination, ref in reports if ref.target == node._ref()]
+            if (
+                mine
+                and not unexplained
+                and all(destination.done and ref.status in _PUSHED for destination, ref in mine)
+            ):
+                node._set(tuple(ref for _, ref in mine))
+                continue
+            rejected = any(ref.status is PushStatus.REJECTED for _, ref in mine)
+            error = (
+                PushRejectedError
+                if rejected
+                else error_for(result.stderr, result.stdout, command=command)
             )
-            if refs and all(ref.status in _PUSHED for ref in refs):
-                node._set(refs)
-            else:
-                error = (
-                    PushRejectedError
-                    if refs
-                    else error_for(result.stderr, result.stdout, command=command)
-                )
-                node._fail(error(command, result.returncode, result.stderr, result.stdout))
+            node._fail(error(command, result.returncode, result.stderr, result.stdout))
 
     @override
     def __repr__(self) -> str:
@@ -484,12 +538,12 @@ class Plan:
         graph, copies = self._crawl()
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
-        order = _Order(graph)
+        order = _Order(graph, self)
         groups_of: dict[Node[object], list[Node[object]]] = {}
         held: list[Node[object]] = []
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
-                now, held = order.choose([*held, *sorter.get_ready()], self)
+                now, held = order.choose([*held, *sorter.get_ready()])
                 self._run_round(now, graph, groups_of, pool)
                 for copy, original in copies:
                     if not copy._done:
@@ -540,6 +594,18 @@ class Plan:
                     node._fail(PlanError(f"{node!r} was given no result"))
 
 
+def _overlap(these: frozenset[Hashable], those: frozenset[Hashable]) -> bool:
+    """Whether any of these resources may be one of those."""
+    if these & those:
+        return True
+    return any(
+        (isinstance(this, Resource) and this.overlaps(that))
+        or (isinstance(that, Resource) and that.overlaps(this))
+        for this in these
+        for that in those
+    )
+
+
 type _Resources = tuple[frozenset[Hashable], frozenset[Hashable]] | None
 """What a node reads and writes, or None if it doesn't say."""
 
@@ -558,8 +624,9 @@ class _Order:
     that depends on it.
     """
 
-    def __init__(self, graph: Graph) -> None:
+    def __init__(self, graph: Graph, plan: Plan) -> None:
         self.graph = graph
+        self.plan = plan
         self.level: dict[Node[object], int] = {}
         for node in graphlib.TopologicalSorter(graph).static_order():
             self.level[node] = 1 + max((self.level[input] for input in graph[node]), default=-1)
@@ -570,9 +637,7 @@ class _Order:
         self.seen: set[Node[object]] = set()  # every node that's been ready
         self.resources: dict[Node[object], _Resources] = {}
 
-    def choose(
-        self, ready: list[Node[object]], plan: Plan
-    ) -> tuple[list[Node[object]], list[Node[object]]]:
+    def choose(self, ready: list[Node[object]]) -> tuple[list[Node[object]], list[Node[object]]]:
         """The ready nodes to run now, and those to hold back."""
         self.seen.update(ready)
         movable: list[Node[object]] = []
@@ -583,14 +648,14 @@ class _Order:
             (movable if runs else now).append(node)
         for node in movable:
             if node not in self.resources:
-                reads, writes = node.reads(plan), node.writes(plan)
+                reads, writes = node.reads(self.plan), node.writes(self.plan)
                 if reads is None or writes is None:
                     self.resources[node] = None
                 else:
                     self.resources[node] = (frozenset(reads), frozenset(writes))
         groups: dict[Hashable, list[Node[object]]] = {}
         for node in movable:
-            groups.setdefault((type(node), node.batch_key(plan)), []).append(node)
+            groups.setdefault((type(node), node.batch_key(self.plan)), []).append(node)
         waiting = {
             node for group in groups.values() if self._worth_waiting(group) for node in group
         }
@@ -622,12 +687,14 @@ class _Order:
         if first not in self.resources or then not in self.resources:
             return False  # one done already, or skipped, runs nothing
         a, b = self.resources[first], self.resources[then]
-        return a is None or b is None or bool(a[1] & (b[0] | b[1]) or b[1] & a[0])
+        if a is None or b is None:
+            return True
+        return _overlap(a[1], b[0] | b[1]) or _overlap(b[1], a[0])
 
     def _worth_waiting(self, group: list[Node[object]]) -> bool:
         """Whether a node of the group's class that's not been ready yet, and depends on
         none of it, might join it."""
-        if any(self.resources[node] is None for node in group):
+        if any(self.resources[node] is None or not node.waits(self.plan) for node in group):
             return False
         after = self._descendants(group)
         return any(
