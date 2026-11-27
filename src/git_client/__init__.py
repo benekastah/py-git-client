@@ -54,7 +54,7 @@ from git_client.errors import (
     WrongTypeError,
 )
 from git_client.history import Commit, Revisions, Signature, any_commit, commits, count
-from git_client.merging import MergeResult, merge_trees
+from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
     PushDestination,
@@ -101,6 +101,7 @@ __all__ = [
     "GitTimeoutError",
     "Head",
     "Ignored",
+    "Merge",
     "MergeResult",
     "MissingObjectError",
     "NoAnswerError",

@@ -19,8 +19,9 @@ what git-stack, git-recommit and move-forward share for that:
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
-  merge-tree --stdin`; on git 2.38, one each): each merge's tree and conflicted paths, or
-  why git couldn't merge that pair.
+  merge-tree --stdin`; on git 2.38, one each), each with a merge base of its own if given
+  (git 2.40), as for a cherry-pick: each merge's tree and conflicted paths, or why git
+  couldn't merge that pair.
 
 It has no required dependencies (`pygit2` is an optional extra), and needs Python 3.15 or
 newer and git 2.36 or newer (for `git cat-file --batch-command`; 2.38 for `merge_trees`).
@@ -165,6 +166,21 @@ for merge in merge_trees(git, [(a, b), (b, a)]):
         print(merge.error)  # e.g. UnknownRevisionError, or histories that share nothing
     else:
         print(merge.clean, merge.tree, merge.conflicts)  # e.g. True, "<a tree id>", ()
+```
+
+```python
+# Needs git 2.40.
+from git_client import Git, Merge, merge_trees, refs
+
+# A Merge gives the merge base (pairs and Merges mix, still in one git). Cherry-picking a
+# commit onto a is merging it into a with its parent as the base: Merge(a, commit,
+# base=<its parent>). Here, b's changes since main, onto a. From git 2.45, all three can be
+# trees.
+git = Git("path/to/repo")
+heads = refs(git, "refs/heads/")
+a, b, main = (heads[f"refs/heads/{name}"].object for name in ("a", "b", "main"))
+[picked] = merge_trees(git, [Merge(a, b, base=main)])
+print(picked.clean, picked.tree)  # e.g. True, "<a tree id>"
 ```
 
 A CatFile's process stops once nothing uses it. With a client's `timeout`, a request it

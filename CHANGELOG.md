@@ -215,6 +215,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   --stdin` from 2.39 (on 2.38, one process each): whether each is clean, its tree and its
   conflicted paths, or why git couldn't merge that pair. It takes a `Git`, as merge-tree
   writes objects (#59).
+- `Merge(ours, theirs, base=None)`, which `merge_trees` takes as well as pairs, in the same
+  one process: a merge with its own merge base (git 2.40's `merge-tree --stdin` line `<base>
+  -- <ours> <theirs>`, else `GitError`), so a cherry-pick of commit C onto ours is
+  `Merge(ours, C, base=<C's parent>)`. git-stack replaces its raw `merge-tree --write-tree`
+  runs (`git_stack/git.py:1258`, `1294`, the second one per merge from `1308`) with one
+  `merge_trees` for all, and `is_rebased_copy` (`git_stack/git.py:1345-1372`: `show`, `apply
+  --3way` and `write-tree` per commit) with one `merge_trees` of `Merge(<upstream's parent>,
+  <commit>, base=<commit's parent>)` for every commit, comparing each tree with the upstream
+  commit's.
 - `Git.write_configs`'s changes: `ConfigSet`, `ConfigUnset` (with a `value`, only that value,
   as `--unset --fixed-value`) and their union `ConfigChange`, and `ConfigResult` (`CHANGED`,
   `NOT_FOUND`, `SEVERAL_VALUES`) (#61, #64).
