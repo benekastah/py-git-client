@@ -225,6 +225,41 @@ It doesn't stop a git that's already running: a command runs on until it finishe
 out (or its thread is interrupted, as above), and a `CatFile`'s process keeps answering until
 it's closed, though one that has to start (again) raises. `FakeGit` takes it too.
 
+### Commits
+
+`commits` lists the commits git's revision walk finds, with what each says of itself, from one
+`git rev-list`; `count` and `any_commit` ask the same of git without listing them:
+
+```python
+from datetime import UTC, datetime
+
+from git_client import Git, Revisions, any_commit, commits, count
+
+git = Git("path/to/repo")
+# git's main..a: reachable from a (or each of several) and from none of the excludes.
+for commit in commits(git, Revisions("a", exclude="main"), reverse=True):  # oldest first
+    commit.id, commit.parents, commit.subject  # full ids; a merge's first parent first
+    commit.author.name, commit.author.email, commit.author.date  # an aware datetime
+    commit.committer  # a Signature too; commit.message: None, unless messages=True
+mine = Revisions(
+    ["a", "b"],
+    exclude="main",
+    merges=False,  # True: only merges
+    since=datetime(2026, 1, 1, tzinfo=UTC),  # by the committer's date
+    author="<me@example.com>",  # a fixed string in "Name <email>"
+    paths=["src"],  # changing these paths, from the top of the worktree, taken literally
+)
+count(git, mine)  # how many
+any_commit(git, Revisions("a", exclude="main", merges=True))  # whether any: stops at the first
+# Leaving out each commit whose patch is already in main (git's --cherry-pick --right-only).
+commits(git, Revisions("a", exclude="main", cherry_pick=True), topo_order=True, max_count=10)
+```
+
+The revisions reach git on its stdin, as many as it takes, so none is read as an option: a
+`Revisions` refuses one that starts with `-` or holds a newline (ValueError). Each message is
+read as UTF-8 whatever `i18n.logOutputEncoding` says. `first_parent=True` follows only each
+merge's first parent.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says
@@ -298,17 +333,17 @@ takes precedence over cached data.
 ### Reading only
 
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
-arguments as `Git` and offers the library's fixed read operations:
-`resolve`, `var`, `prefix()`, `cdup()` and `object_id_length()`, and the functions that take
-one: `refs`, `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir` and
-`CatFile`. It has no public way to run a command of the caller's: no `run`, `run_bytes`,
-`ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it can't be asked to
-write: the library doesn't try to tell from a command line whether git would write (that's
-git's to decide, and it has no read-only mode to ask), it just doesn't take one. `Git` extends
-it, so a function that only reads takes a `ReadOnlyGit` and is given either; a type checker
-flags a call of `run` on one. A tool that reads with other commands (`log`, `status`,
-`diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it takes a
-`Git`, and raises `TypeError` for a `ReadOnlyGit`.
+arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`,
+`prefix()`, `cdup()` and `object_id_length()`, and the functions that take one: `refs`,
+`config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `commits`, `count`,
+`any_commit` and `CatFile`. It has no public way to run a command of the caller's: no `run`,
+`run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`, which are `Git`'s. So it
+can't be asked to write: the library doesn't try to tell from a command line whether git would
+write (that's git's to decide, and it has no read-only mode to ask), it just doesn't take one.
+`Git` extends it, so a function that only reads takes a `ReadOnlyGit` and is given either; a
+type checker flags a call of `run` on one. A tool that reads with other commands (`log`,
+`status`, `diff`, ...) runs them with a `Git`. `patch_ids` runs the commands it's given, so it
+takes a `Git`, and raises `TypeError` for a `ReadOnlyGit`.
 
 ```python
 reader = ReadOnlyGit("path/to/repo", env_var="MY_TOOL_GIT")

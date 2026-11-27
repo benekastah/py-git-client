@@ -47,6 +47,7 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
+from git_client.history import Commit, Revisions, Signature, any_commit, commits, count
 from git_client.merging import MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
@@ -62,6 +63,7 @@ __all__ = [
     "CLIENT_TIMEOUT",
     "Arg",
     "CatFile",
+    "Commit",
     "ConfigChange",
     "ConfigLockedError",
     "ConfigResult",
@@ -94,10 +96,15 @@ __all__ = [
     "Ref",
     "RefUpdate",
     "RemoteError",
+    "Revisions",
+    "Signature",
     "Timeout",
     "UnknownRevisionError",
     "WrongTypeError",
+    "any_commit",
+    "commits",
     "config",
+    "count",
     "decode",
     "encode",
     "find_git",
