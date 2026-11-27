@@ -96,7 +96,7 @@ def test_status_keeps_a_path_that_isnt_utf_8(repo: Git) -> None:
     assert os.fsencode(entry.path) == b"\xff"
 
 
-def add_submodule(git: Git) -> None:
+def add_a_submodule(git: Git) -> None:
     """A submodule, `s`, at a commit of its own, committed in the repository."""
     sub = Path(git.directory) / "s"
     Git(git.directory).run("init", "--quiet", str(sub))
@@ -108,7 +108,7 @@ def add_submodule(git: Git) -> None:
 
 
 def test_status_reports_a_submodules_state(repo_from: RepoFrom) -> None:
-    repo = repo_from("submodule", add_submodule)
+    repo = repo_from("status-submodule", add_a_submodule)
     sub = Path(repo.directory) / "s"
     (sub / "f").write_bytes(b"changed\n")
     (sub / "u").write_bytes(b"")
