@@ -8,9 +8,8 @@ import itertools
 from collections.abc import Generator, Hashable
 
 from git_client.client import Git
-from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped, Value
-from git_client.plan.pushing import ConflictingPushes, Push
-from git_client.plan.resources import Access, overlap
+from git_client.plan.nodes import Effect, ExecutionException, Node, PlanError, Skipped
+from git_client.plan.resources import Access
 
 
 class Plan:
@@ -27,14 +26,9 @@ class Plan:
     wait for nothing but each other, and share groups. A round's nodes don't conflict, so
     its groups run at once: the plan starts every group's git process, then waits for each
     in turn, in the calling thread (work in-process just runs). Without `reorder`, nodes
-    run one at a time, in program order.
-
-    Before either, the plan takes two pushes of one ref of one remote, with nothing between
-    that may change what they push or where (see `_earlier_push`), for one: the second is
-    the first, and reports the first's report (CREATED, say, where git, asked again, would
-    say UP_TO_DATE), failure included; and if they differ, the author's mistake:
-    ConflictingPushes, raised before anything runs if both are known then, else failing the
-    second.
+    run one at a time, in program order. In both, a node may settle its outcome from what
+    came before it without running (Node.settle: a repeated Push), and say before anything
+    runs that the plan is wrong (Node.check: ConflictingPushes).
 
     Every process starts through `git` (its `_start`, see Started), so its timeout,
     `stopping` and process groups apply as to any of its commands; its `performance`
@@ -112,7 +106,7 @@ class Plan:
             object.__setattr__(node, "_error", None)
         self._access.clear()
         self._key.clear()
-        self._check_pushes(left)
+        self._check(left)
         groups_of: dict[Node[object], list[Node[object]]] = {}
         while left:
             groups = self._round(left)
@@ -147,7 +141,7 @@ class Plan:
                 if not self._ask(node):
                     continue
                 if not any(self._conflict(earlier, node) for earlier in before):
-                    if self._known(node):
+                    if node.settle(self, self._order[: self._position[node]]):
                         continue  # given its outcome: finished
                     may_run.append(node)
             before.append(node)
@@ -177,57 +171,23 @@ class Plan:
         )
         return True
 
-    def _check_pushes(self, left: list[Node[object]]) -> None:
-        """Raise ConflictingPushes, before anything runs, for two pushes known now (all
-        their inputs done) that push one ref otherwise, with nothing between them known
-        not to change what they push."""
+    def access(self, node: Node[object]) -> Access | None:
+        """What a node of this run declared it reads and writes, once asked (when its
+        inputs were done); nothing for a node done before this run, which changes nothing
+        now; None if it declared nothing or wasn't asked."""
+        if node in self._access:
+            return self._access[node]
+        return Access(frozenset(), frozenset()) if node._done else None
+
+    def _check(self, left: list[Node[object]]) -> None:
+        """Ask each node whose inputs are done whether the plan is wrong (Node.check),
+        before anything runs."""
         for node in left:
             if all(input._done for input in node.inputs()):
                 self._ask(node)
         for node in left:
-            if isinstance(node, Push) and node in self._key:
-                found = self._earlier_push(node)
-                if found is not None and not found[1]:
-                    earlier = found[0]
-                    if earlier._parameters(self) != node._parameters(self):
-                        raise ConflictingPushes(earlier, node)
-
-    def _known(self, node: Node[object]) -> bool:
-        """Give the node, which may run now, its outcome without running it, if the plan
-        knows it: a push's from an earlier push it repeats (see `_earlier_push`); or fail a
-        push that pushes one ref otherwise. Whether it did."""
-        if not isinstance(node, Push):
-            return False
-        found = self._earlier_push(node)
-        if found is None or found[1]:
-            return False
-        earlier = found[0]
-        if earlier._parameters(self) != node._parameters(self):
-            node._fail(ConflictingPushes(earlier, node))
-            return True
-        for name in ("_done", "_result", "_error"):  # it's finished: they conflict
-            object.__setattr__(node, name, getattr(earlier, name))
-        return True
-
-    def _earlier_push(self, node: Push) -> tuple[Push, bool] | None:
-        """The nearest earlier Push of the node's ref of its remote, if any, and whether a
-        node between may have changed what they push, or where: one that writes anything a
-        push reads or writes (the branch, the remote's ref, config such as the remote's
-        URL), or whose resources aren't known."""
-        remote, ref = node.remote.get(), node._ref()
-        access = self._access[node]
-        assert access is not None  # a Push declares its resources
-        pushed = access.reads | access.writes
-        changed = False
-        for earlier in reversed(self._order[: self._position[node]]):
-            if isinstance(earlier, Push) and earlier in self._key:
-                if (earlier.remote.get(), earlier._ref()) == (remote, ref):
-                    return earlier, changed
-            elif isinstance(earlier, Value):
-                continue
-            between = self._access.get(earlier)
-            changed = changed or between is None or overlap(between.writes, pushed)
-        return None
+            if node in self._key:
+                node.check(self, self._order[: self._position[node]])
 
     def _conflict(self, earlier: Node[object], node: Node[object]) -> bool:
         a, b = self._access.get(earlier), self._access[node]

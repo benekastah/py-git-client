@@ -15,6 +15,7 @@ from git_client.plan.resources import (
     RemoteRef,
     Resource,
     TrackingRef,
+    overlap,
 )
 from git_client.pushing import (
     PushRef,
@@ -98,6 +99,44 @@ class Push(Effect[tuple[PushRef, ...]]):
     def writes(self, plan: Plan) -> Iterable[Resource]:
         remote = self.remote.get()
         return RemoteRef(remote, self._ref()), TrackingRef(remote, self._ref())
+
+    @override
+    def check(self, plan: Plan, before: Sequence[Node[object]]) -> None:
+        found = self._repeats(plan, before)
+        if found is not None and found[0]._parameters(plan) != self._parameters(plan):
+            raise ConflictingPushes(found[0], self)
+
+    @override
+    def settle(self, plan: Plan, before: Sequence[Node[object]]) -> bool:
+        found = self._repeats(plan, before)
+        if found is None:
+            return False
+        if found[0]._parameters(plan) != self._parameters(plan):
+            self._fail(ConflictingPushes(found[0], self))
+        else:
+            self._copy_outcome(found[0])
+        return True
+
+    def _repeats(self, plan: Plan, before: Sequence[Node[object]]) -> tuple[Push] | None:
+        """The nearest earlier Push of this ref of this remote, if nothing between them may
+        have changed what they push, or where: no node that writes anything a push reads or
+        writes (the branch, the remote's ref, config such as the remote's URL), nor one
+        whose resources aren't known."""
+        access = plan.access(self)
+        assert access is not None  # a Push declares its resources
+        pushed = access.reads | access.writes
+        here = (self.remote.get(), self._ref())
+        for earlier in reversed(before):
+            between = plan.access(earlier)
+            if (
+                isinstance(earlier, Push)
+                and between is not None
+                and (earlier.remote.get(), earlier._ref()) == here
+            ):
+                return (earlier,)
+            if between is None or overlap(between.writes, pushed):
+                return None
+        return None
 
     def _parameters(self, plan: Plan) -> tuple[object, ...]:
         """What the push makes: its remote, ref, force, lease and atomic."""

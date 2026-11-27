@@ -85,6 +85,21 @@ class Node[T]:
         del plan
         return None
 
+    def check(self, plan: Plan, before: Sequence[Node[object]]) -> None:
+        """Raise a PlanError, before anything runs, if the plan is wrong as written, given
+        the nodes before this one in program order (`before`; see `Plan.access`). Asked of
+        a node whose inputs are done then. Nothing, by default."""
+        del plan, before
+
+    def settle(self, plan: Plan, before: Sequence[Node[object]]) -> bool:
+        """Give the node its outcome without running it (`_set`, `_fail` or
+        `_copy_outcome`), if the nodes before it in program order (`before`, which have all
+        run or won't: see `Plan.access`) tell it, and say whether it did. Asked once the node
+        may run, in both modes, so what it gives is part of the class's meaning. False, by
+        default."""
+        del plan, before
+        return False
+
     # Its nodes are Any so that a subclass can take Sequence[Self]: basedpyright refuses a
     # Self parameter's override.
     @classmethod
@@ -115,6 +130,11 @@ class Node[T]:
 
     def _fail(self, error: Exception) -> None:
         object.__setattr__(self, "_error", error)
+
+    def _copy_outcome(self, other: Node[object]) -> None:
+        """Take `other`'s outcome (result or error) for this node's."""
+        for name in ("_done", "_result", "_error"):
+            object.__setattr__(self, name, getattr(other, name))
 
     def _skip(self, input: Node[object]) -> None:
         """Mark the node as not run because `input` failed or was skipped."""
