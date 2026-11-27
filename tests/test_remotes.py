@@ -14,6 +14,7 @@ from git_client import (
     fetch,
     refs,
     remote_refs,
+    remote_urls,
 )
 from git_client.testing import FakeGit, GitCall
 
@@ -278,3 +279,64 @@ def test_remote_refs_raises_for_output_git_never_gives(stdout: str) -> None:
 
     with pytest.raises(GitError, match="ls-remote printed what it can't read"):
         remote_refs(git, "origin")
+
+
+def configured(git: Git, config: str) -> Git:
+    """git, with config added to its repository's config file: git takes a remote's settings
+    from the repository's config, not from the environment's or the command line's."""
+    with (Path(git.directory) / ".git" / "config").open("a", encoding="utf-8") as file:
+        file.write(config)
+    return git
+
+
+# Fetch and push rewrite a remote's URLs: url.<base>.insteadOf for each, and for pushes,
+# url.<base>.pushInsteadOf first, but not of a pushurl.
+REWRITES = """
+[remote "a"]
+    url = https://host/a
+[remote "b"]
+    url = https://host/b
+    pushurl = https://other/b
+[url "ssh://fetch/"]
+    insteadOf = https://
+[url "ssh://push/"]
+    pushInsteadOf = https://host/
+"""
+
+
+@pytest.mark.parametrize(
+    ("remote", "push", "urls"),
+    [
+        ("a", False, ["ssh://fetch/host/a"]),
+        ("a", True, ["ssh://push/a"]),
+        ("b", False, ["ssh://fetch/host/b"]),
+        ("b", True, ["ssh://fetch/other/b"]),
+    ],
+)
+def test_remote_urls_are_what_git_fetches_from_or_pushes_to(
+    repo: Git, git_calls: list[GitCall], remote: str, push: bool, urls: list[str]
+) -> None:
+    git = configured(repo, REWRITES)
+    git_calls.clear()
+
+    assert remote_urls(git, remote, push=push) == urls
+    assert len(git_calls) == 1
+
+
+@pytest.mark.parametrize(("push", "urls"), [(False, ["a 1", "a2"]), (True, ["p1", "p2", "p3"])])
+def test_remote_urls_lists_every_url(repo: Git, push: bool, urls: list[str]) -> None:
+    git = configured(repo, """
+[remote "r"]
+    url = a 1
+    pushurl = p1
+    url = a2
+    pushurl = p2
+    pushurl = p3
+""")  # fmt: skip
+
+    assert remote_urls(git.read_only(), "r", push=push) == urls
+
+
+def test_remote_urls_of_no_remote_raises(repo: Git) -> None:
+    with pytest.raises(GitError, match="No such remote '-r'"):
+        remote_urls(repo, "-r")

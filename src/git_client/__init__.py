@@ -72,6 +72,7 @@ from git_client.remotes import (
     RemoteRefs,
     fetch,
     remote_refs,
+    remote_urls,
 )
 from git_client.worktree import (
     Changed,
@@ -172,6 +173,7 @@ __all__ = [
     "push",
     "refs",
     "remote_refs",
+    "remote_urls",
     "status",
     "update_refs",
     "worktrees",

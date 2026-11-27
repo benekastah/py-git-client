@@ -138,6 +138,14 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (`git_stack/git.py:1087`, reading `symrefs["HEAD"]`), its probe at a push URL (`1202`,
   passing its `GIT_CONFIG_COUNT` rewrite as `env`) and `ls-remote --heads -- <remote> <refs>`
   (`git_stack/stack.py:3036`, `3666`).
+- `remote_urls(git, remote, *, push=False)`: the URLs git fetches a remote from or pushes it
+  to, rewritten as git rewrites them (`insteadOf`, `pushInsteadOf`), from one `git remote
+  get-url --all [--push]`. git-stack replaces `remote get-url --push --all`
+  (`git_stack/git.py:1131`) and `remote get-url` (`git_stack/adapters/github.py:1981`), and
+  can drop its own reading of `insteadOf`, `pushInsteadOf` and `pushurl`
+  (`git_stack/git.py:353-370`, `580-610`, `1110-1190`) for comparing what git gives with the
+  configured URLs; move-forward, `remote get-url` (`src/move_forward/plugins/github/setup.py:34`,
+  `36`).
 - `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
   worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
   doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,

@@ -216,3 +216,19 @@ def remote_refs(
             raise error
         (found.symrefs if symref else found.refs)[name] = target
     return found
+
+
+def remote_urls(
+    git: ReadOnlyGit, remote: str, *, push: bool = False, timeout: Timeout = CLIENT_TIMEOUT
+) -> list[str]:
+    """The URLs git fetches `remote` (a remote's name) from, or with `push`, pushes it to, as
+    git rewrites them (url.<base>.insteadOf, and for a push, url.<base>.pushInsteadOf), from
+    one `git remote get-url --all [--push]`. git prints them a line each, as they are, so a
+    URL with a newline in it reads as two. A remote with no URL gives its name, as git takes
+    it for one (a path).
+
+    Raises GitError if git fails, e.g. for a remote the repository's config doesn't name (git
+    ignores remotes set only by `-c` or the environment). A `FakeGit` test responds to
+    `["remote", "get-url"]`."""
+    args = ("remote", "get-url", "--all", *(["--push"] if push else []), "--", remote)
+    return decode(read_output(git, *args, timeout=timeout)).splitlines()
