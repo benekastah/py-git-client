@@ -3,25 +3,28 @@ git's own batch forms allow, the independent ones in parallel. A prototype: not 
 `git_client` yet.
 
     plan = Plan(git)
-    force = plan.add(ConfigValue("example.force").as_bool())
+    for branch in ("a", "b"):
+        plan.add(Push("origin", branch, force=ConfigValue("example.force").as_bool()))
     plan.execute()
-    force.get()
 
 Each node's fields are nodes too (`lift` wraps a plain value in a `Value`), and a node reads
 them only through `get()` once they've run. The plan crawls the graph from the ops it was
 given (`Node.inputs`), and runs it in rounds: the nodes whose inputs are done, grouped by
 class and `batch_key`, each group run once by its class's `execute_group` (one git process,
 where git has a batch form), the groups on different lanes in parallel. Nodes are never
-replaced: a group writes each member's result back onto the member.
+replaced: a group writes each member's result back onto the member. Reads go first: an
+effect (a Push) waits while any read can run, so the effects that read config are ready
+together, and share groups.
 
-Only data orders nodes: ops with no edge between them are independent, whatever order they
-were added in.
+Only data and `after=` order nodes: ops with no edge between them are independent, whatever
+order they were added in.
 """
 
 # The plan and its nodes share their outcomes (_done, _error, _set...), private to the module.
 # pyright: reportPrivateUsage=false
 
 import graphlib
+import itertools
 import re
 from collections import deque
 from collections.abc import Callable, Hashable, Iterable, Sequence
@@ -31,6 +34,8 @@ from typing import Any, Self, cast, override
 
 from git_client.batch import config
 from git_client.client import Git, decode, error_from
+from git_client.errors import PushRejectedError, error_for
+from git_client.pushing import PushRef, PushStatus, push
 
 
 class PlanError(Exception):
@@ -259,6 +264,106 @@ class TypedConfig[T](Node[T]):
             node._set(cast(T, _PARSERS[git_type](typed[key])) if key in typed else node.default)
 
 
+class Effect[T](Node[T]):
+    """A node that changes something, which can be ordered after other nodes with `after`,
+    on top of what it reads (see Plan.sequence)."""
+
+    after: list[Node[object]]
+
+    def _reads(self) -> Iterable[Node[object]]:
+        return ()
+
+    @override
+    def inputs(self) -> Iterable[Node[object]]:
+        return (*self._reads(), *self.after)
+
+
+# The statuses of a ref a push did, or found done.
+_PUSHED = {
+    PushStatus.FAST_FORWARD,
+    PushStatus.FORCED,
+    PushStatus.CREATED,
+    PushStatus.DELETED,
+    PushStatus.UP_TO_DATE,
+}
+
+
+class Push(Effect[tuple[PushRef, ...]]):
+    """Push the branch `branch` to the same branch of `remote` (a name or URL), forced if
+    `force` says so. Its result is what git reported for the branch: a PushRef for each of
+    the remote's push URLs.
+
+    The round's pushes to one remote with the same `atomic` (None: the plan's
+    `atomic_pushes`) are one `git push` with a refspec each (`+` for those forced): with
+    `--atomic` if atomic, all or nothing; else each branch succeeds or fails alone. Groups
+    to one remote run one after another; to different remotes, in parallel. A branch fails
+    if git reported it rejected (PushRejectedError) or didn't report it (the error git's
+    message says). With several push URLs, a destination whose push failed outright may go
+    unnoticed (see `push`).
+    """
+
+    def __init__(
+        self,
+        remote: str | Node[str],
+        branch: str | Node[str],
+        *,
+        force: bool | Node[bool] = False,
+        atomic: bool | None = None,
+        after: Iterable[Node[object]] = (),
+    ) -> None:
+        self.remote = lift(remote)
+        self.branch = lift(branch)
+        self.force = lift(force)
+        self.atomic = atomic
+        self.after = list(after)
+
+    @override
+    def _reads(self) -> Iterable[Node[object]]:
+        return (self.remote, self.branch, self.force)
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        return self.remote.get(), plan.atomic_pushes if self.atomic is None else self.atomic
+
+    @override
+    def lane(self, plan: Plan) -> Hashable | None:
+        return Push, self.remote.get()
+
+    def _ref(self) -> str:
+        return f"refs/heads/{self.branch.get()}"
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        remote, atomic = cast(tuple[str, bool], nodes[0].batch_key(plan))
+        refspecs = dict.fromkeys(
+            f"{'+' if node.force.get() else ''}{node._ref()}:{node._ref()}" for node in nodes
+        )
+        args = [*(["--atomic"] if atomic else []), remote, *refspecs]
+        result = push(plan.git, *args)
+        command = ["-c", "core.abbrev=no", "push", "--porcelain", *args]
+        for node in nodes:
+            refs = tuple(
+                ref
+                for destination in result.destinations
+                for ref in destination.refs
+                if ref.target == node._ref()
+            )
+            if refs and all(ref.status in _PUSHED for ref in refs):
+                node._set(refs)
+            else:
+                error = (
+                    PushRejectedError
+                    if refs
+                    else error_for(result.stderr, result.stdout, command=command)
+                )
+                node._fail(error(command, result.returncode, result.stderr, result.stdout))
+
+    @override
+    def __repr__(self) -> str:
+        return f"Push({self.remote!r}, {self.branch!r})"
+
+
 type Graph = dict[Node[object], tuple[Node[object], ...]]
 """Each node, with its inputs."""
 
@@ -266,14 +371,18 @@ type Graph = dict[Node[object], tuple[Node[object], ...]]
 class Plan:
     """Nodes to run with `git`, in as few processes as git's batch forms allow, independent
     groups in parallel on up to `max_workers` more threads (the calling thread runs one).
+    `atomic_pushes` is what a Push's `atomic=None` means.
 
     Every process starts through `git` (its `process`), so its timeout, `stopping` and
     process groups apply as to any of its commands. Ctrl-C reaches only a git the calling
     thread runs (see ReadOnlyGit).
     """
 
-    def __init__(self, git: Git, *, max_workers: int | None = None) -> None:
+    def __init__(
+        self, git: Git, *, atomic_pushes: bool = False, max_workers: int | None = None
+    ) -> None:
         self.git = git
+        self.atomic_pushes = atomic_pushes
         self.max_workers = max_workers
         self.ops: list[Node[object]] = []
 
@@ -281,6 +390,15 @@ class Plan:
         """Add `op` (and so what it reads) to the plan, and give it back."""
         self.ops.append(op)
         return op
+
+    def sequence[N: Effect[object]](self, *ops: N) -> tuple[N, ...]:
+        """Add `ops`, each to run after the one before it: never in the same group, nor at
+        the same time."""
+        for before, op in itertools.pairwise(ops):
+            op.after.append(before)
+        for op in ops:
+            self.add(op)
+        return ops
 
     def graph(self) -> Graph:
         """Every node the ops reach, with its inputs, in the order crawled, ops first: each
@@ -312,9 +430,16 @@ class Plan:
         sorter = graphlib.TopologicalSorter(graph)
         sorter.prepare()
         groups_of: dict[Node[object], list[Node[object]]] = {}
+        waiting: list[Node[object]] = []  # effects, ready but held back
         with ThreadPoolExecutor(self.max_workers) as pool:
             while sorter.is_active():
-                now = [*sorter.get_ready()]
+                ready = [*waiting, *sorter.get_ready()]
+                # Reads first: an effect waits while a read can run, so the effects whose
+                # inputs come from reads are ready together, and share groups.
+                waiting = [node for node in ready if isinstance(node, Effect)]
+                now = [node for node in ready if not isinstance(node, Effect)] or waiting
+                if now is waiting:
+                    waiting = []
                 self._run_round(now, graph, groups_of, pool)
                 for copy, original in copies:
                     if not copy._done:

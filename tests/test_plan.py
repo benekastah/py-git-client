@@ -1,9 +1,15 @@
+# So the checks fail if a type error a test expects (an ignore below) goes away:
+# pyright: reportUnnecessaryTypeIgnoreComment=true
+import graphlib
+import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import assert_type
 
 import pytest
 
-from git_client import Git, GitError
+import git_client.plan
+from git_client import Arg, Git, GitError, PushRejectedError, PushResult, PushStatus, push
 from git_client.plan import (
     ConfigValue,
     ExecutionException,
@@ -11,10 +17,39 @@ from git_client.plan import (
     Node,
     NotExecuted,
     Plan,
+    Push,
     Value,
     lift,
 )
 from git_client.testing import GitCall
+from tests.conftest import Changes
+
+PUSH = ["-c", "core.abbrev=no", "push", "--porcelain"]
+
+
+def with_remotes(git: Git) -> None:
+    """Bare remotes origin and mirror beside the repository, with branches a and b at main's
+    second commit, as the repository has them."""
+    git.run("commit", "--allow-empty", "-qm", "second")
+    for remote in ("origin", "mirror"):
+        git.run("init", "-q", "--bare", f"../{remote}.git")
+        git.run("remote", "add", remote, f"../{remote}.git")
+        git.run("push", "-q", remote, "main:a", "main:b")
+    git.run("branch", "a")
+    git.run("branch", "b")
+
+
+@pytest.fixture
+def remotes(repo_from: Callable[[str, Changes], Git]) -> Git:
+    return repo_from("plan-remotes", with_remotes)
+
+
+def remote_tip(git: Git, remote: str, branch: str) -> str:
+    return Git(Path(git.directory).parent / f"{remote}.git").run("rev-parse", branch)
+
+
+def pushes(calls: list[GitCall]) -> list[GitCall]:
+    return [call for call in calls if call[:4] == PUSH]
 
 
 def test_lift_wraps_a_value_and_keeps_a_node() -> None:
@@ -30,6 +65,14 @@ def test_lift_wraps_a_value_and_keeps_a_node() -> None:
 def test_get_before_execute_says_so() -> None:
     with pytest.raises(NotExecuted, match="hasn't run"):
         Map(str, Value(1)).get()
+
+
+def test_types_catch_a_node_of_the_wrong_type() -> None:
+    # A config value may be unset (None): a remote needs a default.
+    Push(ConfigValue("example.remote"), "a")  # pyright: ignore[reportArgumentType]
+    Push(ConfigValue("example.remote").or_default("origin"), "a")
+    flag: Node[bool] = ConfigValue("example.flag").as_bool()
+    assert_type(flag.get, Callable[[], bool])
 
 
 def test_graph_crawls_a_diamond_once_and_runs_it_in_order(repo: Git) -> None:
@@ -53,6 +96,18 @@ def test_graph_crawls_a_diamond_once_and_runs_it_in_order(repo: Git) -> None:
     assert sorted(ran[:2]) == ["left", "right"]
     assert ran[2:] == ["top"]
     assert top.get() == "top('left(1,)', 'right(1,)')"
+
+
+def test_a_cycle_runs_nothing(repo: Git, git_calls: list[GitCall]) -> None:
+    first = Push("origin", "a")
+    second = Push("origin", "b", after=[first])
+    first.after.append(second)
+    plan = Plan(repo)
+    plan.add(first)
+
+    with pytest.raises(graphlib.CycleError):
+        plan.execute()
+    assert git_calls == []
 
 
 def test_a_failure_names_its_node_and_stops_its_dependents(repo: Git) -> None:
@@ -144,3 +199,98 @@ def test_a_value_git_cant_type_fails_its_group(repo: Git) -> None:
         plan.execute()
     assert raised.value.node is flag
     assert isinstance(raised.value.__cause__, GitError)
+
+
+def test_pushes_to_a_remote_are_one_push_each_branch_alone_and_forced_as_asked(
+    remotes: Git, git_calls: list[GitCall]
+) -> None:
+    remotes.run("config", "example.push-with-force", "on")
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    remotes.run("branch", "-f", "b", "HEAD~1")
+    remotes.run("branch", "c")
+    git_calls.clear()
+    plan = Plan(remotes)
+    force = ConfigValue("example.push-with-force").as_bool()
+    forced, rejected, created = (
+        plan.add(Push("origin", branch, force=force if branch == "a" else False))
+        for branch in "abc"
+    )
+    dependent = plan.add(Push("origin", "c", after=[rejected]))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    (push,) = pushes(git_calls)
+    assert push[:5] == [*PUSH, "origin"]
+    assert sorted(push[5:]) == [
+        "+refs/heads/a:refs/heads/a",
+        "refs/heads/b:refs/heads/b",
+        "refs/heads/c:refs/heads/c",
+    ]
+    assert raised.value.node is rejected
+    assert set(raised.value.group) == {forced, rejected, created}
+    assert isinstance(raised.value.__cause__, PushRejectedError)
+    assert [ref.status for ref in forced.get()] == [PushStatus.FORCED]
+    assert [ref.status for ref in created.get()] == [PushStatus.CREATED]
+    with pytest.raises(NotExecuted, match="hasn't run"):
+        dependent.get()
+    assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD~1")
+    assert remote_tip(remotes, "origin", "b") == remotes.run("rev-parse", "HEAD")
+
+
+def test_an_atomic_push_is_all_or_nothing(remotes: Git, git_calls: list[GitCall]) -> None:
+    remotes.run("branch", "-f", "a", "HEAD~1")
+    remotes.run("branch", "-f", "b", "HEAD~1")
+    git_calls.clear()
+    plan = Plan(remotes, atomic_pushes=True)
+    forced = plan.add(Push("origin", "a", force=True))
+    rejected = plan.add(Push("origin", "b"))
+    alone = plan.add(Push("origin", "main", atomic=False))
+
+    with pytest.raises(ExecutionException) as raised:
+        plan.execute()
+
+    atomic, alone_push = sorted(pushes(git_calls), key=lambda call: "--atomic" not in call)
+    assert atomic[:6] == [*PUSH, "--atomic", "origin"]
+    assert sorted(atomic[6:]) == ["+refs/heads/a:refs/heads/a", "refs/heads/b:refs/heads/b"]
+    assert alone_push == [*PUSH, "origin", "refs/heads/main:refs/heads/main"]
+    assert set(raised.value.failures) == {forced, rejected}
+    assert remote_tip(remotes, "origin", "a") == remotes.run("rev-parse", "HEAD")
+    assert [ref.status for ref in alone.get()] == [PushStatus.CREATED]
+
+
+def test_pushes_to_two_remotes_run_at_once(
+    remotes: Git, git_calls: list[GitCall], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    meeting = threading.Barrier(2, timeout=10)
+
+    def meeting_push(git: Git, *args: Arg) -> PushResult:
+        meeting.wait()  # till the other push starts too
+        return push(git, *args)
+
+    monkeypatch.setattr(git_client.plan, "push", meeting_push)
+    remotes.run("config", "example.remote", "mirror")
+    git_calls.clear()
+    plan = Plan(remotes)
+    to_origin = plan.add(Push("origin", "a"))
+    to_mirror = plan.add(Push(ConfigValue("example.remote").or_default("origin"), "a"))
+
+    plan.execute()
+
+    assert sorted(pushes(git_calls)) == [
+        [*PUSH, remote, "refs/heads/a:refs/heads/a"] for remote in ("mirror", "origin")
+    ]
+    assert [ref.status for ref in to_origin.get() + to_mirror.get()] == [PushStatus.UP_TO_DATE] * 2
+
+
+def test_sequence_pushes_one_after_another(remotes: Git, git_calls: list[GitCall]) -> None:
+    git_calls.clear()
+    plan = Plan(remotes)
+    first, second = plan.sequence(Push("origin", "a"), Push("origin", "b"))
+
+    plan.execute()
+
+    assert pushes(git_calls) == [
+        [*PUSH, "origin", f"refs/heads/{branch}:refs/heads/{branch}"] for branch in "ab"
+    ]
+    assert second.after == [first]
