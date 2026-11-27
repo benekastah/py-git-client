@@ -1,0 +1,126 @@
+"""Nodes that read git's config, many in one process."""
+
+# The plan and its nodes share their outcomes (_done, _error, _set...), private to the package.
+# pyright: reportPrivateUsage=false
+
+import re
+from collections.abc import Callable, Hashable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Self, cast, override
+
+from git_client.batch import config
+from git_client.client import decode, error_from
+from git_client.plan.nodes import CONFIG, Map, Node, lift
+
+if TYPE_CHECKING:
+    from git_client.plan.running import Plan
+
+
+@dataclass(frozen=True, init=False)
+class ConfigValue(Node[str | None]):
+    """A config key's value as git reads it (the last one, for a key with several), or None
+    if it's not set. `key` is in the form git prints (`config()`'s): section and name in
+    lower case. A key with no value (`[core] bare`) gives "". Every ConfigValue of a round
+    is read by one `git config --list -z`, however many keys."""
+
+    key: Node[str]
+
+    def __init__(self, key: str | Node[str]) -> None:
+        object.__setattr__(self, "key", lift(key))
+
+    @override
+    def inputs(self) -> Iterable[Node[object]]:
+        return (self.key,)
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        return None
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return (CONFIG,)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        entries = config(plan.git)
+        for node in nodes:
+            values = entries.get(node.key.get())
+            node._set((values[-1] or "") if values else None)
+
+    def as_bool(self, default: bool = False) -> TypedConfig[bool]:
+        """A node of the value as git reads a bool (`--type=bool`: "yes", "on", "1", no
+        value...), or `default` if it's not set. It reads nothing until the plan runs."""
+        return TypedConfig(self.key, "bool", default)
+
+    def as_int(self, default: int = 0) -> TypedConfig[int]:
+        """A node of the value as git reads an int (`--type=int`: "1k" is 1024), or
+        `default`. It reads nothing until the plan runs."""
+        return TypedConfig(self.key, "int", default)
+
+    def or_default(self, default: str) -> Node[str]:
+        """A node of the value, or `default` if it's not set."""
+
+        def value_or_default(value: str | None) -> str:
+            return default if value is None else value
+
+        return Map(value_or_default, self)
+
+
+# What git prints for each of TypedConfig's types, to the value.
+_PARSERS: dict[str, Callable[[str], object]] = {"bool": lambda text: text == "true", "int": int}
+
+# The characters special in a POSIX extended regular expression.
+_ERE_SPECIAL = re.compile(r"[.\[\\()*+?{|^$]")
+
+
+@dataclass(frozen=True)
+class TypedConfig[T](Node[T]):
+    """A config key's value as git reads a `git_type` ("bool" or "int": `git config --type`),
+    or `default` if it's not set: made by `ConfigValue.as_bool` and `as_int`. Each round's
+    TypedConfigs of one type are read by one `git config --type=<type> --get-regexp`, whose
+    pattern matches their keys alone (in the form git prints, as ConfigValue's): git, not
+    Python, reads the config syntax. A value of a key's that isn't one (a bool "maybe")
+    fails the whole group."""
+
+    key: Node[str]
+    git_type: str
+    default: T
+
+    @override
+    def inputs(self) -> Iterable[Node[object]]:
+        return (self.key,)
+
+    @override
+    def batch_key(self, plan: Plan) -> Hashable:
+        return self.git_type
+
+    @override
+    def reads(self, plan: Plan) -> Iterable[Hashable]:
+        return (CONFIG,)
+
+    @override
+    def writes(self, plan: Plan) -> Iterable[Hashable]:
+        return ()
+
+    @override
+    @classmethod
+    def execute_group(cls, nodes: Sequence[Self], plan: Plan) -> None:
+        keys = dict.fromkeys(node.key.get() for node in nodes)
+        pattern = "|".join(_ERE_SPECIAL.sub(r"\\\g<0>", key) for key in keys)
+        git_type = nodes[0].git_type
+        args = ["config", "-z", f"--type={git_type}", "--get-regexp", f"^({pattern})$"]
+        result = plan.git.process(*args, capture_output=True)
+        if result.returncode not in (0, 1):  # 1: none of them is set
+            raise error_from(args, result)
+        typed: dict[str, str] = {}
+        for entry in decode(result.stdout).split("\0"):
+            key, _, value = entry.partition("\n")
+            typed[key] = value  # the last one wins, as in `git config --get`
+        for node in nodes:
+            key = node.key.get()
+            node._set(cast(T, _PARSERS[git_type](typed[key])) if key in typed else node.default)

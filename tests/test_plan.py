@@ -8,7 +8,7 @@ from typing import Self, assert_type, override
 
 import pytest
 
-import git_client.plan
+import git_client.plan.pushing
 from git_client import Git, GitError, PushRejectedError, PushResult, PushStatus, PushUpdate, push
 from git_client.plan import (
     CONFIG,
@@ -410,7 +410,7 @@ def test_pushes_to_two_remotes_keep_their_order(
         events.append(f"end {remote}")
         return result
 
-    monkeypatch.setattr(git_client.plan, "push", recording_push)
+    monkeypatch.setattr(git_client.plan.pushing, "push", recording_push)
     remotes.run("config", "example.remote", "mirror")
     plan = Plan(remotes)
     # Their remote-tracking refs may be the same (git maps them by each remote's fetch
@@ -434,7 +434,7 @@ def test_pushes_to_two_remotes_run_at_once(
         meeting.wait()  # till the other push starts too
         return push(git, remote, updates, atomic=atomic)
 
-    monkeypatch.setattr(git_client.plan, "push", meeting_push)
+    monkeypatch.setattr(git_client.plan.pushing, "push", meeting_push)
     remotes.run("config", "example.remote", "mirror")
     git_calls.clear()
     plan = Plan(remotes)
