@@ -238,6 +238,7 @@ def test_refs_counts_ahead_behind_a_ref_at_a_time_as_git_before_2_41_must(
     counted = _ahead_behind_alone(tracking, "main", refs(tracking).values())
 
     assert counted["refs/heads/topic"] == (1, 1)
+    assert counted["refs/heads/behind"] == (0, 1)
     assert counted["refs/tags/v1"] == (0, 0)
     assert counted["refs/tags/tree"] is None
 
