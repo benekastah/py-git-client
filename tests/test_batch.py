@@ -16,6 +16,7 @@ from git_client import (
     Ref,
     RefUpdate,
     Track,
+    UnknownRevisionError,
     config,
     decode,
     git_common_dir,
@@ -241,6 +242,12 @@ def test_refs_counts_ahead_behind_a_ref_at_a_time_as_git_before_2_41_must(
     assert counted["refs/heads/behind"] == (0, 1)
     assert counted["refs/tags/v1"] == (0, 0)
     assert counted["refs/tags/tree"] is None
+
+
+def test_refs_says_an_ahead_behind_base_names_nothing_on_every_git(tracking: Git) -> None:
+    # git 2.41 says "failed to find 'nothing'"; before, the fallback's rev-parse says why.
+    with pytest.raises(UnknownRevisionError):
+        refs(tracking, ahead_behind="nothing")
 
 
 def test_refs_refuses_an_ahead_behind_base_a_format_cant_hold(repo: Git) -> None:

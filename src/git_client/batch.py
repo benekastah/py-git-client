@@ -33,7 +33,7 @@ from git_client.client import (
     where_command,
     where_questions,
 )
-from git_client.errors import GitError, WrongTypeError
+from git_client.errors import GitError, UnknownRevisionError, WrongTypeError
 from git_client.performance import record_read
 
 # What patch_ids gives every command, against the user's config, which would drop patches
@@ -149,6 +149,8 @@ class Ref:
 
 # What git before 2.41 says of %(ahead-behind:...), which it doesn't know.
 _NO_AHEAD_BEHIND = re.compile(r"^fatal: unknown field name: ahead-behind:", re.MULTILINE)
+# What git 2.41 and newer say of an %(ahead-behind:<base>) whose base names nothing.
+_NO_BASE = re.compile(r"^fatal: failed to find '.*'$", re.MULTILINE)
 
 
 @record_read("git")
@@ -180,8 +182,8 @@ def refs(
     name for one) fill in the `Ref` attributes they name (see Ref). With git before 2.41,
     which can't count against a base, `ahead_behind` runs one `git rev-list` per ref
     (and one `git rev-parse` for the base), so that every count is against the same commit.
-    Raises ValueError for a base with ")", which a format can't hold, and GitError if git
-    fails (e.g. the base names no commit).
+    Raises ValueError for a base with ")", which a format can't hold, UnknownRevisionError
+    for a base that names nothing, and GitError if git fails otherwise.
 
     Give git full ref names or object ids rather than short names, which can be ambiguous
     (e.g. a tag named like a branch)."""
@@ -225,6 +227,9 @@ def refs(
     try:
         listed, counted_alone = listing(typed), False
     except GitError as error:
+        if ahead_behind is not None and _NO_BASE.search(error.stderr):
+            # As the fallback's rev-parse says it, so both say it the same way.
+            raise UnknownRevisionError(error.command, error.returncode, error.stderr) from None
         if ahead_behind is None or not _NO_AHEAD_BEHIND.search(error.stderr):
             raise
         typed.pop()  # ahead_behind, counted below
