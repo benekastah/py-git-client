@@ -167,10 +167,16 @@ def test_many_revisions_take_one_process(history: Git, git_calls: list[GitCall])
     assert [call[0] for call in git_calls] == ["rev-list"]
 
 
-@pytest.mark.parametrize("name", ["--not", "-x", "main\n--all"])
-def test_a_revision_is_never_read_as_an_option(name: str) -> None:
+# On git's stdin, an empty line ends the revisions, a NUL ends the line, a "\r" ending it is
+# dropped, and a line starting with "-" is an option ("--not" flips the rest).
+@pytest.mark.parametrize("name", ["", "--not", "-x", "main\n--all", "main\0x", "main\r"])
+def test_a_revision_is_never_read_as_something_else(name: str) -> None:
     with pytest.raises(ValueError, match="not a revision"):
         Revisions("main", exclude=name)
+    with pytest.raises(ValueError, match="not a revision"):
+        Revisions(["main", name], exclude="other")
+    with pytest.raises(ValueError, match="not a revision"):
+        Revisions([name, "main"])
 
 
 def test_an_unknown_revision_raises(history: Git) -> None:

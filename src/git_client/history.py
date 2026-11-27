@@ -60,8 +60,8 @@ class Revisions:
       pathspec limiting does), each a path from the top of the worktree, as git reports one,
       taken as it is, even if it holds `*` or `:`.
 
-    Raises ValueError for a revision that starts with "-" or holds a newline, which git
-    would read as something else.
+    Raises ValueError for a revision that is empty, starts with "-", or holds a newline, a
+    carriage return or a NUL, which git would read as something else.
     """
 
     include: tuple[str, ...]
@@ -89,10 +89,11 @@ class Revisions:
         exclude = (exclude,) if isinstance(exclude, str) else tuple(exclude)
         if cherry_pick and (len(include), len(exclude)) != (1, 1):
             raise ValueError("cherry_pick takes one include and one exclude")
-        # Given to git a line each, where one starting with "-" is an option ("--not" would
-        # flip the rest), which no revision is.
+        # Given to git a line each, where an empty one ends the revisions (dropping the rest),
+        # a NUL ends the line, a "\r" ending it is dropped, and one starting with "-" is an
+        # option ("--not" would flip the rest): none of which is a revision.
         for name in (*include, *exclude):
-            if name.startswith("-") or "\n" in name:
+            if not name or name.startswith("-") or any(c in name for c in "\n\r\0"):
                 raise ValueError(f"not a revision: {name!r}")
         values = {
             "include": include,
