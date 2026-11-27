@@ -44,17 +44,24 @@ class PushRef:
 
 @dataclass(frozen=True)
 class PushDestination:
-    """A destination Git reported, with the URL as displayed by Git."""
+    """A destination Git reported, with the URL as displayed by Git.
+
+    `done` is whether Git ended its report with `Done`, which it leaves out when the push to
+    that destination failed outright (e.g. an unpacker error): its refs are then the rows Git
+    printed before it went on, which may not be all of them.
+    """
 
     url: str
     refs: tuple[PushRef, ...]
+    done: bool
 
 
 @dataclass(frozen=True)
 class PushResult:
-    """What one push did: its exit status, captured output and completed reports.
+    """What one push did: its exit status, captured output and each destination's report.
 
-    `destinations` holds only the destinations whose report Git finished (with `Done`).
+    `destinations` holds each destination Git began a report for, in order, finished or not
+    (see `PushDestination.done`).
     """
 
     returncode: int
@@ -99,16 +106,21 @@ def _parse_ref(line: str) -> PushRef | None:
 
 
 def _destinations(stdout: str) -> tuple[PushDestination, ...]:
-    done: list[PushDestination] = []
+    reported: list[PushDestination] = []
     url: str | None = None
     refs: list[PushRef] = []
-    for line in stdout.split("\n"):
+
+    def end_report(done: bool) -> None:
+        if url and refs:
+            reported.append(PushDestination(url, tuple(refs), done))
+
+    for line in stdout.removesuffix("\n").split("\n"):
         if line.startswith("To "):
+            end_report(done=False)  # Git began the next report without finishing this one.
             url = line.removeprefix("To ")
             refs = []
         elif line == "Done":
-            if url and refs:
-                done.append(PushDestination(url, tuple(refs)))
+            end_report(done=True)
             url = None
         elif url is not None and not line.startswith(("branch ", "Would set upstream ")):
             ref = _parse_ref(line)
@@ -116,7 +128,8 @@ def _destinations(stdout: str) -> tuple[PushDestination, ...]:
                 url = None
             else:
                 refs.append(ref)
-    return tuple(done)
+    end_report(done=False)
+    return tuple(reported)
 
 
 def push(
@@ -125,21 +138,21 @@ def push(
     env: Mapping[str, EnvValue] | None = None,
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> PushResult:
-    """Run one git push and return the completed destination reports even on failure.
+    """Run one git push and return each destination's report even on failure.
 
     It runs `git -c core.abbrev=no push --porcelain *args`, so a `FakeGit` test
     responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
 
-    A missing report leaves that destination's outcome unknown. A reported ref
-    update or rejection is from Git's machine-readable output. Fast-forwards and
-    forced updates report the full old and new OIDs when Git supplies them.
-    Other statuses may omit one or both OIDs. An unacknowledged update has
-    UNKNOWN status. Dry-run statuses describe projected changes. Don't pass
-    `--quiet`: Git then reports a destination only when a ref fails, so the
-    ones that succeed are left out, even with one push URL. With several push
-    URLs, a successful destination's bare `Done` can also complete the report
-    of an earlier destination whose push failed outright (e.g. an unpacker
-    error), which then looks finished.
+    A reported ref update or rejection is from Git's machine-readable output.
+    Fast-forwards and forced updates report the full old and new OIDs when Git
+    supplies them. Other statuses may omit one or both OIDs. An unacknowledged
+    update has UNKNOWN status. Dry-run statuses describe projected changes. A
+    destination whose push failed outright (e.g. an unpacker error) has `done`
+    False, and Git goes on to the next push URL. One Git can't reach (e.g. not a
+    repository) stops the push: it and the push URLs after it have no report.
+    Don't pass `--quiet`: Git then reports a destination only when a ref fails,
+    so the ones that succeed are left out, and the `Done` of one that succeeds
+    can finish the report of an earlier one that failed outright.
     Git's output is captured and launch errors and timeouts are raised as usual.
     """
     result = git.process(

@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 
@@ -70,6 +71,49 @@ def test_push_reports_noop_and_deletion(repo: Git, tmp_path: Path) -> None:
         "refs/heads/main": PushStatus.UP_TO_DATE,
         "refs/heads/obsolete": PushStatus.DELETED,
     }
+
+
+def test_push_reports_a_destination_that_failed_outright(repo: Git, tmp_path: Path) -> None:
+    # Git ends the report of a destination whose push failed (here its unpacker refused the
+    # pack) without "Done", and goes on to the next push URL.
+    first, small, last = (tmp_path / name for name in ("first", "small", "last"))
+    repo.run("remote", "add", "mirrors", str(first))
+    for destination in (first, small, last):
+        repo.run("clone", "--quiet", "--bare", ".", str(destination))
+        repo.run("config", "--add", "remote.mirrors.pushurl", str(destination))
+    Git(small).run("config", "receive.maxInputSize", "1")
+    repo.run("commit", "--allow-empty", "-qm", "publish")
+
+    result = push(repo, "mirrors", "refs/heads/main")
+
+    assert result.returncode == 1
+    assert [
+        (destination.url, destination.done, [(r.status, r.summary) for r in destination.refs])
+        for destination in result.destinations
+    ] == [
+        (str(first), True, [(PushStatus.FAST_FORWARD, ANY)]),
+        (str(small), False, [(PushStatus.REJECTED, "[remote rejected] (unpacker error)")]),
+        (str(last), True, [(PushStatus.FAST_FORWARD, ANY)]),
+    ]
+    assert "remote unpack failed" in result.stderr
+
+
+def test_push_stops_at_a_destination_it_cannot_reach(repo: Git, tmp_path: Path) -> None:
+    # Git stops the whole push there: that destination and the ones after it aren't tried.
+    first, last = tmp_path / "first", tmp_path / "last"
+    repo.run("remote", "add", "mirrors", str(first))
+    for destination in (first, tmp_path / "missing", last):
+        repo.run("config", "--add", "remote.mirrors.pushurl", str(destination))
+    for destination in (first, last):
+        repo.run("clone", "--quiet", "--bare", ".", str(destination))
+    repo.run("commit", "--allow-empty", "-qm", "publish")
+
+    result = push(repo, "mirrors", "refs/heads/main")
+
+    assert result.returncode == 128
+    assert [(d.url, d.done) for d in result.destinations] == [(str(first), True)]
+    assert "does not appear to be a git repository" in result.stderr
+    assert Git(last).run("rev-parse", "main") != repo.run("rev-parse", "main")
 
 
 def test_push_reports_unreachable_destination(repo: Git, tmp_path: Path) -> None:
@@ -146,15 +190,13 @@ def test_missing_remote_acknowledgement_is_not_a_rejection() -> None:
 OK_ROW = "=\trefs/heads/main:refs/heads/main\t[up to date]"
 
 
-def test_destination_without_done_is_left_out() -> None:
-    # Git ends a destination's report with "Done" unless its push failed outright;
-    # without it, the report may be incomplete.
-    assert _destinations(f"To A\n{OK_ROW}\n") == ()
-
-
-def test_unfinished_destination_is_left_out_before_a_finished_one() -> None:
-    (reported,) = _destinations(f"To A\n{OK_ROW}\nTo B\n{OK_ROW}\nDone\n")
-    assert reported.url == "B"
+def test_destination_without_done_is_reported_unfinished() -> None:
+    # Git ends a destination's report with "Done" unless its push failed outright.
+    assert [(d.url, d.done) for d in _destinations(f"To A\n{OK_ROW}\nTo B\n{OK_ROW}\nDone\n")] == [
+        ("A", False),
+        ("B", True),
+    ]
+    assert [(d.url, d.done) for d in _destinations(f"To A\n{OK_ROW}\n")] == [("A", False)]
 
 
 @pytest.mark.parametrize(

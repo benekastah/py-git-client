@@ -229,15 +229,16 @@ it's closed, though one that has to start (again) raises. `FakeGit` takes it too
 
 Use `push(git, *args)` to run one push and get a `PushResult` even if Git exits
 with a nonzero status. The result has the exit status and captured output,
-plus the completed destination reports. Each report contains the destination
+plus each destination's report. Each report contains the destination
 as Git displayed it and the source, target and status for each reported ref.
 Fast-forward and forced updates include full old and new object IDs when Git
 reports them. An unacknowledged ref has unknown status. Dry-run reports
-describe projected changes. Don't pass `--quiet`: Git then reports a destination
-only when a ref fails, so the ones that succeed are left out, even with one push URL.
-With several push URLs, a successful destination's bare `Done` can also complete the
-report of an earlier destination whose push failed outright (e.g. an unpacker error),
-which then looks finished.
+describe projected changes. A destination whose push failed outright (e.g. an
+unpacker error) has `done` False, and Git goes on to the next push URL; one Git
+can't reach (e.g. not a repository) stops the push, so it and the push URLs after
+it have no report. Don't pass `--quiet`: Git then reports a destination only when a
+ref fails, so the ones that succeed are left out, and the `Done` of one that succeeds
+can finish the report of an earlier one that failed outright.
 `push` runs `git -c core.abbrev=no push --porcelain` with your arguments, so a `FakeGit`
 test responds to `["-c", "core.abbrev=no", "push", "--porcelain"]` with porcelain output.
 
