@@ -2,9 +2,10 @@
 
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, overload
 
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -28,6 +29,7 @@ from git_client.client import (
     recall_where,
     remember_where,
     rev_parse_lines,
+    stdout_of,
     where_command,
     where_questions,
 )
@@ -88,6 +90,113 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
             key, newline, value = entry.partition("\n")
             entries.setdefault(key, []).append(value if newline else None)
     return entries
+
+
+type ConfigType = Literal[
+    "bool", "int", "bool-or-int", "bool-or-str", "path", "expiry-date", "color"
+]
+"""How `config_values` has git read values: as `git config --type` names its types."""
+
+type ConfigValue = str | bool | int | Path
+
+# What a POSIX extended regular expression, as git reads `--get-regexp`'s, takes as special.
+_ERE_SPECIAL = re.compile(r"[.\[\\()*+?{|^$]")
+
+
+@overload
+def config_values(git: ReadOnlyGit, *keys: str, type: None = None) -> dict[str, str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool"]
+) -> dict[str, bool | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["int", "expiry-date"]
+) -> dict[str, int | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool-or-int"]
+) -> dict[str, bool | int | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["bool-or-str"]
+) -> dict[str, bool | str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["color"]
+) -> dict[str, str | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: Literal["path"]
+) -> dict[str, Path | None]: ...
+@overload
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: ConfigType | None
+) -> Mapping[str, ConfigValue | None]: ...
+@record_read("git")
+def config_values(
+    git: ReadOnlyGit, *keys: str, type: ConfigType | None = None
+) -> dict[str, ConfigValue | None]:
+    """Each key's value, as `git config --get` gives it (the last one, from every config file
+    git reads), read by git as `type`, or None for a key that isn't set; from one `git config
+    --get-regexp`. As git reads them: "bool" a bool (a key with no value is True); "int" an int
+    ("1k" is 1024); "bool-or-int" and "bool-or-str" a bool where git reads one, else an int or
+    the value; "path" a Path with `~` expanded; "expiry-date" seconds since the epoch ("never"
+    is 0); "color" the terminal's escape sequence. With no type, the value as it is ("" for a
+    key with no value).
+
+    git reads one type per process, so values of several types take a call (a process) each.
+    A value git can't read as `type` raises GitError, for every key of the call.
+
+    The keys are as `config` gives them: section and name in lower case, the subsection as
+    written. "commit.gpgSign" finds nothing, with no error, and neither does a key that isn't
+    one (e.g. "nosection")."""
+    if not keys:
+        return {}
+    # git lowercases the pattern up to its first "." and after its last, to find a key given
+    # in any case: `.{0}`, matching nothing, takes those, so every key is matched as it is.
+    escaped = (_ERE_SPECIAL.sub(r"\\\g<0>", key) for key in keys)
+    pattern = "^.{0}(" + "|".join(escaped) + ").{0}$"
+    args = ("config", "-z", *([f"--type={type}"] if type else []), "--get-regexp", pattern)
+    result = read_process(git, *args, capture_output=True)
+    found: dict[str, ConfigValue | None] = dict.fromkeys(keys)
+    if result.returncode == 1 and not result.stdout and not result.stderr:
+        return found  # git found none of them
+    for entry in decode(stdout_of(args, result)).split("\0"):
+        if entry:
+            # A key, then its value after a newline; a key with no value has no newline.
+            key, _, value = entry.partition("\n")
+            found[key] = _typed(value, type)
+    return found
+
+
+def _typed(value: str, type: ConfigType | None) -> ConfigValue:
+    """A value as `git config --type=<type>` printed it."""
+    match type:
+        case "bool":
+            return value == "true"
+        case "int" | "expiry-date":
+            return int(value)
+        case "bool-or-int" | "bool-or-str" if value in ("true", "false"):
+            return value == "true"
+        case "bool-or-int":
+            return int(value)
+        case "path":
+            return Path(value)
+        case _:
+            return value
+
+
+@record_read("git")
+def color_enabled(git: ReadOnlyGit, key: str, *, stdout_is_tty: bool) -> bool:
+    """Whether to color output as git decides for a color setting (e.g. "color.stack", as
+    `config` gives keys), from `git config --get-colorbool`: by its value, or color.ui's
+    where it isn't set; for "auto" (the default), only
+    where `stdout_is_tty` and the environment's TERM is set and isn't "dumb". Raises GitError
+    for a value git can't read."""
+    tty = "true" if stdout_is_tty else "false"
+    output = read_output(git, "config", "--get-colorbool", "--end-of-options", key, tty)
+    return decode(output).strip() == "true"
 
 
 @dataclass(frozen=True)

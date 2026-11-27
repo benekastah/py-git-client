@@ -117,6 +117,20 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `config_values(git, *keys, type=None)` reads keys' values as git reads them as a type
+  (`ConfigType`: `git config --type`'s), the last of each, or None where a key isn't set,
+  with one `git config --get-regexp` per call, so one per type. It replaces a tool's
+  `git.run("config", "--type=bool", "--get", key, check=False)` and the like, which took a
+  process per key, in git-recommit (`diff.renames`, `commit.gpgSign`, `commit.cleanup`,
+  `core.commentChar`), git-stack (`merge.verifySignatures`, `stack.perfLog`,
+  `stack.perfLogMaxBytes`, its GitHub stacks setting) and move-forward
+  (`branch.<name>.remote`, `user.email`). Keys are as `config()` gives them: a tool writes
+  `"commit.gpgsign"`, not `"commit.gpgSign"`, which finds nothing. A value git can't read as
+  the type raises `GitError`, where `check=False` gave "".
+- `color_enabled(git, key, *, stdout_is_tty)`: whether to color output, as `git config
+  --get-colorbool` decides, replacing git-stack's `git.run("config", "--get-colorbool",
+  "color.stack", tty, check=False)`.
+
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial
