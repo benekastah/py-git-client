@@ -73,10 +73,14 @@ def test_config_values_finds_keys_only_as_git_prints_them(repo: Git) -> None:
 
 
 def test_config_values_takes_a_key_as_it_is_not_as_a_pattern(repo: Git) -> None:
+    # Every character a pattern takes as special, and "]" and "}", which it doesn't.
+    special = "branch.a b.c(d)[e]{f}|g^$*?+\\é.remote"
+    repo.run("config", special, "special")
     repo.run("config", "branch.x+y.remote", "plus")
     repo.run("config", "branch.xxy.remote", "letters")
 
-    assert config_values(repo, "branch.x+y.remote", "branch.x.y.remote") == {
+    assert config_values(repo, special, "branch.x+y.remote", "branch.x.y.remote") == {
+        special: "special",
         "branch.x+y.remote": "plus",
         "branch.x.y.remote": None,
     }

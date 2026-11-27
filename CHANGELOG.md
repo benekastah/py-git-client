@@ -130,7 +130,6 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `color_enabled(git, key, *, stdout_is_tty)`: whether to color output, as `git config
   --get-colorbool` decides, replacing git-stack's `git.run("config", "--get-colorbool",
   "color.stack", tty, check=False)`.
-
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)
   with one `git push`, and reports each destination and ref's status, including partial

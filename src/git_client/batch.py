@@ -191,9 +191,9 @@ def _typed(value: str, type: ConfigType | None) -> ConfigValue:
 def color_enabled(git: ReadOnlyGit, key: str, *, stdout_is_tty: bool) -> bool:
     """Whether to color output as git decides for a color setting (e.g. "color.stack", as
     `config` gives keys), from `git config --get-colorbool`: by its value, or color.ui's
-    where it isn't set; for "auto" (the default), only
-    where `stdout_is_tty` and the environment's TERM is set and isn't "dumb". Raises GitError
-    for a value git can't read."""
+    where it isn't set; for "auto" (the default), only where `stdout_is_tty` (or the
+    environment's GIT_PAGER_IN_USE says git's pager is running) and its TERM is set and isn't
+    "dumb". Raises GitError for a value git can't read."""
     tty = "true" if stdout_is_tty else "false"
     output = read_output(git, "config", "--get-colorbool", "--end-of-options", key, tty)
     return decode(output).strip() == "true"
