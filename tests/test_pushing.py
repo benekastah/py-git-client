@@ -393,3 +393,17 @@ def test_push_needs_an_update(repo: Git) -> None:
     # Without a refspec, git would push what its config says to.
     with pytest.raises(ValueError, match="no updates"):
         push(repo, "origin", [])
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [("+main", "would force"), ("", "would delete")],
+    ids=["plus", "empty"],
+)
+def test_push_refuses_a_source_its_refspec_would_misread(
+    repo: Git, git_calls: list[GitCall], source: str, reason: str
+) -> None:
+    # Only `force` forces and only None deletes; git reads "+main:..." and ":..." so.
+    with pytest.raises(ValueError, match=reason):
+        push(repo, "origin", [PushUpdate("refs/heads/main", source)])
+    assert git_calls == []

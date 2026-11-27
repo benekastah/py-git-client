@@ -16,6 +16,10 @@ class PushUpdate:
     `force` lets git make a change that isn't a fast-forward. `lease`, if given, has git make
     it only if the remote's `target` is at that object now (`""`: only if it doesn't exist),
     and then even if it isn't a fast-forward: git's `--force-with-lease=<target>:<lease>`.
+
+    Raises ValueError for a `source` that git would read otherwise in the refspec `push`
+    builds: one starting with `+` (it would force; `refs/heads/+x` names such a branch) or
+    `""` (it would delete).
     """
 
     target: str
@@ -23,6 +27,12 @@ class PushUpdate:
     _: KW_ONLY
     force: bool = False
     lease: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.source == "":
+            raise ValueError("an empty source would delete the target: give None to delete")
+        if self.source is not None and self.source.startswith("+"):
+            raise ValueError(f"source {self.source!r} would force: give force=True to force")
 
 
 class PushStatus(enum.StrEnum):
@@ -197,7 +207,10 @@ def push(
         *(f"--force-with-lease={u.target}:{u.lease}" for u in updates if u.lease is not None),
         "--",
         remote,
-        *(f"{'+' if u.force else ''}{u.source or ''}:{u.target}" for u in updates),
+        *(
+            f"{'+' if u.force else ''}{'' if u.source is None else u.source}:{u.target}"
+            for u in updates
+        ),
         capture_output=True,
         env=env,
         timeout=timeout,

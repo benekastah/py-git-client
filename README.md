@@ -253,7 +253,9 @@ for destination in result.destinations:  # in order, as git printed them
         ref.old_oid, ref.new_oid  # full object ids, for a fast-forward or forced update
 ```
 
-Without `atomic`, git makes the changes it can and rejects the others. A ref git didn't hear
+Without `atomic`, git makes the changes it can and rejects the others. A `PushUpdate` whose
+source starts with `+` or is `""` raises ValueError: only `force` forces, and only None
+deletes. A ref git didn't hear
 back about has status UNKNOWN. A destination whose push failed outright has `done` False,
 and git goes on to the next push URL. One whose push failed before git reported any ref
 (e.g. the pre-push hook refused it) has no report, and git goes on too: a nonzero
