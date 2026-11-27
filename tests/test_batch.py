@@ -128,9 +128,10 @@ def test_refs_names_a_branch_fully_even_when_a_tag_has_its_name(repo: Git) -> No
 
 def test_refs_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) -> None:
     # In an upstream's name in the config rather than a branch's name, which macOS and Windows
-    # can't store: Latin-1's é, which isn't UTF-8.
-    repo.run("config", "branch.main.remote", ".")
-    repo.run("config", "branch.main.merge", "refs/heads/caf\udce9")
+    # can't store: Latin-1's é, which isn't UTF-8. Written to the file, as Windows can't pass
+    # the byte in an argument.
+    with (Path(repo.directory) / ".git" / "config").open("ab") as config_file:
+        config_file.write(b'[branch "main"]\n\tremote = .\n\tmerge = refs/heads/caf\xe9\n')
 
     upstream = refs(repo, "refs/heads/main")["refs/heads/main"].upstream
 
