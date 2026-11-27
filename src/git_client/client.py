@@ -807,14 +807,14 @@ class ReadOnlyGit:
     """Reads a repository with git in `directory`, as `git -C <directory>` does, offering the
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
     `cdup` and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`,
-    `config`, `git_paths`, `git_paths_and_head`, `git_dir`, `git_common_dir`, `commits`,
-    `count`, `any_commit` and `CatFile`).
-    It has no public way to run a command of the caller's (no `run`, `process` and the like),
-    so a tool that only reads can show that it does by making one: what it doesn't offer, it
-    can't be asked to run (the library's private helpers can, as anything private can be
-    misused). Git extends it with those, so a function that only reads takes a
-    ReadOnlyGit, and is given either; a Git's `read_only()` gives a ReadOnlyGit of its own. A
-    tool that reads with other commands (`log`, `status`, ...) runs them through a Git.
+    `config`, `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+    `git_common_dir`, `commits`, `count`, `any_commit` and `CatFile`). It has no public way to
+    run a command of the caller's (no `run`, `process` and the like), so a tool that only reads
+    can show that it does by making one: what it doesn't offer, it can't be asked to run (the
+    library's private helpers can, as anything private can be misused). Git extends it with
+    those, so a function that only reads takes a ReadOnlyGit, and is given either; a Git's
+    `read_only()` gives a ReadOnlyGit of its own. A tool that reads with other commands (`log`,
+    `status`, ...) runs them through a Git.
 
     Its git gets GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
     2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it): `resolve` and CatFile take it
