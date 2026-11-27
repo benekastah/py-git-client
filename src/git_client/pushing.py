@@ -178,9 +178,11 @@ def push(
     Fast-forwards and forced updates report the full old and new OIDs when Git
     supplies them. Other statuses may omit one or both OIDs. An unacknowledged
     update has UNKNOWN status. A destination whose push failed outright (e.g. an
-    unpacker error) has `done` False, and Git goes on to the next push URL. One Git
-    can't reach (e.g. not a repository) stops the push: it and the push URLs after it
-    have no report.
+    unpacker error) has `done` False, and Git goes on to the next push URL. One whose
+    push failed before Git reported any ref (e.g. the pre-push hook refused it) has no
+    report, and Git goes on too: a nonzero `returncode` while every destination listed is
+    done and accepted means an unlisted one failed, as `stderr` says. One Git can't reach
+    (e.g. not a repository) stops the push: it and the push URLs after it have no report.
     """
     updates = list(updates)
     if not updates:

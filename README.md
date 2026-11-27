@@ -255,8 +255,11 @@ for destination in result.destinations:  # in order, as git printed them
 
 Without `atomic`, git makes the changes it can and rejects the others. A ref git didn't hear
 back about has status UNKNOWN. A destination whose push failed outright has `done` False,
-and git goes on to the next push URL; one git can't reach (e.g. not a repository) stops the
-push, so it and the push URLs after it have no report. Git's push config still applies
+and git goes on to the next push URL. One whose push failed before git reported any ref
+(e.g. the pre-push hook refused it) has no report, and git goes on too: a nonzero
+`returncode` while every destination listed is done and accepted means an unlisted one
+failed, as `stderr` says. One git can't reach (e.g. not a repository) stops the push, so it
+and the push URLs after it have no report. Git's push config still applies
 (e.g. `push.followTags`, whose tags it reports too). Other switches (`--dry-run`, push
 options, ...) aren't supported. `push` runs `git -c
 core.abbrev=no push --porcelain [options] -- <remote> <refspecs>`, so a `FakeGit` test

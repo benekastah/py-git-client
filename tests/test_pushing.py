@@ -103,6 +103,29 @@ def test_push_reports_a_destination_that_failed_outright(repo: Git, tmp_path: Pa
     assert "remote unpack failed" in result.stderr
 
 
+def test_push_leaves_out_a_destination_refused_before_any_ref(repo: Git, tmp_path: Path) -> None:
+    # The pre-push hook refuses the middle push URL: git prints nothing for it on stdout, says
+    # so on stderr, and goes on to the next. Hooks run in git's sh on every system.
+    first, middle, last = (tmp_path / name for name in ("first", "middle", "last"))
+    repo.run("remote", "add", "mirrors", str(first))
+    for destination in (first, middle, last):
+        repo.run("clone", "--quiet", "--bare", ".", str(destination))
+        repo.run("config", "--add", "remote.mirrors.pushurl", str(destination))
+    hook = Path(repo.directory) / ".git" / "hooks" / "pre-push"
+    hook.write_text('#!/bin/sh\ncase "$2" in *middle) exit 1;; esac\n', encoding="utf-8")
+    hook.chmod(0o755)
+    repo.run("commit", "--allow-empty", "-qm", "publish")
+
+    result = push(repo, "mirrors", [PushUpdate("refs/heads/main", "refs/heads/main")])
+
+    assert result.returncode == 1
+    assert [(d.url, d.done, [r.status for r in d.refs]) for d in result.destinations] == [
+        (str(first), True, [PushStatus.FAST_FORWARD]),
+        (str(last), True, [PushStatus.FAST_FORWARD]),
+    ]
+    assert f"error: failed to push some refs to '{middle}'" in result.stderr
+
+
 def test_push_stops_at_a_destination_it_cannot_reach(repo: Git, tmp_path: Path) -> None:
     # Git stops the whole push there: that destination and the ones after it aren't tried.
     first, last = tmp_path / "first", tmp_path / "last"
