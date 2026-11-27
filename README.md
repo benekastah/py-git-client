@@ -16,7 +16,8 @@ what git-stack, git-recommit and move-forward share for that:
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
   (`hash_blobs`), and ref updates in one transaction (`update_refs`).
-- **Remotes**: a fetch, and what it did to each ref (`fetch`).
+- **Remotes**: a fetch, and what it did to each ref (`fetch`), and the refs a remote has
+  (`remote_refs`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
@@ -357,6 +358,21 @@ remote-tracking refs its config maps what's fetched to. `fetch` runs `git fetch 
 [options] -- <remote> <refspecs>`, so a `FakeGit` test responds to `["fetch", "--porcelain"]`
 with porcelain output. Git before 2.41 has no `--porcelain`: fetch runs again without it, and
 `refs` is None.
+
+`remote_refs` asks a remote what refs it has, with one `git ls-remote` (a remote each), and
+raises GitError if git can't (e.g. it can't reach the remote):
+
+```python
+git = Git("path/to/repo")  # or a ReadOnlyGit
+found = remote_refs(git, "origin", symrefs=True)  # every ref, and where HEAD points
+found.refs  # {"HEAD": "<id>", "refs/heads/main": "<id>", ...}
+found.symrefs  # {"HEAD": "refs/heads/main"}
+# Branches that end with one of the patterns, at a "/" ("main" matches refs/heads/main).
+remote_refs(git, "origin", ["refs/heads/main", "refs/heads/gone"], heads=True).refs
+```
+
+`env` (e.g. a `GIT_CONFIG_COUNT` config change) is added to git's environment. A `FakeGit`
+test responds to `["ls-remote"]`.
 
 ### Status and worktrees
 

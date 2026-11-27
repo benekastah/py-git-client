@@ -10,8 +10,10 @@ from git_client import (
     FetchStatus,
     Git,
     GitError,
+    RemoteRefs,
     fetch,
     refs,
+    remote_refs,
 )
 from git_client.testing import FakeGit, GitCall
 
@@ -209,3 +211,70 @@ def test_output_git_never_gives_raises(stdout: str) -> None:
         fetch(git, "origin")
 
     assert raised.value.stderr == "what git said\n"
+
+
+def origin(git: Git) -> Git:
+    """A client for make_remote's origin."""
+    return Git(Path(git.directory).parent / "origin.git")
+
+
+def test_remote_refs_lists_every_ref_and_symref(
+    remote: tuple[Git, dict[str, str]], git_calls: list[GitCall]
+) -> None:
+    git, ids = remote
+    origin(git).run("symbolic-ref", "HEAD", "refs/heads/kept")
+    git_calls.clear()
+
+    found = remote_refs(git, "origin", symrefs=True)
+
+    assert len(git_calls) == 1
+    assert found == RemoteRefs(
+        {
+            "HEAD": ids["first"],
+            "refs/heads/forced": ids["loose"],
+            "refs/heads/kept": ids["first"],
+            "refs/heads/moved": ids["next"],
+            "refs/heads/new": ids["next"],
+            **{f"refs/ids/{name}": object_id for name, object_id in ids.items()},
+            "refs/tags/late": ids["other"],
+        },
+        {"HEAD": "refs/heads/kept"},
+    )
+
+
+def test_remote_refs_takes_patterns_and_heads_only(remote: tuple[Git, dict[str, str]]) -> None:
+    git, ids = remote
+    patterns = ["refs/heads/moved", "refs/heads/gone", "late", "new"]
+
+    found = remote_refs(git.read_only(), "origin", patterns, heads=True)
+
+    assert found == RemoteRefs({"refs/heads/moved": ids["next"], "refs/heads/new": ids["next"]})
+
+
+def test_remote_refs_runs_with_the_env_given(remote: tuple[Git, dict[str, str]]) -> None:
+    git, ids = remote
+    # A URL rewritten from a name only this env gives.
+    url = Path(origin(git).directory).as_posix()
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.{url}.insteadOf",
+           "GIT_CONFIG_VALUE_0": "probe"}  # fmt: skip
+
+    found = remote_refs(git, "probe", ["refs/heads/kept"], env=env)
+
+    assert found == RemoteRefs({"refs/heads/kept": ids["first"]})
+
+
+def test_remote_refs_raises_what_git_says(repo: Git) -> None:
+    with pytest.raises(GitError, match="'no-such-remote' does not appear to be a git repository"):
+        remote_refs(repo, "no-such-remote")
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [f"{OID[1:]}\trefs/heads/a\n", f"{OID} refs/heads/a\n", "ref: refs/heads/a HEAD\n"],
+)
+def test_remote_refs_raises_for_output_git_never_gives(stdout: str) -> None:
+    git = FakeGit()
+    git.respond(["ls-remote"], stdout=stdout)
+
+    with pytest.raises(GitError, match="ls-remote printed what it can't read"):
+        remote_refs(git, "origin")

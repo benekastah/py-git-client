@@ -3,7 +3,7 @@
 import enum
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, field
 
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -11,8 +11,10 @@ from git_client.client import (
     Arg,
     EnvValue,
     Git,
+    ReadOnlyGit,
     Timeout,
     decode,
+    read_output,
 )
 from git_client.errors import GitError
 
@@ -167,3 +169,50 @@ def _fetched(
 def _object(object_id: str) -> str | None:
     """An object id fetch printed, or None for its zeros, which mean none."""
     return None if object_id.strip("0") == "" else object_id
+
+
+@dataclass(frozen=True)
+class RemoteRefs:
+    """What `remote_refs` found, as `git ls-remote` lists it: `refs`, each ref's object id, by
+    its full name (`HEAD` too, and an annotated tag's object as `refs/tags/<tag>^{}` beside
+    the tag's own); `symrefs`, each symbolic ref's target, by name (asked for only)."""
+
+    refs: dict[str, str]
+    symrefs: dict[str, str] = field(default_factory=dict[str, str])
+
+
+def remote_refs(
+    git: ReadOnlyGit,
+    remote: str,
+    patterns: Iterable[str] = (),
+    *,
+    heads: bool = False,
+    symrefs: bool = False,
+    env: Mapping[str, EnvValue] | None = None,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> RemoteRefs:
+    """The refs `remote` (a remote's name, a URL or a path) has, from one `git ls-remote`, which
+    asks the remote, not the remote-tracking refs: each one, or those that match one of
+    `patterns` (as ls-remote matches them: a pattern matches a ref whose name ends with it, at
+    a `/`, so `main` matches refs/heads/main and refs/remotes/origin/main), only branches
+    with `heads`, and each symbolic ref's target with `symrefs` (e.g. what HEAD points at).
+    `env` is added to the environment git runs with (e.g. a config change by
+    `GIT_CONFIG_COUNT`). A remote each: git asks one per process.
+
+    Raises GitError if git fails (e.g. no such remote, or one it can't reach), or for output
+    git doesn't document. A `FakeGit` test responds to `["ls-remote"]`."""
+    switches = {"--heads": heads, "--symref": symrefs}
+    args = ("ls-remote", *(switch for switch, on in switches.items() if on), "--", remote)
+    args += tuple(patterns)
+    output = decode(read_output(git, *args, env=env, timeout=timeout))
+    found = RemoteRefs({})
+    for line in output.splitlines():
+        value, tab, name = line.partition("\t")
+        symref = value.startswith("ref: ")
+        target = value.removeprefix("ref: ")
+        if not tab or not name or not (target if symref else OBJECT_ID.fullmatch(value)):
+            error = GitError(args, 0, "", output)
+            error.add_note("ls-remote printed what it can't read")
+            raise error
+        (found.symrefs if symref else found.refs)[name] = target
+    return found

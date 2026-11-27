@@ -64,7 +64,15 @@ from git_client.pushing import (
     PushUpdate,
     push,
 )
-from git_client.remotes import FetchRef, FetchRefspec, FetchResult, FetchStatus, fetch
+from git_client.remotes import (
+    FetchRef,
+    FetchRefspec,
+    FetchResult,
+    FetchStatus,
+    RemoteRefs,
+    fetch,
+    remote_refs,
+)
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -125,6 +133,7 @@ __all__ = [
     "Ref",
     "RefUpdate",
     "RemoteError",
+    "RemoteRefs",
     "Renamed",
     "Revisions",
     "Signature",
@@ -162,6 +171,7 @@ __all__ = [
     "printable",
     "push",
     "refs",
+    "remote_refs",
     "status",
     "update_refs",
     "worktrees",
