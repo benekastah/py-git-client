@@ -60,7 +60,8 @@ class Revisions:
       reachable from the exclude and not the include has: git's `--cherry-pick --right-only
       <exclude>...<include>`, which takes one of each (ValueError otherwise).
     - `since`: only commits committed at or after it (`--max-age`, which `--since` gives
-      git: by the committer's date, not the author's).
+      git: by the committer's date, not the author's). An aware datetime: a naive one raises
+      ValueError, rather than be taken for local time.
     - `author`: only commits whose author, as `Name <email>`, contains this text (a fixed
       string, not a pattern: `--fixed-strings --author`).
     - `paths`: only commits that change one of these (and history simplified as git's
@@ -96,6 +97,8 @@ class Revisions:
         exclude = (exclude,) if isinstance(exclude, str) else tuple(exclude)
         if cherry_pick and (len(include), len(exclude)) != (1, 1):
             raise ValueError("cherry_pick takes one include and one exclude")
+        if since is not None and since.utcoffset() is None:
+            raise ValueError(f"since is naive, so its zone is unknown: {since!r}")
         # Given to git a line each, where an empty one ends the revisions (dropping the rest),
         # a NUL ends the line, a "\r" ending it is dropped, and one starting with "-" is an
         # option ("--not" would flip the rest): none of which is a revision.
@@ -198,7 +201,10 @@ def _rev_list(git: ReadOnlyGit, revisions: Revisions, *options: str, timeout: Ti
     }
     options += tuple(switch for switch, on in switches.items() if on)
     if revisions.since is not None:
-        options += (f"--max-age={int(revisions.since.timestamp())}",)
+        # git's whole seconds, rounded up: so none before `since` is kept.
+        after = revisions.since - datetime(1970, 1, 1, tzinfo=UTC)
+        seconds = after.days * 86400 + after.seconds + (after.microseconds > 0)
+        options += (f"--max-age={seconds}",)
     if revisions.author is not None:
         options += ("--fixed-strings", f"--author={revisions.author}")
     # Paths after "--", each marked to be taken from the top and literally, with what would

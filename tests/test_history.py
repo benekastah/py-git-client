@@ -158,8 +158,16 @@ def test_commits_by_author_text_and_committer_date(history: Git) -> None:
     # A fixed string, not a pattern, which "o.e" would be.
     assert found(Revisions("main", author="o.e")) == []
     # By the committer's date (second's author's is later).
-    since = datetime.fromtimestamp(EPOCH + 2500, UTC)
+    since = datetime.fromtimestamp(EPOCH + 3000, UTC)
     assert found(Revisions("main", exclude="first", since=since)) == ["Merge branch 'side'", "s3"]
+    # At or after it: not s3, a microsecond before.
+    later = since + timedelta(microseconds=1)
+    assert found(Revisions("main", exclude="first", since=later)) == ["Merge branch 'side'"]
+
+
+def test_since_must_say_its_zone() -> None:
+    with pytest.raises(ValueError, match="naive"):
+        Revisions("main", since=datetime(2026, 1, 1))
 
 
 def test_commits_that_change_paths_from_the_top_taken_literally(
