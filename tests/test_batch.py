@@ -1,6 +1,7 @@
 import os
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,10 @@ from git_client import (
     Head,
     NotARepositoryError,
     ReadOnlyGit,
+    Ref,
     RefUpdate,
+    Track,
+    UnknownRevisionError,
     config,
     decode,
     git_common_dir,
@@ -27,6 +31,7 @@ from git_client import (
     refs,
     update_refs,
 )
+from git_client.batch import _ahead_behind_alone  # pyright: ignore[reportPrivateUsage]
 from git_client.testing import FakeGit, GitCall, RepoTemplates
 
 
@@ -121,30 +126,17 @@ def test_refs_names_a_branch_fully_even_when_a_tag_has_its_name(repo: Git) -> No
     assert branch.upstream == "refs/heads/main"
 
 
-def test_refs_reads_the_fields_asked_for_in_the_same_process(repo: Git) -> None:
-    repo.run("branch", "--quiet", "topic")
-    repo.run("branch", "--quiet", "--set-upstream-to", "main", "topic")
-    repo.run("commit", "--quiet", "--allow-empty", "-m", "second")
-
-    found = refs(repo, "refs/heads/", fields=("upstream:track", "subject"))
-
-    assert found["refs/heads/topic"].fields == {"upstream:track": "[behind 1]", "subject": "first"}
-    assert found["refs/heads/main"].fields == {"upstream:track": "", "subject": "second"}
-
-
 def test_refs_keeps_bytes_that_arent_utf8_for_printable_to_replace(repo: Git) -> None:
-    # In a commit's subject rather than a branch's name, which macOS and Windows can't store.
-    # Written with hash-object, as commit-tree would store the byte as Latin-1's é in UTF-8.
-    headers = repo.run("cat-file", "commit", "HEAD").split("\n\n")[0]
-    commit = repo.run(
-        "hash-object", "-t", "commit", "-w", "--stdin", input=f"{headers}\n\ncaf\udce9\n"
-    )
-    repo.run("update-ref", "refs/heads/topic", commit)
+    # In an upstream's name in the config rather than a branch's name, which macOS and Windows
+    # can't store: Latin-1's é, which isn't UTF-8. Written to the file, as Windows can't pass
+    # the byte in an argument.
+    with (Path(repo.directory) / ".git" / "config").open("ab") as config_file:
+        config_file.write(b'[branch "main"]\n\tremote = .\n\tmerge = refs/heads/caf\xe9\n')
 
-    fields = refs(repo, "refs/heads/topic", fields=["subject"])["refs/heads/topic"].fields
+    upstream = refs(repo, "refs/heads/main")["refs/heads/main"].upstream
 
-    assert fields == {"subject": "caf\udce9"}
-    assert printable(fields["subject"]) == "caf\ufffd"
+    assert upstream == "refs/heads/caf\udce9"
+    assert printable(upstream) == "refs/heads/caf\ufffd"
 
 
 def test_refs_splits_its_listing_only_where_git_does(repo: Git) -> None:
@@ -158,6 +150,139 @@ def test_refs_takes_a_pattern_that_looks_like_an_option_as_a_pattern(repo: Git) 
     repo.run("branch", "topic")
 
     assert refs(repo, "--points-at=topic") == {}
+
+
+def _branches_that_track(git: Git) -> None:
+    """main at "second" (2020-01-02); `synced`, `ahead` (2020-01-04), `behind` (at "first",
+    made now) and `topic` ("first" then 2020-01-03), each tracking main; `gone`, tracking
+    origin's missing `gone`; topic pushing to origin, whose `topic` is at "first"; and tags:
+    `v1` (annotated, at main) and `tree` (at main's tree)."""
+
+    def commit(message: str, day: int) -> None:
+        env = {"GIT_COMMITTER_DATE": f"2020-01-0{day}T00:00:00+00:00"}
+        git.run("commit", "--quiet", "--allow-empty", "-m", message, env=env)
+
+    git.run("branch", "behind")
+    git.run("branch", "topic")
+    commit("second", 2)
+    git.run("branch", "synced")
+    git.run("branch", "gone")
+    git.run("switch", "--quiet", "-c", "ahead")
+    commit("ahead", 4)
+    git.run("switch", "--quiet", "topic")
+    commit("topic", 3)
+    git.run("switch", "--quiet", "main")
+    for branch in ("synced", "ahead", "behind", "topic"):
+        git.run("branch", "--quiet", "--set-upstream-to", "main", branch)
+    git.run("remote", "add", "origin", "https://example.invalid/repo.git")
+    git.run("config", "branch.gone.remote", "origin")
+    git.run("config", "branch.gone.merge", "refs/heads/gone")
+    git.run("config", "push.default", "current")
+    git.run("config", "branch.topic.pushRemote", "origin")
+    git.run("update-ref", "refs/remotes/origin/topic", "behind")
+    git.run("tag", "-a", "-m", "v1", "v1")
+    git.run("tag", "tree", "main^{tree}")
+
+
+@pytest.fixture
+def tracking(repo_from: RepoFrom) -> Git:
+    """A copy of `_branches_that_track`'s repository."""
+    return repo_from("tracking", _branches_that_track)
+
+
+def test_refs_reads_how_each_branch_stands_against_its_upstream_as_git_says(
+    tracking: Git,
+) -> None:
+    found = refs(tracking, "refs/heads/", track=True)
+
+    assert {name.removeprefix("refs/heads/"): ref.track for name, ref in found.items()} == {
+        "main": None,  # no upstream
+        "synced": Track(),
+        "ahead": Track(ahead=1),
+        "behind": Track(behind=1),
+        "topic": Track(ahead=1, behind=1),
+        "gone": Track(gone=True),
+    }
+
+
+def test_refs_reads_where_each_branch_fetches_from_and_pushes_to(tracking: Git) -> None:
+    found = refs(tracking, "refs/heads/", "refs/tags/v1", remotes=True, push_track=True)
+
+    topic, gone, tag = (found[f"refs/{name}"] for name in ("heads/topic", "heads/gone", "tags/v1"))
+    assert (topic.upstream_remote, topic.upstream_remote_ref) == (".", "refs/heads/main")
+    assert (topic.push, topic.push_remote) == ("refs/remotes/origin/topic", "origin")
+    assert topic.push_track == Track(ahead=1)
+    assert (gone.upstream_remote, gone.upstream_remote_ref) == ("origin", "refs/heads/gone")
+    assert gone.push_track == Track(gone=True)  # origin has no gone
+    # push.default=current pushes main to origin, but no push remote is set for it.
+    main = found["refs/heads/main"]
+    assert (main.push, main.push_remote) == ("refs/remotes/origin/main", "")
+    assert (tag.upstream_remote, tag.push, tag.push_track) == ("", "", None)
+
+
+def test_refs_reads_each_commits_committer_date(tracking: Git) -> None:
+    found = refs(tracking, "refs/heads/main", "refs/tags/v1", dates=True)
+
+    assert found["refs/heads/main"].committer_date == datetime(2020, 1, 2, tzinfo=UTC)
+    assert found["refs/tags/v1"].committer_date is None  # a tag, not a commit
+
+
+def test_refs_counts_each_refs_commits_ahead_of_and_behind_a_base(tracking: Git) -> None:
+    found = refs(tracking, ahead_behind="main")
+
+    assert found["refs/heads/topic"].ahead_behind == (1, 1)
+    assert found["refs/heads/behind"].ahead_behind == (0, 1)
+    assert found["refs/tags/v1"].ahead_behind == (0, 0)  # the commit it tags
+    assert found["refs/tags/tree"].ahead_behind is None  # no commit
+
+
+def test_refs_counts_ahead_behind_a_ref_at_a_time_as_git_before_2_41_must(
+    tracking: Git,
+) -> None:
+    # Called directly, so that a newer git tests it too; git 2.36's CI runs it through refs.
+    counted = _ahead_behind_alone(tracking, "main", refs(tracking).values())
+
+    assert counted["refs/heads/topic"] == (1, 1)
+    assert counted["refs/heads/behind"] == (0, 1)
+    assert counted["refs/tags/v1"] == (0, 0)
+    assert counted["refs/tags/tree"] is None
+
+
+def test_refs_says_an_ahead_behind_base_names_nothing_on_every_git(tracking: Git) -> None:
+    # git 2.41 says "failed to find 'nothing'"; before, the fallback's rev-parse says why.
+    with pytest.raises(UnknownRevisionError):
+        refs(tracking, ahead_behind="nothing")
+
+
+def test_refs_refuses_an_ahead_behind_base_a_format_cant_hold(repo: Git) -> None:
+    with pytest.raises(ValueError, match=r"\)"):
+        refs(repo, ahead_behind="a)b")
+
+
+def test_refs_keeps_the_refs_git_filters_for(tracking: Git) -> None:
+    def names(found: dict[str, Ref]) -> set[str]:
+        return {name.removeprefix("refs/heads/") for name in found}
+
+    main = tracking.run("rev-parse", "main")
+    heads = "refs/heads/"
+    assert names(refs(tracking, heads, contains="topic")) == {"topic"}
+    assert names(refs(tracking, heads, no_contains="main")) == {"behind", "topic"}
+    assert names(refs(tracking, heads, merged="behind")) == {"behind"}
+    assert names(refs(tracking, heads, merged="ahead", no_merged="main")) == {"ahead"}
+    assert names(refs(tracking, heads, points_at=main)) == {"main", "synced", "gone"}
+
+
+def test_refs_sorts_by_its_first_key_first_and_keeps_count(tracking: Git) -> None:
+    found = refs(tracking, "refs/heads/", sort=["-committerdate", "refname"], count=3)
+
+    assert list(found) == ["refs/heads/behind", "refs/heads/ahead", "refs/heads/topic"]
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_refs_refuses_a_count_below_one(repo: Git, count: int) -> None:
+    # git would list every ref for 0.
+    with pytest.raises(ValueError, match="count"):
+        refs(repo, count=count)
 
 
 def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> None:
