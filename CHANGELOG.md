@@ -138,7 +138,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `track=True` for all branches at once), `chain_to_restack`'s `--contains --merged`
   (`core.py:809`), `find_parent`'s `--merged --no-merged` (`stack.py:3992`), and its
   `rev-parse --abbrev-ref <b>@{upstream}` (`core.py:1153`, `1275`: `upstream`, which `refs()`
-  always reads).
+  always reads). An `ahead_behind` base that names nothing raises `UnknownRevisionError` on
+  every git. A filter given None filters nothing: a tool whose base can be None (git-stack's
+  `chain_to_restack`, `core.py:809`, whose `base` comes from config) handles that itself,
+  rather than list every branch.
 
 - `push(git, remote, updates, *, atomic=False, set_upstream=False, no_verify=False)` makes
   many `PushUpdate`s (a target ref, a source or None to delete, per-ref `force` and `lease`)

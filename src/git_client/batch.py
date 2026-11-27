@@ -125,8 +125,10 @@ class Ref:
 
     The rest are None unless `refs` was asked for them. With `remotes`: the remote its
     upstream is on ("." for a local branch, "" with no upstream) and the upstream's name
-    there; and the full name of the remote-tracking ref git would push it to (`%(push)`, ""
-    where git would push it nowhere it tracks), and that remote (`%(push:remotename)`). With
+    there; the full name of the remote-tracking ref git would push it to (`%(push)`, ""
+    where git would push it nowhere it tracks); and its configured push remote
+    (`%(push:remotename)`: its pushRemote, remote.pushDefault or remote; "" if none is set,
+    even where `push` names one, as with push.default=current and no remote set). With
     `track` and `push_track`: how it stands against its upstream, or what it pushes to (None
     where it has none). With `dates`: its commit's committer date (None for a ref to another
     object, e.g. an annotated tag). With `ahead_behind`: how many commits it has that the base
@@ -176,7 +178,8 @@ def refs(
     Only those whose commit contains `contains` (or doesn't contain `no_contains`), whose
     commit `merged` contains (or `no_merged` doesn't), or that point at `points_at`, as git's
     options of those names filter them. `sort` orders them by each key in turn, the first
-    deciding (git's `--sort`, whose last decides), and `count` keeps the first so many.
+    deciding (git's `--sort`, whose last decides), and `count` keeps the first so many (at
+    least 1: ValueError otherwise, as git would take 0 for all).
 
     `remotes`, `track`, `push_track`, `dates` and `ahead_behind` (a base: a commit, or a
     name for one) fill in the `Ref` attributes they name (see Ref). With git before 2.41,
@@ -187,6 +190,8 @@ def refs(
 
     Give git full ref names or object ids rather than short names, which can be ambiguous
     (e.g. a tag named like a branch)."""
+    if count is not None and count < 1:
+        raise ValueError(f"refs can't keep fewer than 1 ref: count={count}")
     if ahead_behind is not None and ")" in ahead_behind:
         raise ValueError(f"refs can't count against a base with ')': {ahead_behind!r}")
     options = [

@@ -213,6 +213,9 @@ def test_refs_reads_where_each_branch_fetches_from_and_pushes_to(tracking: Git) 
     assert topic.push_track == Track(ahead=1)
     assert (gone.upstream_remote, gone.upstream_remote_ref) == ("origin", "refs/heads/gone")
     assert gone.push_track == Track(gone=True)  # origin has no gone
+    # push.default=current pushes main to origin, but no push remote is set for it.
+    main = found["refs/heads/main"]
+    assert (main.push, main.push_remote) == ("refs/remotes/origin/main", "")
     assert (tag.upstream_remote, tag.push, tag.push_track) == ("", "", None)
 
 
@@ -272,6 +275,13 @@ def test_refs_sorts_by_its_first_key_first_and_keeps_count(tracking: Git) -> Non
     found = refs(tracking, "refs/heads/", sort=["-committerdate", "refname"], count=3)
 
     assert list(found) == ["refs/heads/behind", "refs/heads/ahead", "refs/heads/topic"]
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_refs_refuses_a_count_below_one(repo: Git, count: int) -> None:
+    # git would list every ref for 0.
+    with pytest.raises(ValueError, match="count"):
+        refs(repo, count=count)
 
 
 def test_patch_ids_reads_each_commands_patches_with_one_patch_id(repo: Git) -> None:
