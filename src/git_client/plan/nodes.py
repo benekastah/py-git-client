@@ -24,7 +24,8 @@ class NotExecuted(PlanError):
 
 class Skipped(NotExecuted):
     """`get()` on a node that didn't run because `failed`, a node it reads (directly or
-    not), failed; chained from that node's error."""
+    not), failed: of its inputs, the first that failed or was skipped, once all of them had
+    finished; chained from that node's error."""
 
     def __init__(self, node: Node[object], failed: Node[object]) -> None:
         super().__init__(f"{node!r} wasn't run: {failed!r} failed")
@@ -32,7 +33,7 @@ class Skipped(NotExecuted):
 
 
 class ExecutionException(PlanError):
-    """A node failed: `node` is the first that did (in the order the plan crawled them), and
+    """A node failed: `node` is the first that did in program order (see Plan.order), and
     `group` the nodes it ran with; the exception is chained from its error. `failures` has
     every node that failed and its error. The results of the nodes that ran stay readable;
     the nodes that depend on a failed one didn't run (their `get()` raises Skipped). A

@@ -514,8 +514,8 @@ def test_a_config_write_and_read_run_one_at_a_time(
 
 
 def test_a_read_waits_for_an_earlier_write_that_isnt_ready_yet(remotes: Git) -> None:
-    # A review's example: the config write waits for push a, and the read added after it
-    # mustn't run first, though the write isn't ready when the read is.
+    # The config write waits for push a, and the read added after it mustn't run first,
+    # though the write isn't ready yet (its resources unknown) when the read is.
     remotes.run("config", "example.k", "old")
     plan = Plan(remotes)
     pushed = plan.add(Push("origin", "a"))

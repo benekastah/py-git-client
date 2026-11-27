@@ -50,7 +50,6 @@ from git_client.plan.pushing import ConflictingPushes, Push
 from git_client.plan.resources import (
     CONFIG,
     Access,
-    Config,
     LocalRef,
     RemoteRef,
     Resource,
@@ -61,7 +60,6 @@ from git_client.plan.running import Plan
 __all__ = [
     "CONFIG",
     "Access",
-    "Config",
     "ConfigValue",
     "ConflictingPushes",
     "Effect",

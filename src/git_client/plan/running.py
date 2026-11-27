@@ -30,6 +30,10 @@ class Plan:
     came before it without running (Node.settle: a repeated Push), and say before anything
     runs that the plan is wrong (Node.check: ConflictingPushes).
 
+    Each round checks each node left against every one left before it, so a round costs
+    O(n²) for n nodes, and a plan O(n³) at worst over its rounds: fine for the hundreds of
+    nodes a tool's plan has, not for millions.
+
     Every process starts through `git` (its `_start`, see Started), so its timeout,
     `stopping` and process groups apply as to any of its commands; its `performance`
     recorder times them. On Ctrl-C, execute()
@@ -114,7 +118,9 @@ class Plan:
                 groups_of.update((node, group) for node in group)
             self._run(groups)
             still = [node for node in left if not node._done and node._error is None]
-            if len(still) == len(left):  # each round finishes the first node left
+            # Each round finishes at least one node: the first left (all before it have
+            # finished), or the reads that run before it. So this is a bug's, never a plan's.
+            if len(still) == len(left):
                 raise PlanError(f"no node of {left!r} could run")
             left = still
         failures = {
