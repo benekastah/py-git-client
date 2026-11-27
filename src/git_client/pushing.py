@@ -149,7 +149,7 @@ def _destinations(stdout: str) -> tuple[PushDestination, ...]:
         elif line == "Done":
             end_report(done=True)
             url = None
-        elif url is not None and not line.startswith(("branch ", "Would set upstream ")):
+        elif url is not None and not line.startswith("branch "):
             ref = _parse_ref(line)
             if ref is None:
                 url = None
