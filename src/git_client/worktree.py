@@ -265,7 +265,9 @@ def add_worktree(
     another worktree), unless `detach`, which detaches HEAD at its commit, as any other
     revision does. One `git worktree add`, which runs the post-checkout hook. Raises
     UnknownRevisionError if `commit` names nothing, and GitError for what else git refuses
-    (e.g. a path that exists and isn't empty)."""
+    (e.g. a path that exists and isn't empty). If the post-checkout hook fails, it raises
+    GitError (with the hook's exit status) though git has added the worktree, which stays:
+    the caller removes it if it doesn't want it (`remove_worktree(..., force=True)`)."""
     args = ("worktree", "add", *(["--detach"] if detach else []), "--", os.fsencode(path), commit)
     stdout_of(args, git.process(*args, capture_output=True, timeout=timeout))
 

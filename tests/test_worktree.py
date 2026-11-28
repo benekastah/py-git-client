@@ -307,10 +307,13 @@ def test_add_worktree_checks_out_a_commit_or_a_branch(
     ]
 
 
-def test_add_worktree_takes_a_path_from_the_clients_directory(repo: Git) -> None:
+def test_worktrees_are_added_and_removed_at_paths_from_the_clients_directory(repo: Git) -> None:
     # One that starts with "-", which git would otherwise read as an option.
     add_worktree(repo, "-linked", "HEAD", detach=True)
     assert (Path(repo.directory) / "-linked" / "a").exists()
+
+    remove_worktree(repo, "-linked")
+    assert not (Path(repo.directory) / "-linked").exists()
 
 
 def test_add_worktree_raises_what_git_refuses(repo: Git, tmp_path: Path) -> None:
@@ -344,3 +347,18 @@ def test_prune_worktrees_forgets_one_whose_directory_is_gone(repo: Git, tmp_path
     prune_worktrees(repo)
 
     assert [same(w.path) for w in worktrees(repo)[1:]] == [same(tmp_path / "kept")]
+
+
+def test_add_worktree_raises_when_post_checkout_fails_but_leaves_the_worktree(
+    repo: Git, tmp_path: Path
+) -> None:
+    # A hook in git's sh, which runs it on every system.
+    hook = Path(repo.directory) / ".git" / "hooks" / "post-checkout"
+    hook.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    with pytest.raises(GitError) as raised:
+        add_worktree(repo, tmp_path / "linked", "HEAD", detach=True)
+
+    assert raised.value.returncode == 7
+    assert [same(w.path) for w in worktrees(repo)[1:]] == [same(tmp_path / "linked")]

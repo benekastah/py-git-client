@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,12 +17,12 @@ def hook(git: Git, name: str, script: str) -> None:
 def test_run_hook_gives_the_hooks_exit_status_and_output(
     repo: Git, git_calls: list[GitCall]
 ) -> None:
-    # git sends a hook's stdout to its stderr.
+    # git sends a hook's stdout to its stderr, all of it in HookResult.stderr.
     hook(repo, "commit-msg", 'echo "out $*"; echo err >&2; exit 3\n')
 
     result = run_hook(repo, "commit-msg", "-x", b"second arg")
 
-    assert result == HookResult(3, "", "out -x second arg\nerr\n")
+    assert result == HookResult(3, "out -x second arg\nerr\n")
     assert [call[call.index("hook") :] for call in git_calls] == [
         ["hook", "run", "--ignore-missing", "commit-msg", "--", "-x", "second arg"]
     ]
@@ -47,17 +48,39 @@ def test_run_hook_follows_git_config_to_the_hook(repo: Git, tmp_path: Path) -> N
 
 
 def test_run_hook_without_a_hook(repo: Git) -> None:
-    assert run_hook(repo, "commit-msg") == HookResult(0, "", "")
+    assert run_hook(repo, "commit-msg") == HookResult(0, "")
     with pytest.raises(GitError, match="cannot find a hook named commit-msg"):
         run_hook(repo, "commit-msg", ignore_missing=False)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no executable bit to leave off")
+def test_run_hook_raises_without_a_hook_git_would_run(repo: Git) -> None:
+    # git ignores a hook that isn't executable, and says so in hints before its refusal.
+    hook(repo, "commit-msg", "exit 0\n")
+    (Path(repo.directory) / ".git" / "hooks" / "commit-msg").chmod(0o644)
+
+    assert run_hook(repo, "commit-msg").returncode == 0
+    with pytest.raises(GitError, match="cannot find a hook named commit-msg"):
+        run_hook(repo, "commit-msg", ignore_missing=False)
+
+
+def test_run_hook_and_a_name_git_doesnt_know(repo: Git, git_version: tuple[int, int, int]) -> None:
+    if git_version >= (2, 56):  # git refuses it, rather than run a hook
+        with pytest.raises(GitError, match="unknown hook event 'mine'"):
+            run_hook(repo, "mine")
+    elif git_version < (2, 37):  # git runs it, as any other, and there is none
+        assert run_hook(repo, "mine") == HookResult(0, "")
+    else:
+        pytest.skip("which git between 2.37 and 2.56 began to refuse it isn't pinned here")
+
+
 def test_run_hook_raises_when_git_refuses_the_name() -> None:
-    # As git 2.5x says of a name it doesn't know, rather than run a hook.
+    # As git 2.56 says, with its hints first.
     git = FakeGit()
     git.respond(
         ["hook"],
-        stderr="error: unknown hook event 'mine';\nuse --allow-unknown-hook-name to allow it\n",
+        stderr="hint: a hint\nerror: unknown hook event 'mine';\n"
+        "use --allow-unknown-hook-name to allow non-native hook names\n",
         returncode=1,
     )
     with pytest.raises(GitError, match="unknown hook event"):

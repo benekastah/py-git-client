@@ -21,12 +21,10 @@ from git_client.performance import record_read
 
 @dataclass(frozen=True)
 class HookResult:
-    """How a hook ended: its exit status, and what it printed. git sends a hook's stdout to its
-    own stderr, so `stdout` is git's, which prints nothing there: what the hook printed is
-    in `stderr`."""
+    """How a hook ended: its exit status, and all it printed, on its stdout or stderr: git sends
+    a hook's stdout to its own stderr, where it's captured, with what git printed."""
 
     returncode: int
-    stdout: str
     stderr: str
 
 
@@ -42,7 +40,9 @@ def run_hook(
     an action it guards, with one `git hook run` (git 2.36), and return how it ended, whether
     it succeeded or not: a hook's failure is its answer (e.g. a commit-msg hook's refusal).
     Which program that is (core.hooksPath, hooks in config on newer git) is git's to find.
-    Its output is captured; `env` is added to its environment.
+    Its output is captured; `env` is added to its environment. As output is captured, git
+    runs with GIT_TEXTDOMAINDIR naming no directory (see `Git.process`), which the hook
+    inherits: a git command the hook runs prints English.
 
     Without a hook of that name, it returns success, as git does, unless `ignore_missing` is
     False: then it raises GitError. It raises GitError too where git refuses the name rather
@@ -57,15 +57,16 @@ def run_hook(
     command += args
     result = git.process(*command, capture_output=True, env=env, timeout=timeout)
     stderr = decode(result.stderr)
-    # git's first words when it runs no hook (a hook that printed them first would pass
-    # for git).
-    first_line = stderr.partition("\n")[0]
+    # git's first words when it runs no hook, after any hints (e.g. of a hook it ignored, as
+    # it isn't executable); a hook that printed them first would pass for git.
+    lines = stderr.split("\n")
+    first_line = next((line for line in lines if not line.startswith("hint: ")), "")
     if result.returncode != 0 and (
         (not ignore_missing and first_line == f"error: cannot find a hook named {name}")
         or first_line.startswith(f"error: unknown hook event '{name}'")
     ):
         raise error_from(command, result)
-    return HookResult(result.returncode, decode(result.stdout), stderr)
+    return HookResult(result.returncode, stderr)
 
 
 @record_read("git")

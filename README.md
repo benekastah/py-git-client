@@ -578,7 +578,9 @@ prune_worktrees(git)  # forget those git would prune, e.g. whose directory is go
 ```
 
 Each raises `GitError` for what git refuses (`UnknownRevisionError` for a commit that names
-nothing), e.g. a branch checked out in another worktree, or changes without `force`.
+nothing), e.g. a branch checked out in another worktree, or changes without `force`. A failing
+post-checkout hook makes `add_worktree` raise too, but git has added the worktree by then: the
+caller removes it if it doesn't want it.
 
 ### Hooks and messages
 
@@ -589,7 +591,7 @@ message up as git does, with one `git stripspace`:
 git = Git("path/to/repo")
 # Wherever git finds it (core.hooksPath, ...); none: success, unless ignore_missing=False.
 result = run_hook(git, "commit-msg", "path/to/message", ignore_missing=True, env=None)
-result.returncode, result.stderr  # its answer and its output (git sends its stdout there too)
+result.returncode, result.stderr  # its answer, and all it printed (git sends stdout there)
 stripspace(git.read_only(), "Subject  \n\n\n# a comment\n", strip_comments=True)  # "Subject\n"
 stripspace(git, "Subject\n; a comment\n", strip_comments=True, comment_char=";")
 ```
