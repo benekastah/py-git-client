@@ -53,7 +53,16 @@ from git_client.errors import (
     UnknownRevisionError,
     WrongTypeError,
 )
-from git_client.history import Commit, Revisions, Signature, any_commit, commits, count
+from git_client.history import (
+    Commit,
+    ReflogEntry,
+    Revisions,
+    Signature,
+    any_commit,
+    commits,
+    count,
+    reflogs,
+)
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
@@ -120,6 +129,7 @@ __all__ = [
     "ReadOnlyGit",
     "Ref",
     "RefUpdate",
+    "ReflogEntry",
     "RemoteError",
     "Renamed",
     "Revisions",
@@ -156,6 +166,7 @@ __all__ = [
     "patch_ids",
     "printable",
     "push",
+    "reflogs",
     "refs",
     "status",
     "update_refs",
