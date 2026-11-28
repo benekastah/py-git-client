@@ -483,11 +483,23 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
     assert commit.endswith(b"\n\nfirst\n")
 
 
-def test_reading_a_large_object_holds_it_once(repo: Git, tmp_path: Path) -> None:
+def test_reading_a_large_object_holds_it_once(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     size = 8 * 1024 * 1024
     (tmp_path / "large").write_bytes(b"x" * size)
     blob = repo.run("hash-object", "-w", str(tmp_path / "large"))
+    output_type = cat_file_module._Output  # pyright: ignore[reportPrivateUsage]
+    read = output_type.read
 
+    def slowly(output: Any, size: int, deadline: float | None) -> bytes:
+        """_Output.read, once git has had time to write all it can: on Windows, what the
+        thread reading ahead holds then, in chunks, is held besides the object."""
+        if size > 1:
+            time.sleep(0.2)
+        return read(output, size, deadline)
+
+    monkeypatch.setattr(output_type, "read", slowly)
     with CatFile(repo) as cat_file:
         cat_file.resolve("HEAD")
         tracemalloc.start()

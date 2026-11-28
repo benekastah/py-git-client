@@ -491,6 +491,11 @@ class _PastDeadline(Exception):
 # How much of a process's output is read at a time, at most: what a pipe holds (on Linux).
 _CHUNK = 65536
 
+# On Windows, how many chunks the thread reading a process's output holds, at most, that a
+# read hasn't taken yet: else, reading ahead of a read writing a large object into its own
+# memory, it could hold most of the object again.
+_READ_AHEAD = 8
+
 
 class _Output:
     """A CatFile's process's stdout, read until a deadline (from time.monotonic(), or None
@@ -505,8 +510,10 @@ class _Output:
         self._fd = pipe.fileno()
         self._buffer = bytearray()
         self._ended = False  # Whether the pipe is at its end.
-        # On Windows: what the thread has read, and whether to stop reading.
+        # On Windows: what the thread has read, room for what it reads next, and whether to
+        # stop reading.
         self._chunks: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._room = threading.Semaphore(_READ_AHEAD)
         self._closed = False
         if sys.platform == "win32":
             threading.Thread(target=self._pass_on, name="CatFile output", daemon=True).start()
@@ -544,6 +551,7 @@ class _Output:
         it under that read would wait for it."""
         if sys.platform == "win32":
             self._closed = True
+            self._room.release()  # For a thread waiting for room, to see it's closed.
         else:
             self._pipe.close()
 
@@ -568,6 +576,8 @@ class _Output:
                 chunk = self._chunks.get(timeout=_left(deadline))
             except queue.Empty:
                 raise _PastDeadline from None
+            if chunk:
+                self._room.release()
         else:
             left = _left(deadline)
             if left is not None and not self._poll.poll(math.ceil(left * 1000)):
@@ -578,9 +588,12 @@ class _Output:
 
     def _pass_on(self) -> None:
         """On Windows, in a thread of its own: pass on what the pipe gives, then the empty
-        chunk of its end, until it ends or this is closed."""
+        chunk of its end, until it ends or this is closed. It waits for room before each
+        read, so that until a read takes them it holds at most _READ_AHEAD chunks."""
         try:
-            while not self._closed and (chunk := os.read(self._fd, _CHUNK)):
+            while (
+                self._room.acquire() and not self._closed and (chunk := os.read(self._fd, _CHUNK))
+            ):
                 self._chunks.put(chunk)
         except OSError:
             pass

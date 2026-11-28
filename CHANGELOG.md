@@ -310,6 +310,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   only until git exits, usually within milliseconds; the 5 seconds are spent only on a git
   that doesn't exit when asked (e.g. waiting for an editor), and a second interrupt still
   kills it at once.
+- On Windows, `CatFile.read` of a large object could hold up to about twice its size: the
+  thread reading git's output read ahead of it without limit. It now holds at most 8 chunks
+  (of at most 64 KiB each) that a read hasn't taken.
 - A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git (and
   its group or tree) at once, where it skipped the kill and left them running (#52).
 
