@@ -24,6 +24,14 @@ from git_client.batch import (
     refs,
     update_refs,
 )
+from git_client.branches import (
+    DeletedBranches,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
 from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -105,6 +113,7 @@ from git_client.remotes import (
     remote_refs,
     remote_urls,
 )
+from git_client.transaction import RefTransaction, ref_transaction
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -137,6 +146,7 @@ __all__ = [
     "ConfigValue",
     "ConflictError",
     "CorruptObjectError",
+    "DeletedBranches",
     "Diff",
     "EnvValue",
     "FetchRef",
@@ -168,6 +178,7 @@ __all__ = [
     "PushUpdate",
     "ReadOnlyGit",
     "Ref",
+    "RefTransaction",
     "RefUpdate",
     "ReflogEntry",
     "RemoteError",
@@ -199,7 +210,9 @@ __all__ = [
     "config",
     "config_values",
     "count",
+    "create_branch",
     "decode",
+    "delete_branches",
     "encode",
     "fetch",
     "find_git",
@@ -221,16 +234,20 @@ __all__ = [
     "patch_ids",
     "printable",
     "push",
+    "ref_transaction",
     "reflogs",
     "refs",
     "remote_refs",
     "remote_urls",
+    "rename_branch",
     "reset",
     "revert",
+    "set_upstream",
     "skip",
     "status",
     "switch",
     "tree_entries",
     "update_refs",
+    "valid_branch_name",
     "worktrees",
 ]

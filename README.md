@@ -15,11 +15,13 @@ what git-stack, git-recommit and move-forward share for that:
   their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`; `ref_transaction` to
+  prepare them, then commit or abort).
 - **Remotes**: a fetch, and what it did to each ref (`fetch`), the refs a remote has
   (`remote_refs`), and the URLs git fetches it from and pushes it to (`remote_urls`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
-  through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
+  through its filters (`hash_blob_at`), a three-way merge of contents (`merge_file`), and
+  branches created, renamed, deleted (many in one process) and given upstreams.
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
   merge-tree --stdin`; on git 2.38, one each), each with a merge base of its own if given
   (git 2.40), as for a cherry-pick: each merge's tree and conflicted paths, or why git
@@ -525,6 +527,82 @@ git prints a URL a line each, as it is, so one with a newline in it reads as two
 repository's own config doesn't name raises GitError: git ignores one set only in the global or
 system config, by `-c` or by the environment (which `fetch` and `remote_refs` take). A
 `FakeGit` test responds to `["remote", "get-url"]`.
+
+### Branches
+
+Typed writes to branches, each one `git branch` on a `Git` (a `ReadOnlyGit` has none), and
+whether a name can be a branch's:
+
+```python
+from git_client import (
+    Git,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
+
+git = Git("path/to/repo")
+create_branch(git, "topic", "main")  # at a start point (HEAD if left out); force=True moves
+# an existing one. track: True follows the start point, False nothing, "inherit" the start
+# point's upstream, None (the default) as branch.autoSetupMerge says.
+create_branch(git, "mine", "origin/main", track=False)
+set_upstream(git, "mine", "origin/main")  # branch.mine.remote and .merge
+set_upstream(git, "mine", None)  # no upstream (GitError if it has none)
+rename_branch(git, "mine", "ours")  # with its config and reflog; force=True replaces one
+valid_branch_name(git, "a..b")  # False, as git's check-ref-format --branch says; a ReadOnlyGit too
+# One git for all of them: it deletes each it can (with its config), says why not of others.
+result = delete_branches(git, ["topic", "ours", "missing"])  # force=True: even unmerged
+result.deleted  # {"topic": "<full id>", "ours": "<full id>"}: by name, what each pointed at
+result.returncode, result.stderr  # 1 as some weren't deleted, and git's reasons
+```
+
+Names go to git after `--end-of-options`, so a name starting with `-` is a name, which git
+refuses as a branch's. git decides what a valid name is and whether a branch can be deleted,
+created, renamed or tracked, and raises GitError when it refuses (`delete_branches` only for a
+failure not of a single branch, e.g. not a repository, as its result says which it deleted).
+`valid_branch_name` says no to a name git expands rather than takes as it is (`@{-1}`, the
+branch checked out before), as git-stack checked with a second `check-ref-format`. A `FakeGit`
+test responds to `["-c", "core.abbrev=no", "branch"]` for `delete_branches`, with a line
+`Deleted branch <name> (was <id>).` for each branch deleted, to `["branch"]` for the other
+writes, and to `["check-ref-format", "--branch"]` with the name and exit status 0, or 128 for
+no.
+
+### Ref transactions
+
+`update_refs` makes its changes, or none, at once. `ref_transaction` lets a tool decide
+between git checking them and git making them, over one `git update-ref --stdin`:
+
+```python
+from git_client import Git, ref_transaction
+
+git = Git("path/to/repo")
+main, a = git.run("rev-parse", "main"), git.run("rev-parse", "a")
+with ref_transaction(git, message="publish") as transaction:  # message: for the reflogs
+    transaction.update("refs/heads/a", main, a)  # to main, only if a is still at a
+    transaction.verify("refs/heads/b", main)  # changes nothing, but only if b is at main
+    transaction.verify("refs/heads/c", None)  # only if there's no c
+    transaction.delete("refs/heads/old")  # wherever it is
+    transaction.prepare()  # git checks every change and locks its ref: GitError if it can't
+    ...  # nothing else can move those refs now: e.g. push, and commit only if that worked
+    transaction.commit()  # or abort(); a block that ends without either makes no change
+```
+
+An `old` of None, for `update` and `delete`, is anywhere, and all zeros nowhere (the ref must
+not exist yet). git checks refs and values (an object id, or any revision), and raises
+GitError at `prepare` or `commit` if it can't make a change, as the `reference-transaction`
+hook, which runs, can say too; after a GitError, the transaction takes nothing more. A value
+that's empty or holds a NUL raises ValueError, as git would read it differently.
+`deref=False` changes a symbolic ref itself, not the ref it points to. A `FakeGit` can't start
+it.
+
+Each step (start, `prepare`, `commit`, `abort`) has `timeout` seconds (the client's unless
+given) for git to answer, past which git is stopped and `GitTimeoutError` raised. Stopping git
+aborts what it hasn't committed, with two exceptions. On Windows, stopping git kills it, so a
+transaction it had prepared leaves its refs' lock files (`<ref>.lock` in the git directory):
+every later change to those refs fails until they're removed (elsewhere git removes them as it
+stops). And stopped while committing, git may have made some changes and not others.
 
 ### Status and worktrees
 

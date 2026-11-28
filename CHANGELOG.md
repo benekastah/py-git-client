@@ -127,6 +127,37 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `ref_transaction(git, *, message=None, deref=True, timeout=...)`, for a `with` block: a
+  `RefTransaction` over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify`
+  changes git checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
+  (`abort()`, or the block's end) them. git-stack replaces its hand-built `start`, changes,
+  `prepare`, `commit`/`abort` input (`git_stack/git.py:314`, called from `integrations.py:1017`)
+  with it, `deref=False` for its `option no-deref`, and can now decide after `prepare` rather
+  than before. A step that runs past `timeout` stops git: on Windows that kills it, leaving a
+  prepared transaction's lock files behind, and on any system a commit stopped partway may have
+  made only some of its changes (see the README).
+- Typed branch writes, each one `git branch` on a `Git`, names after `--end-of-options`:
+  `delete_branches(git, names, *, force=False)` deletes many with one `git branch
+  --delete`/`-D` (and their config), each git can, and returns `DeletedBranches` (each
+  deleted branch's full id, git's exit status, and its reasons for the others), raising only
+  for a failure not of one branch; `create_branch(git, name, start_point=None, *, force=False,
+  track=None)` (`track`: True, False, "inherit", or None for git's config);
+  `rename_branch(git, old, new, *, force=False)`; and `set_upstream(git, branch, upstream)`,
+  None to remove it. `valid_branch_name(git, name)` (a read) asks `git check-ref-format
+  --branch`, and says no to a name git expands (`@{-1}`). git-stack replaces `branch --quiet
+  --delete --force` (`git_stack/core.py:1239`), `branch --quiet --track` (`stack.py:754`,
+  `777`, `780`; `track=True`), `--no-track` (`stack.py:1016`; `track=False`), `--move`
+  (`stack.py:934`), `--set-upstream-to=` (`stack.py:760`, `3457`), `--unset-upstream`
+  (`stack.py:947`), and its two `check-ref-format` runs (`stack.py:1403`) with one
+  `valid_branch_name`; move-forward replaces `branch -D`
+  (`src/move_forward/plugins/git/actions.py:104`, `127`) and its one `branch -D` per line
+  (`actions.py:195`) with one `delete_branches(..., force=True)` per repository, reporting
+  each name not in `deleted` as failed, with `stderr`. Unlike `git.run`, `delete_branches`
+  doesn't raise when a branch isn't deleted: git-stack's untrack (`core.py:1239`) checks
+  `branch in result.deleted` before saving its state. move-forward passes each name once: a
+  name given twice makes git delete none of that repository's branches (its loop deleted the
+  first and reported the second as failed); and its per-name failure text becomes git's
+  `stderr` for all of them, as git's reasons aren't one per name.
 - Porcelain writes, one git each, typed: `switch(git, target, *, detach, create,
   start_point, track, force, quiet)`, `reset(git, commit=None, *, mode, quiet)`, `merge(git,
   commit, *, ff, message, edit, quiet)`, `cherry_pick(git, *commits, ff, record_origin,
