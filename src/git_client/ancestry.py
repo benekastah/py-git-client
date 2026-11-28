@@ -104,5 +104,8 @@ def fork_point(
     ("refs/heads/main", or a name git expands to one): one that names no ref (an object id
     too) raises UnknownRevisionError, and one that names no commit (an annotated tag with no
     reflog) GitError. Raises as `is_ancestor` does for `commit`, but for a full id the
-    repository lacks, of which git says nothing, as when it finds no fork point: None."""
+    repository lacks, of which git says nothing, as when it finds no fork point: None. An error
+    git reports as it reads upstream's reflog (e.g. an entry whose commit is missing, or is a
+    tree) raises when git finds no fork point, as git then says it failed, though not when it
+    finds one, as git then answers."""
     return _one(*_merge_base(git, "--fork-point", revisions=(upstream, commit), timeout=timeout))
