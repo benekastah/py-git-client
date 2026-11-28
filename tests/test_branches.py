@@ -159,6 +159,18 @@ def test_rename_branch_refuses_an_existing_name_unless_forced(branches: Git) -> 
     assert tip(branches, "merged") == ahead and tip(branches, "ahead") is None
 
 
+def test_rename_branch_and_set_upstream_read_names_as_names(branches: Git) -> None:
+    # A ref no branch command would make, which read as an option is an unknown one.
+    branches.run("update-ref", "refs/heads/-x", "main")
+
+    set_upstream(branches, "-x", "origin/topic")
+    assert upstream(branches, "-x") == ["origin", "refs/heads/topic"]
+    set_upstream(branches, "-x", None)
+    assert upstream(branches, "-x") == ["", ""]
+    rename_branch(branches, "-x", "renamed")
+    assert tip(branches, "renamed") == tip(branches, "main") and tip(branches, "-x") is None
+
+
 def test_set_upstream_and_unset_it(branches: Git, git_calls: list[GitCall]) -> None:
     set_upstream(branches, "merged", "origin/topic")
     assert upstream(branches, "merged") == ["origin", "refs/heads/topic"]

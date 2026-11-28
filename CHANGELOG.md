@@ -150,7 +150,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `valid_branch_name`; move-forward replaces `branch -D`
   (`src/move_forward/plugins/git/actions.py:104`, `127`) and its one `branch -D` per line
   (`actions.py:195`) with one `delete_branches(..., force=True)` per repository, reporting
-  each name not in `deleted` as failed, with `stderr`.
+  each name not in `deleted` as failed, with `stderr`. Unlike `git.run`, `delete_branches`
+  doesn't raise when a branch isn't deleted: git-stack's untrack (`core.py:1239`) checks
+  `branch in result.deleted` before saving its state. move-forward passes each name once: a
+  name given twice makes git delete none of that repository's branches (its loop deleted the
+  first and reported the second as failed); and its per-name failure text becomes git's
+  `stderr` for all of them, as git's reasons aren't one per name.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git

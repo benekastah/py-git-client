@@ -59,6 +59,8 @@ def delete_branches(
     names = list(names)
     if not names:
         return DeletedBranches({}, 0, "")
+    # git refuses such a name as a branch's, but a ref file of that name (made by hand) is one
+    # it deletes, printing "Deleted branch a\nb (was broken)." across two lines.
     if any("\n" in name for name in names):
         raise ValueError(f"delete_branches can't take a name with a line ending: {names!r}")
     args = ("-c", "core.abbrev=no", "branch", "-D" if force else "--delete", "--end-of-options")
