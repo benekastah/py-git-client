@@ -31,12 +31,15 @@ class RefTransaction:
     def __init__(self, git: Git, args: tuple[str, ...], timeout: float | None) -> None:
         self._git, self._args, self._timeout = git, args, timeout
         self._changes: list[bytes] = []
-        self._closed = False
+        self._started = self._closed = False
 
     def __enter__(self) -> Self:
         """Start git, and the transaction. A transaction starts once: ValueError after."""
         if self._closed:
             raise ValueError("the ref transaction is closed")
+        if self._started:
+            raise ValueError("the ref transaction has started already")
+        self._started = True
         import tempfile  # here: at the top, it slows every tool's start
 
         # git's stderr, which nothing reads until it exits, goes to a file: a pipe could fill.

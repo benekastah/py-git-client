@@ -157,6 +157,19 @@ def test_a_closed_transaction_takes_nothing_more(refs: Git, git_calls: list[GitC
     assert [call[0] for call in git_calls] == ["update-ref"] * 2  # not a third for the last
 
 
+def test_a_transaction_starts_once(refs: Git, git_calls: list[GitCall]) -> None:
+    a = tip(refs, "a")
+    b = tip(refs, "b")
+    assert a is not None and b is not None
+    with ref_transaction(refs) as transaction:
+        with pytest.raises(ValueError, match="started"), transaction:
+            pass
+        transaction.update("refs/heads/a", b)  # still its own: the inner block didn't end it
+        transaction.commit()
+    assert tip(refs, "a") == b
+    assert [call[0] for call in git_calls if call[0] == "update-ref"] == ["update-ref"]
+
+
 @pytest.mark.usefixtures("outside_any_repository")
 def test_raises_as_git_fails_to_start_it() -> None:
     with pytest.raises(NotARepositoryError), ref_transaction(Git(".")):
