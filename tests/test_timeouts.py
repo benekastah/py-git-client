@@ -364,6 +364,48 @@ def test_a_timeout_stops_git_when_taskkill_cant_run(
     assert time.monotonic() - started < 3.5
 
 
+SLOW_CLEANUP = """\
+import pathlib, signal, sys, time
+started, cleaned = map(pathlib.Path, sys.argv[1:])
+def clean_up(*_):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # git passes the SIGINT on, too
+    time.sleep(1)
+    cleaned.touch()
+    sys.exit(130)
+signal.signal(signal.SIGINT, clean_up)
+started.touch()
+time.sleep(10)
+"""
+
+
+@NO_INTERRUPT_TEST_ON_WINDOWS
+def test_an_interrupted_git_has_a_second_or_more_to_clean_up(repo: Git, tmp_path: Path) -> None:
+    # On a busy machine git can take that long to remove its lock files and exit. Here it waits
+    # for an alias's command, as git does on SIGINT, which takes a second to clean up. The
+    # alias names a script on PATH, which git runs without a shell, and which execs Python: so
+    # git's child is the command itself.
+    (tmp_path / "slow.py").write_text(SLOW_CLEANUP, encoding="utf-8")
+    paths = (Path(sys.executable), tmp_path / "slow.py", tmp_path / "started", tmp_path / "cleaned")
+    script = tmp_path / "slow-cleanup"
+    script.write_text(
+        "#!/bin/sh\nexec " + " ".join(f'"{path.as_posix()}"' for path in paths) + "\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    path = f"{tmp_path}{os.pathsep}{os.environ['PATH']}"
+    process = repo.popen("-c", "alias.slow=!slow-cleanup", "slow", env={"PATH": path})
+    deadline = time.monotonic() + 10
+    while not (tmp_path / "started").exists():
+        assert time.monotonic() < deadline, "the alias didn't start"
+        time.sleep(0.01)
+
+    with process:
+        _stop(process, False, interrupted=True)
+
+    assert process.returncode == -signal.SIGINT  # it exited as asked, rather than killed
+    assert (tmp_path / "cleaned").exists()
+
+
 def test_a_second_interrupt_while_git_cleans_up_still_kills_it(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:

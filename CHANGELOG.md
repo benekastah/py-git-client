@@ -301,9 +301,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever for
   a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch). It now
   closes the process's stdout too, and kills it if it hasn't exited within a second (#53).
-- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the Ctrl-C
-  it got too, and remove its lock files (e.g. index.lock), before git and what it started are
-  killed; a timeout still kills them at once (#52).
+- On Windows, an interrupt (e.g. Ctrl-C) gives git time to handle the Ctrl-C it got too, and
+  remove its lock files (e.g. index.lock), before git and what it started are killed; a
+  timeout still kills them at once (#52).
+- Git, asked to stop past its timeout or on an interrupt, has 5 seconds to exit before it's
+  killed, where it had a quarter of a second: on a busy machine git can take longer than that
+  to remove its lock files, and was killed first, leaving index.lock behind. Stopping waits
+  only until git exits, usually within milliseconds; the 5 seconds are spent only on a git
+  that doesn't exit when asked (e.g. waiting for an editor), and a second interrupt still
+  kills it at once.
 - A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git (and
   its group or tree) at once, where it skipped the kill and left them running (#52).
 
