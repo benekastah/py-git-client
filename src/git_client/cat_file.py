@@ -414,8 +414,7 @@ def _empty(stderr: IO[bytes]) -> None:
 def _said(stderr: IO[bytes]) -> str:
     """What cat-file wrote to its stderr file since it was last emptied."""
     stderr.seek(0)
-    # Only ASCII space is git's: a ref name can end in what str.strip() takes (e.g. U+2028).
-    return decode(stderr.read()).strip(" \t\r\n")
+    return decode(stderr.read()).strip()
 
 
 def _lines(said: str) -> tuple[str, ...]:
