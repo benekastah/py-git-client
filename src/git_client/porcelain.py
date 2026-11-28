@@ -329,7 +329,9 @@ def rebase(
     A conflict stops the rebase, the rest left for the user: see `merge` for the ConflictError
     that raises, and for `inherit_output`, `stdout` and what else is raised. With
     `inherit_output`, a rebase refused because the index already has unmerged paths (exit
-    status 1 too) raises ConflictError as well. Hooks run: pre-rebase (whose refusal raises
+    status 1 too) raises ConflictError as well, and a conflict `rerere.autoUpdate` resolved
+    and staged (the rebase still stops, leaving no unmerged path) a plain GitError, where
+    captured output raises ConflictError. Hooks run: pre-rebase (whose refusal raises
     GitError), post-checkout, post-commit, post-rewrite."""
     for commit in stop_at:
         if not _FULL_ID.fullmatch(commit):
