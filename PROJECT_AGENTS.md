@@ -122,8 +122,9 @@ the shape of the code or a rule here changes.
 - **`ci.yml`'s time limits are this project's**, lower than the template's 5 minutes: static
   and coverage 1 minute, the tests 2 on Linux and macOS (about 15 to 40 seconds of tests) and 3
   on Windows, set by `matrix.os` in the tests job's `timeout-minutes`: there process starts
-  are slow, so its job takes 1.5 to 1.75 minutes (the tests 63 to 86 seconds, then checkout),
-  and a slow runner took 2.3, with no one slow test to fix (the slowest is 2 seconds on
+  are slow, so its job takes 1.5 to 1.75 minutes (the tests step 76 to 86 seconds, of
+  which pytest 63, plus checkout), and one run was cancelled at 2.3 minutes by the old limit,
+  with no one slow test to fix (the slowest is 2 seconds on
   Linux). Where an update changes one of those lines, keep this project's limit. `project.yml`'s
   `oldest-git` has 2 too: about a minute when it builds git, 15 seconds from its cache.
 - **`project.yml`'s `oldest-git` job runs the tests with git 2.36**, the oldest the README
