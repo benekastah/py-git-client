@@ -2,6 +2,7 @@
 
 import enum
 import re
+import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 
@@ -194,11 +195,31 @@ def push(
     done and accepted means an unlisted one failed, as `stderr` says. One Git can't reach
     (e.g. not a repository) stops the push: it and the push URLs after it have no report.
     """
+    result = git.process(
+        *push_arguments(
+            remote, updates, atomic=atomic, set_upstream=set_upstream, no_verify=no_verify
+        ),
+        capture_output=True,
+        env=env,
+        timeout=timeout,
+    )
+    return push_result(result)
+
+
+def push_arguments(
+    remote: str,
+    updates: Iterable[PushUpdate],
+    *,
+    atomic: bool = False,
+    set_upstream: bool = False,
+    no_verify: bool = False,
+) -> list[str]:
+    """git's arguments for `push` (see there): raises ValueError without an update."""
     updates = list(updates)
     if not updates:
         raise ValueError("push was given no updates")
     switches = {"--atomic": atomic, "--set-upstream": set_upstream, "--no-verify": no_verify}
-    result = git.process(
+    return [
         "-c",
         "core.abbrev=no",
         "push",
@@ -211,9 +232,10 @@ def push(
             f"{'+' if u.force else ''}{'' if u.source is None else u.source}:{u.target}"
             for u in updates
         ),
-        capture_output=True,
-        env=env,
-        timeout=timeout,
-    )
+    ]
+
+
+def push_result(result: subprocess.CompletedProcess[bytes]) -> PushResult:
+    """What a push (of `push_arguments`) did, from its finished process."""
     stdout = decode(result.stdout)
     return PushResult(result.returncode, stdout, decode(result.stderr), _destinations(stdout))

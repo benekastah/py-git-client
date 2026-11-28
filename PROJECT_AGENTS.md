@@ -8,8 +8,10 @@ the shape of the code or a rule here changes.
 
 - `src/git_client/client.py`: `ReadOnlyGit`, which offers only the library's reads (commands
   it fixes), `Git`, which extends it with the commands of the caller's (`run`, `process`,
-  ...), and `find_git`; `start_process` and `start_popen`, where every git process starts,
-  and `read_process`, `read_popen` and `read_output`, which the reads run through; and
+  ...), and `find_git`; `start_process`, `start_popen` and `start_later`, where every git
+  process starts, and `read_process`, `read_popen` and `read_output`, which the reads run
+  through; `Started`, a process started now (through the client's `_start`, into
+  `start_later`) and collected later, so a caller runs several at once in one thread; and
   `GitCache`, the opt-in repository metadata store shared across clients. When a cache is
   attached, `rev-parse` can gather uncached metadata alongside the requested values
   (`where_questions`, `read_where`, `ask_where`).
@@ -120,10 +122,11 @@ the shape of the code or a rule here changes.
   and `_popen`, which on a Git call its public `process` and `popen`, so a subclass's
   override sees every process). A function that runs a command it's given takes a Git.
 - **Every git process starts in `start_process`** (or `start_popen` for one that answers
-  requests), which `Git.process`, `Git.popen` and a ReadOnlyGit's reads call, so the way git
-  is started stays the quickest each system allows, a client whose `stopping` says so starts
-  nothing, and `git_calls` (which wraps both) sees every process (`FakeGit` replaces
-  `process` and `popen`, and asks `stopping` too). Launches close extra inheritable
+  requests, or `start_later` for one Started collects later), which `Git.process`,
+  `Git.popen`, the clients' `_start` and a ReadOnlyGit's reads call, so the way git is
+  started stays the quickest each system allows, a client whose `stopping` says so starts
+  nothing, and `git_calls` (which wraps all three) sees every process (`FakeGit` replaces
+  `process`, `popen` and `_start`, and asks `stopping` too). Launches close extra inheritable
   descriptors or handles. Never pass a working directory (`cwd=`): it keeps Python from
   using `posix_spawn`; use `-C`.
 - **Performance recording uses the launch boundary.** Count one Git process per successful

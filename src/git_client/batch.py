@@ -84,8 +84,17 @@ def config(git: ReadOnlyGit) -> dict[str, list[str | None]]:
     `"init.defaultBranch"`, which finds nothing, with no error; `branch.Topic.pushremote`
     keeps `Topic`. For a key a user typed, a tool runs `git config --get <key>` (one process),
     so git reads it and says what's wrong with it."""
+    return config_entries(read_output(git, *CONFIG_LIST))
+
+
+# What config() runs.
+CONFIG_LIST = ("config", "--list", "-z")
+
+
+def config_entries(output: bytes) -> dict[str, list[str | None]]:
+    """config()'s entries, from what `git config --list -z` printed."""
     entries: dict[str, list[str | None]] = {}
-    for entry in decode(read_output(git, "config", "--list", "-z")).split("\0"):
+    for entry in decode(output).split("\0"):
         if entry:
             # A key, then its value after a newline; a key with no value has no newline.
             key, newline, value = entry.partition("\n")
