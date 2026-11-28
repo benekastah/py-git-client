@@ -1,12 +1,22 @@
-"""What git says of a repository's worktrees: one's status, and the list of them."""
+"""What git says of a repository's worktrees (one's status, and the list of them), and adding
+and removing them."""
 
+import os
 from collections.abc import Iterator
 from dataclasses import KW_ONLY, dataclass
 from itertools import takewhile
 from pathlib import Path
 from typing import Literal
 
-from git_client.client import CLIENT_TIMEOUT, ReadOnlyGit, Timeout, decode, read_output
+from git_client.client import (
+    CLIENT_TIMEOUT,
+    Git,
+    ReadOnlyGit,
+    Timeout,
+    decode,
+    read_output,
+    stdout_of,
+)
 from git_client.errors import GitError
 from git_client.performance import record_read
 
@@ -240,3 +250,43 @@ def worktrees(git: ReadOnlyGit, *, timeout: Timeout = CLIENT_TIMEOUT) -> list[Wo
             )
             attributes = {}
     return found
+
+
+def add_worktree(
+    git: Git,
+    path: str | os.PathLike[str],
+    commit: str,
+    *,
+    detach: bool = False,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> None:
+    """Add a worktree at `path` (from the client's directory), with `commit` checked out:
+    a branch's name checks the branch out there (which git refuses if it's checked out in
+    another worktree), unless `detach`, which detaches HEAD at its commit, as any other
+    revision does. One `git worktree add`, which runs the post-checkout hook. Raises
+    UnknownRevisionError if `commit` names nothing, and GitError for what else git refuses
+    (e.g. a path that exists and isn't empty)."""
+    args = ("worktree", "add", *(["--detach"] if detach else []), "--", os.fsencode(path), commit)
+    stdout_of(args, git.process(*args, capture_output=True, timeout=timeout))
+
+
+def remove_worktree(
+    git: Git,
+    path: str | os.PathLike[str],
+    *,
+    force: bool = False,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> None:
+    """Remove the worktree at `path` (from the client's directory), its files and git's
+    record of it, with one `git worktree remove`. git refuses one with changes or untracked
+    files unless `force`, and a locked one, or the main one, either way: it then raises
+    GitError."""
+    args = ("worktree", "remove", *(["--force"] if force else []), "--", os.fsencode(path))
+    stdout_of(args, git.process(*args, capture_output=True, timeout=timeout))
+
+
+def prune_worktrees(git: Git, *, timeout: Timeout = CLIENT_TIMEOUT) -> None:
+    """Forget the worktrees git would prune (e.g. one whose directory is gone, unless it's
+    locked: see `Worktree.prunable`), with one `git worktree prune`."""
+    args = ("worktree", "prune")
+    stdout_of(args, git.process(*args, capture_output=True, timeout=timeout))

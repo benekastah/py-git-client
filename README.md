@@ -566,6 +566,20 @@ repository whose index is stale pays for that at each call. A `ReadOnlyGit`'s
 A `FakeGit` test responds to `["--no-optional-locks", "status", "--porcelain=v2", "-z"]` and
 to `["worktree", "list", "--porcelain", "-z"]` with git's output.
 
+`add_worktree`, `remove_worktree` and `prune_worktrees` are `git worktree`'s writes, one process
+each, which take a `Git`:
+
+```python
+git = Git("path/to/repo")
+# A path from the client's directory; a commit, or a branch, checked out there unless detach.
+add_worktree(git, "../scratch", "main", detach=True)  # git runs the post-checkout hook
+remove_worktree(git, "../scratch", force=True)  # even with changes (not if it's locked)
+prune_worktrees(git)  # forget those git would prune, e.g. whose directory is gone
+```
+
+Each raises `GitError` for what git refuses (`UnknownRevisionError` for a commit that names
+nothing), e.g. a branch checked out in another worktree, or changes without `force`.
+
 ### Caching
 
 By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`

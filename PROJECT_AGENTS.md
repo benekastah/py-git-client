@@ -34,7 +34,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git
   reported at each destination (`PushResult`, parsed from `--porcelain`).
 - `src/git_client/worktree.py`: `status`, a worktree's (`git status --porcelain=v2 -z`),
-  and `worktrees`, the repository's (`git worktree list --porcelain -z`).
+  and `worktrees`, the repository's (`git worktree list --porcelain -z`); `add_worktree`,
+  `remove_worktree` and `prune_worktrees`, `git worktree`'s writes.
 - `src/git_client/remotes.py`: `fetch`, and what it did to each ref; `remote_refs` and
   `remote_urls`.
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes

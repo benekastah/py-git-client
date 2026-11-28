@@ -127,6 +127,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `add_worktree(git, path, commit, *, detach=False)`, `remove_worktree(git, path, *,
+  force=False)` and `prune_worktrees(git)`, `git worktree add`, `remove` and `prune`, one process
+  each. git-recommit replaces `worktree add --quiet --detach`, `worktree remove --force` and
+  `worktree prune` (`git_recommit/validate.py:35`, `50`, `52`; its `checkout --detach --force`
+  in the worktree, `:37`, waits for a typed `switch`), and git-stack `worktree remove [--force]`
+  and `worktree add --quiet --detach` (`git_stack/integrations.py:321`, `914`).
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
