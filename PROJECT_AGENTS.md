@@ -40,6 +40,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/branches.py`: `Git`'s typed branch writes, each one `git branch`
   (`delete_branches`, `create_branch`, `rename_branch`, `set_upstream`), and
   `valid_branch_name`, a `git check-ref-format --branch`.
+- `src/git_client/transaction.py`: `ref_transaction`, a `RefTransaction` over one long-lived
+  `git update-ref --stdin` (reading its replies with `cat_file.Output`).
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'

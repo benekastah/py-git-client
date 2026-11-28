@@ -493,12 +493,13 @@ _CHUNK = 65536
 
 
 class Output:
-    """A CatFile's process's stdout, read until a deadline (from time.monotonic(), or None
-    for none), past which a read raises PastDeadline. Off Windows, it waits with poll. On
-    Windows, which can't poll a pipe, a thread of its own reads the pipe, and a read waits
-    for what it passes on: a read that waits on the pipe itself can't be stopped. Either
-    way, a request isn't kept waiting by what holds the pipe open once its process is killed
-    (e.g. the `git fetch` of a lazy fetch in a partial clone)."""
+    """A long-lived process's stdout (a CatFile's, or a RefTransaction's), read until a
+    deadline (from time.monotonic(), or None for none), past which a read raises
+    PastDeadline. Off Windows, it waits with poll. On Windows, which can't poll a pipe, a
+    thread of its own reads the pipe, and a read waits for what it passes on: a read that
+    waits on the pipe itself can't be stopped. Either way, a request isn't kept waiting by
+    what holds the pipe open once its process is killed (e.g. the `git fetch` of a lazy
+    fetch in a partial clone)."""
 
     def __init__(self, pipe: IO[bytes]) -> None:
         self._pipe = pipe

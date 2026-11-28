@@ -15,7 +15,8 @@ what git-stack, git-recommit and move-forward share for that:
   their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`; `ref_transaction` to
+  prepare them, then commit or abort).
 - **Remotes**: a fetch, and what it did to each ref (`fetch`), the refs a remote has
   (`remote_refs`), and the URLs git fetches it from and pushes it to (`remote_urls`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
@@ -567,6 +568,34 @@ test responds to `["-c", "core.abbrev=no", "branch"]` for `delete_branches`, wit
 `Deleted branch <name> (was <id>).` for each branch deleted, to `["branch"]` for the other
 writes, and to `["check-ref-format", "--branch"]` with the name and exit status 0, or 128 for
 no.
+
+### Ref transactions
+
+`update_refs` makes its changes, or none, at once. `ref_transaction` lets a tool decide
+between git checking them and git making them, over one `git update-ref --stdin`:
+
+```python
+from git_client import Git, ref_transaction
+
+git = Git("path/to/repo")
+main, a = git.run("rev-parse", "main"), git.run("rev-parse", "a")
+with ref_transaction(git, message="publish") as transaction:  # message: for the reflogs
+    transaction.update("refs/heads/a", main, a)  # to main, only if a is still at a
+    transaction.verify("refs/heads/b", main)  # changes nothing, but only if b is at main
+    transaction.verify("refs/heads/c", None)  # only if there's no c
+    transaction.delete("refs/heads/old")  # wherever it is
+    transaction.prepare()  # git checks every change and locks its ref: GitError if it can't
+    ...  # nothing else can move those refs now: e.g. push, and commit only if that worked
+    transaction.commit()  # or abort(); a block that ends without either makes no change
+```
+
+An `old` of None, for `update` and `delete`, is anywhere, and all zeros nowhere (the ref must
+not exist yet). git checks refs and values (an object id, or any revision), and raises
+GitError at `prepare` or `commit` if it can't make a change, as the `reference-transaction`
+hook, which runs, can say too; after a GitError, the transaction takes nothing more. A value
+that's empty or holds a NUL raises ValueError, as git would read it differently.
+`deref=False` changes a symbolic ref itself, not the ref it points to. A `FakeGit` can't start
+it.
 
 ### Status and worktrees
 

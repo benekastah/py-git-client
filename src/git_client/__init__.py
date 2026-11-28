@@ -102,6 +102,7 @@ from git_client.remotes import (
     remote_refs,
     remote_urls,
 )
+from git_client.transaction import RefTransaction, ref_transaction
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -165,6 +166,7 @@ __all__ = [
     "PushUpdate",
     "ReadOnlyGit",
     "Ref",
+    "RefTransaction",
     "RefUpdate",
     "ReflogEntry",
     "RemoteError",
@@ -216,6 +218,7 @@ __all__ = [
     "patch_ids",
     "printable",
     "push",
+    "ref_transaction",
     "reflogs",
     "refs",
     "remote_refs",
