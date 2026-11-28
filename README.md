@@ -16,6 +16,8 @@ what git-stack, git-recommit and move-forward share for that:
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
   (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+- **Remotes**: a fetch, and what it did to each ref (`fetch`), the refs a remote has
+  (`remote_refs`), and the URLs git fetches it from and pushes it to (`remote_urls`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
   through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
@@ -451,6 +453,78 @@ and the push URLs after it have no report. Git's push config still applies (e.g.
 ...) aren't supported. `push` runs `git -c core.abbrev=no push --porcelain [options] --
 <remote> <refspecs>`, so a `FakeGit` test responds to `["-c", "core.abbrev=no", "push",
 "--porcelain"]` with porcelain output.
+
+### Remotes
+
+`fetch` fetches with one `git fetch`, and reads what it did to each ref, even when some
+failed:
+
+```python
+git = Git("path/to/repo")
+result = fetch(
+    git,
+    "origin",  # a remote's name, a URL, or a path ("." for this repository)
+    [
+        # origin's main into origin/main, only if that's a fast-forward.
+        FetchRefspec("refs/heads/main", "refs/remotes/origin/main"),
+        FetchRefspec("refs/heads/a", "refs/heads/a", force=True),  # even if it isn't
+        FetchRefspec("refs/heads/b"),  # into FETCH_HEAD only
+    ],  # none: the remote's configured refspecs
+    prune=True,  # delete remote-tracking refs origin no longer has
+    tags=False,  # no tags (True: every tag; None, the default: as the config says)
+)  # also write_fetch_head=False
+result.returncode  # 1 if a ref was rejected, the others fetched; 128 if nothing was
+for ref in result.refs or ():  # None before git 2.41
+    ref.ref, ref.status  # e.g. "refs/heads/a", FetchStatus.FORCED; "FETCH_HEAD", NEW
+    ref.old_oid, ref.new_oid  # full object ids, or None for none (new, or pruned)
+```
+
+A `FetchRefspec` whose source is empty, starts with `+` or `^`, or holds a `:`, or whose
+destination is `""`, raises ValueError: only `force` forces, and only None leaves out the
+destination. Fetching from a remote's name, git also updates (and reports) the
+remote-tracking refs its config maps what's fetched to. `fetch` runs `git fetch --porcelain
+[options] -- <remote> <refspecs>`, so a `FakeGit` test responds to `["fetch", "--porcelain"]`
+with porcelain output; lines of other shapes (git prints some messages to stdout) are
+skipped. Git before 2.41 has no `--porcelain`: fetch runs again without it, and `refs` is None.
+A ref already up to date isn't in `refs` (git lists those only with `--verbose`). Its output
+is captured, so nothing shows while git fetches; with `--porcelain` git prints no summary
+(`From ...`, `[new branch]`), and older git's goes to `stderr`.
+
+`fetch` fetches no submodules, on any git: git takes no `--recurse-submodules` with
+`--porcelain`, so it ignores `fetch.recurseSubmodules` (whose default fetches the submodule
+commits a fetched superproject commit needs), and on older git `fetch` passes
+`--no-recurse-submodules` to match. A tool that wants them runs `git submodule update`, or
+fetches in each submodule.
+
+`remote_refs` asks a remote what refs it has, with one `git ls-remote` (a remote each), and
+raises GitError if git can't (e.g. it can't reach the remote):
+
+```python
+git = Git("path/to/repo")  # or a ReadOnlyGit
+found = remote_refs(git, "origin", symrefs=True)  # every ref, and where HEAD points
+found.refs  # {"HEAD": "<id>", "refs/heads/main": "<id>", ...}
+found.symrefs  # {"HEAD": "refs/heads/main"}
+# Branches that end with one of the patterns, at a "/" ("main" matches refs/heads/main).
+remote_refs(git, "origin", ["refs/heads/main", "refs/heads/gone"], heads=True).refs
+```
+
+`env` (e.g. a `GIT_CONFIG_COUNT` config change) is added to git's environment. A `FakeGit`
+test responds to `["ls-remote"]`.
+
+`remote_urls` gives the URLs git fetches a remote from, or pushes it to, as git rewrites them
+(`url.<base>.insteadOf`, and for pushes `pushInsteadOf`), from one `git remote get-url
+--all`:
+
+```python
+git = Git("path/to/repo")  # or a ReadOnlyGit
+remote_urls(git, "origin")  # e.g. ["git@github.com:me/repo.git"]
+remote_urls(git, "origin", push=True)  # each push URL: its pushurls, else its URLs
+```
+
+git prints a URL a line each, as it is, so one with a newline in it reads as two. A remote the
+repository's own config doesn't name raises GitError: git ignores one set only in the global or
+system config, by `-c` or by the environment (which `fetch` and `remote_refs` take). A
+`FakeGit` test responds to `["remote", "get-url"]`.
 
 ### Status and worktrees
 
