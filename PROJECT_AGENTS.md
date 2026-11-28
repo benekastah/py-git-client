@@ -37,6 +37,9 @@ the shape of the code or a rule here changes.
   and `worktrees`, the repository's (`git worktree list --porcelain -z`).
 - `src/git_client/remotes.py`: `fetch`, and what it did to each ref; `remote_refs` and
   `remote_urls`.
+- `src/git_client/branches.py`: `Git`'s typed branch writes, each one `git branch`
+  (`delete_branches`, `create_branch`, `rename_branch`, `set_upstream`), and
+  `valid_branch_name`, a `git check-ref-format --branch`.
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
