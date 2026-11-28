@@ -164,7 +164,7 @@ class PushRejectedError(GitError):
 
 
 class ConflictError(GitError):
-    """A rebase, merge or cherry-pick stopped on a conflict."""
+    """A rebase, merge, cherry-pick or revert stopped on a conflict."""
 
 
 # What git says (on stderr, but for a conflict: on stdout) for each failure, in the order
