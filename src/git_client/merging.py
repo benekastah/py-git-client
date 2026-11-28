@@ -87,10 +87,10 @@ class MergeResult:
 def merge_trees(git: Git, pairs: Sequence[tuple[str, str] | Merge]) -> list[MergeResult]:
     """Merge each pair of commits (ours, theirs), given by their full object ids, as `git
     merge-tree --write-tree <ours> <theirs>` does, or each Merge (which can give a merge base),
-    and give a MergeResult for each, in order:
-    with one `git merge-tree --stdin` for them all, so many pairs cost one process. It takes a
-    Git, not a ReadOnlyGit, as merge-tree writes the merged trees and blobs to the object
-    database (no ref points to them, so `git gc` removes them in time).
+    and give a MergeResult for each, in order, with one `git merge-tree --stdin` for them all,
+    so many pairs cost one process. It takes a Git, not a ReadOnlyGit, as merge-tree writes the
+    merged trees and blobs to the object database (no ref points to them, so `git gc` removes
+    them in time).
 
     A pair git can't merge gets a MergeResult whose `clean` is None and whose `error` says why:
     an UnknownRevisionError for an id that names no commit the repository has, a
@@ -102,10 +102,12 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str] | Merge]) -> list[Merg
     NotARepositoryError, no room to write objects, or MissingObjectError, for an object a
     partial clone couldn't fetch, as each pair after it would wait to fail the same way.
 
-    With a base, git doesn't check that ours and theirs share history. From git 2.45, an id it
-    can't read as a tree (e.g. one that names nothing) then gets a GitError; before, git stops
-    at an id that names no commit with a GitError that is raised, as it isn't known to be about
-    the merge.
+    With a base, git doesn't check that ours and theirs share history, and ours or theirs that
+    names nothing gets an UnknownRevisionError, as for a pair. From git 2.45, any of the three
+    can be a tree, and a base git can't read as a tree (e.g. one that names nothing) gets a
+    GitError of its own. Before 2.45, a base that is a tree gets a WrongTypeError, but one that
+    names nothing stops git (`could not lookup commit`), which is raised, losing the other
+    merges' results too.
 
     Raises ValueError, starting no git, for a pair or Merge that isn't full object ids: names
     (a branch, `HEAD`) aren't taken, so nothing given can be read as an option or as more than

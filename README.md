@@ -175,7 +175,8 @@ from git_client import Git, Merge, merge_trees, refs
 # A Merge gives the merge base (pairs and Merges mix, still in one git). Cherry-picking a
 # commit onto a is merging it into a with its parent as the base: Merge(a, commit,
 # base=<its parent>). Here, b's changes since main, onto a. From git 2.45, all three can be
-# trees.
+# trees. merge-ort's result can differ from `git apply --3way` of `git show`'s patch: it finds
+# renames, and for a merge commit brings in its second parent's changes.
 git = Git("path/to/repo")
 heads = refs(git, "refs/heads/")
 a, b, main = (heads[f"refs/heads/{name}"].object for name in ("a", "b", "main"))
