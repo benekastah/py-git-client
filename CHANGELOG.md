@@ -144,8 +144,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   in the worktree, `:37`, waits for a typed `switch`), and git-stack `worktree remove [--force]`
   and `worktree add --quiet --detach` (`git_stack/integrations.py:321`, `914`). If the
   post-checkout hook fails, `add_worktree` raises `GitError` though git added the worktree:
-  git-stack's `integrations.py:914`, which then reopens a cached worktree it finds at that path,
-  removes it on that error (`remove_worktree(..., force=True)`).
+  git-stack (`integrations.py:914`) raises and leaves it for its next call to reopen as cached;
+  a tool that doesn't want it calls `remove_worktree(..., force=True)`.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git

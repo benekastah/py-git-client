@@ -45,7 +45,8 @@ def run_hook(
     inherits: a git command the hook runs prints English.
 
     Without a hook of that name, it returns success, as git does, unless `ignore_missing` is
-    False: then it raises GitError. It raises GitError too where git refuses the name rather
+    False: then it raises GitError (as it does for a hook whose first words, after any
+    `hint:` lines, are git's refusal). It raises GitError too where git refuses the name rather
     than run a hook (newer git refuses a name it doesn't know as a hook unless given
     `--allow-unknown-hook-name`). git's other failures (e.g. outside a repository, where 2.36
     exits 128) are returned as a hook's would be: their exit status can't be told from one.
