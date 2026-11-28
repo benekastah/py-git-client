@@ -434,9 +434,13 @@ def test_a_second_interrupt_while_git_cleans_up_kills_it_at_once(
     second = threading.Timer(0.2, interrupt_main_thread)
     started = time.monotonic()
 
-    with process, pytest.raises(KeyboardInterrupt):
-        second.start()
-        _stop(process, False, interrupted=True)
+    try:
+        with process, pytest.raises(KeyboardInterrupt):
+            second.start()
+            _stop(process, False, interrupted=True)
+    finally:
+        second.cancel()  # Else, if _stop returned first, its SIGINT would hit the next test.
+        second.join()
 
     assert time.monotonic() - started < 2  # not the grace's 5 seconds
     assert killed
