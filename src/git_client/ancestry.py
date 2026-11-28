@@ -1,26 +1,31 @@
 """How commits are related, as `git merge-base` answers: whether one is an ancestor of another,
 their merge bases, which of many no other reaches, and where a branch forked from a ref."""
 
+import re
+
 from git_client.client import CLIENT_TIMEOUT, ReadOnlyGit, Timeout, decode, error_from, read_process
 from git_client.errors import GitError
 from git_client.performance import record_read
 
 # merge-base's exit status for a no: not an ancestor, or no merge base or fork point found.
 _NO = 1
+# What git says as it fails, which --fork-point does with exit 1 too (e.g. of a tree): then it's
+# no answer.
+_ERROR = re.compile(r"^error: ", re.MULTILINE)
 
 
 def _merge_base(
     git: ReadOnlyGit, *options: str, revisions: tuple[str, ...], timeout: Timeout
 ) -> tuple[tuple[str, ...], list[str] | None]:
     """git's arguments for `git merge-base <options> <revisions>`, and the lines it printed, or
-    None for its no (exit 1)."""
+    None for its no (exit 1, with no error said)."""
     for name in revisions:
         # Which no argument can hold (Python would refuse it as git starts).
         if "\0" in name:
             raise ValueError(f"not a revision: {name!r}")
     args = ("merge-base", *options, "--end-of-options", *revisions)
     result = read_process(git, *args, capture_output=True, timeout=timeout)
-    if result.returncode == _NO:
+    if result.returncode == _NO and not _ERROR.search(decode(result.stderr)):
         return args, None
     if result.returncode != 0:
         raise error_from(args, result)
@@ -97,5 +102,7 @@ def fork_point(
     looks in upstream's reflog too, for a commit upstream once pointed at, before it was
     rewritten, that the history of `commit` was built on. `upstream` is a ref
     ("refs/heads/main", or a name git expands to one): one that names no ref (an object id
-    too) raises UnknownRevisionError. Raises as `is_ancestor` does for `commit`."""
+    too) raises UnknownRevisionError, and one that names no commit (an annotated tag with no
+    reflog) GitError. Raises as `is_ancestor` does for `commit`, but for a full id the
+    repository lacks, of which git says nothing, as when it finds no fork point: None."""
     return _one(*_merge_base(git, "--fork-point", revisions=(upstream, commit), timeout=timeout))

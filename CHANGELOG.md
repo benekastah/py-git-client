@@ -145,8 +145,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `core.py:723`), `--independent` (`stack.py:4005`) and `--fork-point` (`stack.py:567`). A
   tool whose wrapper answered False or "" for a name that names nothing (git-recommit's
   `succeeds`, git-stack's `check=False`) catches `UnknownRevisionError` where it relied on
-  that. git-stack's `core.py:723` and `check_ancestry`, which pass `env=` for one call, use a
-  client made with that `env`.
+  that. `fork_point` gives None for a full id the repository lacks, of which git says
+  nothing. A command that says only `error: object <id> is a <type>, not a <type>` (as
+  `--fork-point` does, exiting 1) raises `WrongTypeError` too. git-stack's `core.py:723` and
+  `check_ancestry`, which pass `env=` for one call, use a client made with that `env`.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,

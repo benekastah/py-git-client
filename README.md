@@ -302,6 +302,8 @@ Each runs one `git merge-base`, so `is_ancestor` takes one process a pair: git h
 many pairs (to test many refs against one commit, `refs(git, merged=...)` asks once).
 `independent` takes as many commits as fit on a command line. A name that names nothing
 raises `UnknownRevisionError`, and one that names no commit (e.g. a tree) `WrongTypeError`.
+`fork_point` gives None for a full id the repository lacks, as git says nothing of it, as when
+it finds no fork point.
 In a `FakeGit` test, respond to `["merge-base", "--is-ancestor"]` (or `--all`,
 `--independent`, `--fork-point`; `["merge-base", "--end-of-options"]` for `merge_base`) with
 exit status 0 and the ids, one a line, or 1 for git's no.

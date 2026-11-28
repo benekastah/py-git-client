@@ -340,4 +340,6 @@ def error_for(stderr: str, stdout: str, *, command: object) -> type[GitError]:
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
                 return WrongTypeError  # it names something
             return error
+    if WRONG_TYPE.search(stderr):  # alone, as merge-base --fork-point says it
+        return WrongTypeError
     return GitError

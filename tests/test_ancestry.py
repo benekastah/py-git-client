@@ -123,6 +123,18 @@ def test_a_tree_is_no_commit(graph: Git) -> None:
         is_ancestor(graph, "main^{tree}", "a")
 
 
+def test_fork_point_raises_where_git_says_it_failed_though_it_exits_1(graph: Git) -> None:
+    # Where --fork-point exits 1, its no, but prints an error: a commit that's a tree or a
+    # blob, and an upstream that's an annotated tag with no reflog (no commit, as it reads it).
+    blob = graph.run("hash-object", "-w", "--stdin", input="x\n")
+    graph.run("tag", "-a", "-m", "t", "tg", "main")
+    for commit in ("main^{tree}", blob):
+        with pytest.raises(WrongTypeError):
+            fork_point(graph, "up", commit)
+    with pytest.raises(GitError, match="not a commit"):
+        fork_point(graph, "tg", "a")
+
+
 def test_a_name_starting_with_a_dash_is_a_revision(graph: Git) -> None:
     graph.run("update-ref", "refs/heads/-x", "a")
 
