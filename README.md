@@ -445,14 +445,22 @@ update_refs(git, [RefUpdate("refs/heads/new", commit)])  # putting it on a branc
 
 They run no hook and change no index or ref (building trees on a temporary index runs the
 `post-index-change` hook for each `read-tree`, `update-index` and `write-tree`). An identity
-given is set for that one process (`GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE`, a date of None
-being now), whole, whatever the environment says; one not given is git's. A date needs a time
-zone of whole minutes. commit-tree doesn't read `commit.gpgSign`: a tool that follows it reads
-it and passes `sign=True`. git checks that each tree entry's object exists (`missing=True`
-leaves that to the caller), and refuses a path with a "/"; a name given twice in one tree, an
-empty path, or a field git would read otherwise raises ValueError. A `FakeGit` test responds to
-`["mktree", "-z", "--batch"]` with an id on a line for each tree, and to `["commit-tree"]` with
-the commit's id and a newline.
+given is set for that one process (`GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE`), whole, whatever
+the environment says; one not given is git's. Its date is needed (for now,
+`datetime.now().astimezone()`), with a time zone of whole minutes, from 1970 on. A `Signature`
+from `commits()` carries git's date as printed (`raw_date`), which `write_commit` writes while
+`date` still describes it, so a commit read and written again keeps a date a datetime can't
+hold (e.g. past the year 9999). A str message is stored as UTF-8 and labeled so; bytes are
+labeled as `i18n.commitEncoding` says. commit-tree doesn't read `commit.gpgSign`: a tool that
+follows it reads it and passes `sign=True`.
+
+git checks that each tree entry's object exists and is of its mode's kind (`missing=True` leaves
+that to the caller), and refuses a path with a "/". Otherwise mktree writes what it's given: a
+name given twice, ".", "..", ".git" or a mode that isn't one of git's give a tree `git fsck`
+reports, which is git's check of trees. An empty path, or a field mktree's input can't hold,
+raises ValueError. A `FakeGit` test responds to `["mktree"]` with an id on a line for each
+tree, and to `["commit-tree"]` (for a str message, `["-c", "i18n.commitEncoding=UTF-8",
+"commit-tree"]`) with the commit's id and a newline.
 
 ### Push results
 

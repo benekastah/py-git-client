@@ -126,7 +126,9 @@ class WrongTypeError(GitError):
     ) -> None:
         super().__init__(args, returncode, stderr, stdout)
         said = WRONG_TYPE.search(stderr)
-        self.expected: str | None = None if said is None else said["expected"] or said["expected2"]
+        self.expected: str | None = (
+            None if said is None else said["expected"] or said["expected2"] or said["expected3"]
+        )
         self.found: str | None = None if said is None else said["found"] or said["found2"]
 
 
@@ -321,7 +323,9 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 WRONG_TYPE = re.compile(
     r"^error: object \S+ is a (?P<found>\w+), not an? (?P<expected>\w+)$"
     r"|^error: .*: expected (?P<expected2>\w+) type, but the object dereferences to"
-    r" (?P<found2>\w+) type$",
+    r" (?P<found2>\w+) type$"
+    # commit-tree's, of a tree or a parent (of a full id it lacks, it says "a valid object").
+    r"|^fatal: \S+ is not a valid '(?P<expected3>\w+)' object$",
     re.MULTILINE,
 )
 

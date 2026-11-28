@@ -126,17 +126,28 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `write_trees(git, trees, *, missing=False)` writes many trees, each a list of `TreeEntry`s
   (one name each, in any order), with one `git mktree -z --batch`, and `write_commit(git, tree,
   parents, message, *, author=None, committer=None, sign=False)` a commit with one `git
-  commit-tree` (git has no form that writes many), its identities typed (`Signature`) and set
-  for that one process, its message bytes (or a str, as UTF-8) stored as they are, `sign`
-  giving `-S` (True) or `-S<key>`. Neither runs a hook nor touches an index or ref.
-  git-recommit replaces its temporary-index route, `read-tree`, then `update-index -z
-  --index-info`, `write-tree` and `commit-tree -F -` with `GIT_AUTHOR_*` for each new commit
-  (`git_recommit/session.py:433-447`), with one `write_trees` for each depth of the trees of
-  all the new commits and one `write_commit` each: one process per commit, rather than three,
-  and no `post-index-change` hook. It also replaces `commit-tree` of each later commit
-  (`session.py:556`), `mktree` of no entries for the empty tree (`revisions.py:60`:
-  `write_trees(git, [[]])`), and `commit-tree -m` of its worktree commit (`revisions.py:151`;
-  its tree still comes from `add` on a copied index, `:147-150`).
+  commit-tree` (git has no form that writes many), its identities typed (`Signature`, its
+  date required) and set for that one process, its message bytes (or a str, as UTF-8)
+  stored as they are, `sign` giving `-S` (True) or `-S<key>`. Neither runs a hook nor touches
+  an index or ref. git-recommit replaces its temporary-index route, `read-tree`, then
+  `update-index -z --index-info`, `write-tree` and `commit-tree -F -` with `GIT_AUTHOR_*` for
+  each new commit (`git_recommit/session.py:433-447`), with one `write_trees` for each depth of
+  the trees of all the new commits and one `write_commit` each, and no `post-index-change`
+  hook. It then builds each rebuilt directory's entries, and the nesting, itself, reading the
+  base's entries for those directories (one `tree_entries(..., recursive=True)`, or one per
+  directory), where `read-tree` read them all into the index. It also replaces `commit-tree`
+  of each later commit (`session.py:556`: `author=` the `Signature` `commits()` read, whose
+  `raw_date` keeps the date as its `%ad --date=raw` copy does), `mktree` of no entries for the
+  empty tree (`revisions.py:60`: `write_trees(git, [[]])`), and `commit-tree -m` of its
+  worktree commit (`revisions.py:151`, whose tree still comes from `add` on a copied index,
+  `:147-150`): `-m` ends the message with a newline, which `write_commit` doesn't add, so it
+  passes `"Uncommitted changes\n"`.
+- `Signature.raw_date`: the date as git's `--date=raw` prints it, which `commits()` sets, and
+  `write_commit` writes, so a date a datetime can't hold (`date` None) survives a copy. `==`
+  leaves it out, and it defaults to None, so a tool's own `Signature(name, email, date)` is
+  unchanged.
+- A tree given where git wants a commit, or a commit where it wants a tree, in `commit-tree`
+  (`... is not a valid 'commit' object`) raises `WrongTypeError`, not a plain `GitError`.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
