@@ -1,8 +1,9 @@
 import functools
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -20,6 +21,28 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "needs_git(major, minor, patch=0, reason=...): skip the test with an older git",
     )
+
+
+def utf8_encodable(value: object) -> object:
+    """`value` (a test report, as pytest_report_to_serializable makes it) with each string's
+    characters UTF-8 can't encode (e.g. a lone surrogate, from os.fsdecode of a byte that
+    isn't UTF-8) escaped: xdist can't send a worker's report with one, and reports its
+    INTERNALERROR in place of the test's failure."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "backslashreplace").decode("utf-8")
+    if isinstance(value, dict):
+        items = cast(dict[object, object], value).items()
+        return {key: utf8_encodable(item) for key, item in items}
+    if isinstance(value, list):
+        return [utf8_encodable(item) for item in cast(list[object], value)]
+    if isinstance(value, tuple):
+        return tuple(utf8_encodable(item) for item in cast(tuple[object, ...], value))
+    return value
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_report_to_serializable(report: pytest.TestReport) -> Generator[None, object, object]:
+    return utf8_encodable((yield))
 
 
 @functools.cache
