@@ -808,7 +808,7 @@ class ReadOnlyGit:
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`, `cdup`
     and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`, `config`,
     `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-    `git_common_dir`, `commits`, `count`, `any_commit`, `is_ancestor`, `merge_base`,
+    `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `is_ancestor`, `merge_base`,
     `merge_bases`, `independent`, `fork_point`, `status`, `worktrees` and `CatFile`).
     It has no public way to run a command of the caller's (no `run`, `process` and the like),
     so a tool that only reads can show that it does by making one: what it doesn't offer, it
