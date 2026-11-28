@@ -4,6 +4,7 @@ text and paths to it as git expects them."""
 import contextlib
 import enum
 import functools
+import math
 import os
 import re
 import signal
@@ -549,9 +550,12 @@ class Started:
         if not isinstance(process, subprocess.Popen):
             return process
         if process.poll() is None:
-            remaining = None if self._deadline is None else self._deadline - time.monotonic()
+            remaining = math.inf if self._deadline is None else self._deadline - time.monotonic()
             try:
-                process.wait(None if remaining is None else max(remaining, 0))
+                # In short sleeps, as _stop waits, so Ctrl-C ends it at once on Windows too.
+                _wait_for_exit(process, remaining)
+                if process.poll() is None:
+                    raise subprocess.TimeoutExpired(process.args, remaining)
             except subprocess.TimeoutExpired:
                 _stop(process, self._own_group, interrupted=False)
                 raise GitTimeoutError(
