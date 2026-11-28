@@ -335,15 +335,17 @@ for count in counts:
 Both find renames, as `git diff` and `git log` do by default (so a rename is one path, its new
 one); `renames=False` gives a deletion and an addition, as diff-tree, git's plumbing, does by
 default. Past `diff.renameLimit`, git finds only exact renames, warning only on its stderr,
-which is dropped. Both also take `ignore_submodules=True`, to leave out submodules' changes,
-and `pathspecs`, git's pathspecs as a user types them (from the client's directory, with
-wildcards and magic). A file that becomes a symlink or a submodule, or the reverse, has status
-`T`; one that becomes a directory, or the reverse, is deleted and its new form added. No other
-diff config changes what git reports. A name that is empty or holds a newline, a carriage
-return or a NUL raises ValueError; one that names nothing, `UnknownRevisionError`; one that
-names what isn't a commit (in a pair, a tree), `WrongTypeError`. As they use a `CatFile`, a
-`FakeGit` can't answer them. Merges' combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and
-patches aren't supported.
+which is dropped. Both also take `ignore_submodules=True`, to leave out submodules' changes, and
+`pathspecs`, git's pathspecs as a user types them (from the client's directory, with wildcards
+and magic). A file that becomes a symlink or a submodule, or the reverse, has status `T`; one
+that becomes a directory, or the reverse, is deleted and its new form added. No other diff
+config changes what git reports. A name that is empty or holds a newline, a carriage return or a
+NUL raises ValueError; one that names nothing, `UnknownRevisionError`; one that names what isn't
+a commit (in a pair, a tree), `WrongTypeError`. As they use a `CatFile`, a `FakeGit` can't
+answer them (it raises `UnexpectedCommand`): a project tests the code that calls them on a real
+repository (e.g. one of the plugin's repository templates), and checks the processes it starts
+with `git_calls`. Merges' combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and patches aren't
+supported.
 
 `tree_entries` lists a tree's entries, from one `git ls-tree -z` (which takes one tree, so it's
 one process for each):
@@ -360,9 +362,8 @@ tree_entries(reader, "main", recursive=True)  # every file, in every directory (
 tree_entries(reader, "main", ["README.md", "src/"])
 ```
 
-A name that names nothing raises `UnknownRevisionError`, and one of a blob `WrongTypeError`.
-A `FakeGit` test responds to
-`["ls-tree", "-z", "--full-tree"]` with git's output.
+A name that names nothing raises `UnknownRevisionError`, and one of a blob `WrongTypeError`. A
+`FakeGit` test responds to `["ls-tree", "-z", "--full-tree"]` with git's output.
 
 ### Push results
 
@@ -480,7 +481,7 @@ A tool that only reads can show that it does with a `ReadOnlyGit`, which takes t
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
 `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-`git_common_dir`, `commits`, `count`, `any_commit`, `changed_paths`, `line_changes`,
+`git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `changed_paths`, `line_changes`,
 `tree_entries`, `status`, `worktrees` and `CatFile`. It has no public way to run a command of
 the caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`,
 which are `Git`'s. So it can't be asked to write: the library doesn't try to tell from a command
