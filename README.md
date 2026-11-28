@@ -584,7 +584,7 @@ except ConflictError:  # it stopped: resolved by the user, or given up with abor
     abort(git, "cherry-pick")  # or skip(git, "cherry-pick"): on to the next commit
 reset(git, "HEAD~1", mode="hard")  # or "soft", "mixed" (the default), "keep" or "merge"
 merge(git, "topic", ff="no", message="Merge topic")  # ff="only": fast-forward, or fail
-revert(git, "topic")  # with git's message; edit=True opens the editor on it
+revert(git, "topic")  # with git's message; edit=True (with inherit_output) opens the editor
 # git's input and output the tool's (its stdout to sys.stderr, here), for git to show its
 # progress and ask the user, as passthrough gives them: then nothing is captured.
 merge(git, "topic", inherit_output=True, stdout=sys.stderr)
@@ -594,17 +594,30 @@ Hooks run as they would from a shell (pre-commit, commit-msg, post-checkout, ...
 `commit(no_verify=True)` skips pre-commit and commit-msg. No editor opens unless asked
 (`merge` and `revert`'s `edit=True`), whatever git's default for a terminal; `commit` takes
 its message, or, amending, keeps the commit's. Without `inherit_output`, git reads nothing,
-so an editor gets no terminal.
+so `edit=True` raises ValueError: an editor given no terminal (e.g. vim) would wait for one,
+forever without a timeout.
+
+`switch` passes its arguments to git as they are, and git decides what they mean: a target
+that names no branch but a remote's (`origin/feat` for `"feat"`) makes git create that branch
+tracking it (`checkout.guess`), `track` without `create` creates a branch from the remote
+branch named, and `start_point` without `create`, or `detach` with it, are usage errors.
 
 A failure raises `GitError`, as `run` does, a hook's refusal too, and a conflict that stops
 a merge, cherry-pick or revert (git's exit status 1) raises `ConflictError`, the stopped
 operation left for the user or for `abort` and `skip`. With captured output, that's from
 what git says (a `CONFLICT (` line); with `inherit_output`, whose output the library doesn't
-see, from the exit status and unmerged paths in the index, asked with one more git after a
-failure, and every other failure is a plain `GitError` with no `stderr`. `reset`,
-`cherry_pick` and `revert` raise ValueError for a commit starting with `-`, which git 2.36
-reads as an option; `switch` and `merge` read it as a name (`--end-of-options`). A `FakeGit`
-test responds to the command's name (e.g. `["merge"]`). Not supported: `commit`'s author,
+see, from exit status 1 and unmerged paths in the index, asked with one more git after such
+a failure (`ls-files --unmerged -z -- :/`), and every other failure is a plain `GitError`
+with no `stderr`. So with `inherit_output`, a conflict `rerere.autoUpdate` resolved and staged
+(git still stops, but leaves no unmerged path) is a plain `GitError`, where captured output
+raises `ConflictError`. A stop that isn't a conflict (e.g. a cherry-picked commit that's
+become empty, or one stopped partway by an untracked file) is a plain `GitError` too, the
+operation still in progress. `reset`, `cherry_pick` and `revert` raise ValueError for a
+commit starting with `-`, which git 2.36 reads as an option; `switch` and `merge` read it as
+a name (`--end-of-options`). A `FakeGit` test responds to the command's name (e.g.
+`["merge"]`), and to an `inherit_output` stop of a merge, cherry-pick, revert or skip (exit
+status 1) also to `["ls-files", "--unmerged", "-z", "--", ":/"]`, whose stdout, empty or
+not, says whether it was a conflict. Not supported: `commit`'s author,
 committer, signing and paths, `reset`'s paths, `merge`'s `--squash` and several commits, and
 the operations' `--continue`.
 

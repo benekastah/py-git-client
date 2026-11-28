@@ -67,6 +67,13 @@ def _unmerged(git: Git, env: Mapping[str, EnvValue] | None, timeout: Timeout) ->
     return bool(result.stdout)
 
 
+def _refuse_edit(edit: bool, inherit_output: bool) -> None:
+    """Refuse an editor git would start with no terminal: a terminal editor (e.g. vim) would
+    wait for one, forever without a timeout."""
+    if edit and not inherit_output:
+        raise ValueError("edit opens the editor, which needs the terminal: give inherit_output")
+
+
 def _refuse_option(name: str, what: str) -> None:
     """Refuse a name git 2.36 reads as an option, even after `--end-of-options` (in reset,
     cherry-pick and revert)."""
@@ -103,7 +110,13 @@ def switch(
     `branch.autoSetupMerge` says. `force` throws away changes and untracked files in the way
     (`--discard-changes`); without, git refuses to lose them, or to overwrite an untracked file.
     `quiet` has git print nothing (`--quiet`). See `merge` for `inherit_output`, `stdout` and
-    what's raised. The post-checkout hook runs."""
+    what's raised. The post-checkout hook runs.
+
+    The arguments reach git as they are, which decides what they mean: given a `target` that
+    names no branch but a remote's (e.g. `origin/feat` for "feat"), git creates that branch
+    tracking it (`checkout.guess`, true by default); `track` without `create` has git create
+    a branch from the remote branch `target` (e.g. "feat" from "origin/feat"); and
+    `start_point` without `create`, or `detach` with it, are git usage errors (GitError)."""
     switches = {
         "--quiet": quiet,
         "--detach": detach,
@@ -167,8 +180,10 @@ def merge(
     or fails (`--ff-only`), "no" always makes a merge commit (`--no-ff`), and None does as
     `merge.ff` says. `message` is the merge commit's (`--message`); `edit` opens the editor on
     it (`--edit`), which without is never opened (`--no-edit`), whatever git's default for a
-    terminal (or `GIT_MERGE_AUTOEDIT`). `quiet` has git print nothing (`--quiet`). Hooks run:
-    pre-merge-commit, prepare-commit-msg, commit-msg, post-merge.
+    terminal (or `GIT_MERGE_AUTOEDIT`). `edit` needs `inherit_output` (ValueError without):
+    an editor given no terminal (e.g. vim) would wait for one, forever without a timeout.
+    `quiet` has git print nothing (`--quiet`). Hooks run: pre-merge-commit,
+    prepare-commit-msg, commit-msg, post-merge.
 
     Returns what git printed, captured; or, with `inherit_output`, nothing, git's input and
     output being the tool's (its stdout going to `stdout` if given), as `Git.passthrough`
@@ -179,10 +194,14 @@ def merge(
     resolve and commit, or `abort`) raises ConflictError: from what git says (a `CONFLICT (`
     line on stdout, in English: see `Git.process`), or, with `inherit_output`, whose output
     the library doesn't see, from git's exit status 1 and unmerged paths in the index, asked
-    with one more git (`ls-files --unmerged`) after a failure. Any other failure raises
+    with one more git (`ls-files --unmerged -z -- :/`) after a failure with exit status 1. So,
+    with `inherit_output`, a conflict that `rerere.autoUpdate` resolved and staged (git still
+    stops, exit status 1, leaving no unmerged path) raises a plain GitError, where captured
+    output raises ConflictError. Any other failure raises
     GitError, as `Git.run` does (e.g. UnknownRevisionError for a name that names nothing, or a
     plain GitError for a hook's refusal); with `inherit_output`, a plain GitError, its stderr
     empty (git printed it to the tool's)."""
+    _refuse_edit(edit, inherit_output)
     if message is not None and "\0" in message:
         raise ValueError("a message can't hold a NUL")
     switches = {
@@ -253,11 +272,12 @@ def revert(
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> CommandOutput:
     """Commit the reverse of each commit, in order, with one `git revert`, each with git's
-    message ("Revert ..."), which `edit` opens the editor on (`--edit`; without, never:
-    `--no-edit`). A conflict stops it, as for `cherry_pick`; see `merge` for that, and for
-    `inherit_output`, `stdout` and what's raised. Raises ValueError without a commit, and for
-    one starting with `-` (see `reset`)."""
+    message ("Revert ..."), which `edit` opens the editor on (`--edit`, which needs
+    `inherit_output`, as `merge`'s does; without, never: `--no-edit`). A conflict stops it, as
+    for `cherry_pick`; see `merge` for that, and for `inherit_output`, `stdout` and what's
+    raised. Raises ValueError without a commit, and for one starting with `-` (see `reset`)."""
     _refuse_options("revert", commits)
+    _refuse_edit(edit, inherit_output)
     args = ("revert", "--edit" if edit else "--no-edit", *commits)
     return _write(
         git,

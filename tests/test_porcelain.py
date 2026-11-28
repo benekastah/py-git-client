@@ -247,8 +247,22 @@ def test_merge_never_opens_an_editor_unless_asked(repo: Git, tmp_path: Path) -> 
     assert repo.run("log", "-1", "--format=%s") == "Merge branch 'c'"
 
     repo.run("reset", "--quiet", "--hard", "HEAD^")
-    merge(repo, "c", edit=True, env={"GIT_EDITOR": editor})
+    merge(
+        repo,
+        "c",
+        edit=True,
+        inherit_output=True,
+        stdout=subprocess.DEVNULL,
+        env={"GIT_EDITOR": editor},
+    )
     assert edited.exists()
+
+
+@pytest.mark.parametrize("write", [merge, revert])
+def test_edit_needs_inherit_output(repo: Git, write: Callable[..., CommandOutput]) -> None:
+    # Else a terminal editor (e.g. vim) would wait for a terminal, forever without a timeout.
+    with pytest.raises(ValueError, match="inherit_output"):
+        write(repo, "c", edit=True)
 
 
 def test_merge_conflict_raises_conflict_error(repo: Git) -> None:
@@ -378,7 +392,14 @@ def test_revert_makes_the_reverting_commit_without_an_editor(repo: Git, tmp_path
     assert repo.run("log", "-1", "--format=%s") == 'Revert "m"'
     assert text(repo, "a") == "a\n"
 
-    revert(repo, "HEAD", edit=True, env={"GIT_EDITOR": editor})
+    revert(
+        repo,
+        "HEAD",
+        edit=True,
+        inherit_output=True,
+        stdout=subprocess.DEVNULL,
+        env={"GIT_EDITOR": editor},
+    )
     assert edited.exists()
 
 
@@ -497,6 +518,19 @@ def test_inherited_conflict_raises_conflict_error(repo: Git) -> None:
     assert raised.value.stdout == raised.value.stderr == ""
 
 
+def test_inherited_skip_that_stops_at_the_next_conflict_raises_conflict_error(repo: Git) -> None:
+    repo.run("switch", "--quiet", "-c", "b2", "b")
+    (Path(repo.directory) / "a").write_bytes(b"b2\n")
+    repo.run("commit", "--quiet", "-am", "b2")
+    repo.run("switch", "--quiet", "main")
+    with pytest.raises(ConflictError):
+        cherry_pick(repo, "b", "b2", inherit_output=True, stdout=subprocess.DEVNULL)
+
+    with pytest.raises(ConflictError):
+        skip(repo, "cherry-pick", inherit_output=True, stdout=subprocess.DEVNULL)
+    assert repo.run("rev-parse", "CHERRY_PICK_HEAD") == repo.run("rev-parse", "b2")
+
+
 def test_inherited_stop_without_a_conflict_raises_git_error(repo: Git) -> None:
     hook(repo, "pre-merge-commit", "exit 1")
 
@@ -536,3 +570,12 @@ def test_fake_git_answers_a_write() -> None:
     with pytest.raises(ConflictError):
         merge(git, "b")
     assert git.commands == [["merge", "--no-edit", "--end-of-options", "b"]]
+
+
+def test_fake_git_answers_an_inherited_stop_with_the_unmerged_paths() -> None:
+    git = FakeGit()
+    git.respond(["cherry-pick"], returncode=1)
+    git.respond(["ls-files", "--unmerged", "-z", "--", ":/"], stdout="100644 x 1\ta\0")
+
+    with pytest.raises(ConflictError):
+        cherry_pick(git, "b", inherit_output=True)
