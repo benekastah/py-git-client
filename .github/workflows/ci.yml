@@ -117,7 +117,7 @@ jobs:
   tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    timeout-minutes: 2
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 3 || 2 }}  # this project's: see PROJECT_AGENTS.md
     strategy:
       fail-fast: false
       matrix:
