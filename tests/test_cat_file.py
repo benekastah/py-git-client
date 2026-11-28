@@ -147,6 +147,40 @@ def test_info_gives_what_git_warned_of_the_name(
     assert branch.warnings == ()
 
 
+# What str.splitlines() ends a line at, and str.strip() strips, besides ASCII: all fine in a ref
+# name.
+LINE_BREAKS = ["\x85", "\u2028", "\u2029"]
+
+
+@pytest.mark.parametrize("char", LINE_BREAKS)
+def test_info_keeps_a_warning_that_quotes_a_name_with_a_line_break_whole(
+    repo: Git, char: str
+) -> None:
+    name = f"a{char}b"
+    head = repo.run("rev-parse", "HEAD")
+    repo.run("update-ref", f"refs/heads/{name}", head)
+    repo.run("update-ref", f"refs/tags/{name}", head)
+
+    with CatFile(repo) as cat_file:
+        info = cat_file.info(name)
+
+    assert info is not None
+    assert info.warnings == (f"warning: refname '{name}' is ambiguous.",)
+
+
+@pytest.mark.parametrize("char", LINE_BREAKS)
+def test_verify_keeps_a_reason_that_quotes_a_name_with_a_line_break_whole(
+    repo: Git, char: str
+) -> None:
+    name = f"a{char}b"
+    repo.run("update-ref", f"refs/heads/{name}", repo.run("rev-parse", "HEAD"))
+
+    with CatFile(repo) as cat_file, pytest.raises(UnknownRevisionError) as raised:
+        cat_file.verify(f"{name}@{{u}}")
+
+    assert raised.value.reason == f"fatal: no upstream configured for branch '{name}'"
+
+
 def warn_as_git_starts(git: Git) -> None:
     """Set a config key git warns of as it starts, as deprecated."""
     git.run("config", "core.fsyncObjectFiles", "true")
@@ -350,7 +384,7 @@ def test_a_process_whose_setting_up_fails_is_stopped(
 
     with CatFile(git) as cat_file:
         with monkeypatch.context() as patched, pytest.raises(RuntimeError):
-            patched.setattr("git_client.cat_file._Output", cant_read)
+            patched.setattr("git_client.cat_file.Output", cant_read)
             cat_file.resolve("HEAD")
         assert git.started[0].wait(10) is not None
         assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
@@ -767,7 +801,7 @@ except OSError:
 def test_closing_stops_a_process_writing_what_nothing_reads(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 60)  # past which it would be killed
+    monkeypatch.setattr("git_client.cat_file.EXIT_WAIT", 60)  # past which it would be killed
     git = GitThatAnswersOnce(repo.directory, WRITES_ON)
     cat_file = CatFile(git)
     cat_file.resolve("HEAD")
@@ -780,7 +814,7 @@ def test_closing_stops_a_process_writing_what_nothing_reads(
 def test_closing_kills_a_process_that_doesnt_exit(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 0.01)
+    monkeypatch.setattr("git_client.cat_file.EXIT_WAIT", 0.01)
     git = GitThatAnswersOnce(repo.directory, "time.sleep(60)")
     cat_file = CatFile(git)
     cat_file.resolve("HEAD")
