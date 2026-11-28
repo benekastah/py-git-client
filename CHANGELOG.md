@@ -127,6 +127,16 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `run_hook(git, name, *args, ignore_missing=True, env=None)` runs a hook with one `git hook run`
+  (git 2.36), wherever git finds it, and returns a `HookResult` (exit status, stdout, stderr:
+  git sends a hook's stdout to stderr), raising `GitError` only where git ran no hook and said
+  why. git-recommit replaces its `process("hook", "run", "--ignore-missing", "commit-msg",
+  "--", path)` (`git_recommit/session.py:495-497`).
+- `stripspace(git, text, *, strip_comments=False, comment_char=None)`, one `git stripspace`,
+  which a `ReadOnlyGit` offers. git-recommit replaces its `run("-c",
+  "core.commentChar=...", "stripspace", ...)` (`git_recommit/editor.py:89`). It still chooses
+  the character for core.commentChar=auto in Python (`editor.py:62-65`): stripspace takes
+  `auto` as "#", and git has no command that chooses as `git commit` does.
 - `add_worktree(git, path, commit, *, detach=False)`, `remove_worktree(git, path, *,
   force=False)` and `prune_worktrees(git)`, `git worktree add`, `remove` and `prune`, one process
   each. git-recommit replaces `worktree add --quiet --detach`, `worktree remove --force` and

@@ -74,6 +74,7 @@ from git_client.history import (
     count,
     reflogs,
 )
+from git_client.hooks import HookResult, run_hook, stripspace
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
@@ -139,6 +140,7 @@ __all__ = [
     "GitError",
     "GitTimeoutError",
     "Head",
+    "HookResult",
     "Ignored",
     "LineChange",
     "Merge",
@@ -215,7 +217,9 @@ __all__ = [
     "remote_refs",
     "remote_urls",
     "remove_worktree",
+    "run_hook",
     "status",
+    "stripspace",
     "tree_entries",
     "update_refs",
     "worktrees",

@@ -580,6 +580,28 @@ prune_worktrees(git)  # forget those git would prune, e.g. whose directory is go
 Each raises `GitError` for what git refuses (`UnknownRevisionError` for a commit that names
 nothing), e.g. a branch checked out in another worktree, or changes without `force`.
 
+### Hooks and messages
+
+`run_hook` runs one of the repository's hooks with one `git hook run`, and `stripspace` cleans a
+message up as git does, with one `git stripspace`:
+
+```python
+git = Git("path/to/repo")
+# Wherever git finds it (core.hooksPath, ...); none: success, unless ignore_missing=False.
+result = run_hook(git, "commit-msg", "path/to/message", ignore_missing=True, env=None)
+result.returncode, result.stderr  # its answer and its output (git sends its stdout there too)
+stripspace(git.read_only(), "Subject  \n\n\n# a comment\n", strip_comments=True)  # "Subject\n"
+stripspace(git, "Subject\n; a comment\n", strip_comments=True, comment_char=";")
+```
+
+`run_hook` returns a hook's failure rather than raise: it's the hook's answer. It raises
+`GitError` when git runs no hook and says why: without one and `ignore_missing=False`, or for a
+name newer git doesn't know as a hook's. git's other failures (e.g. 2.36's outside a
+repository) come back as a result, as their exit status can't be told from a hook's. A
+`FakeGit` test responds to `["hook", "run"]`. `stripspace` takes the comment character from
+core.commentChar unless given one; for `auto`, it takes "#" (only `git commit` chooses one from
+the message). It reads nothing, so a `ReadOnlyGit` offers it.
+
 ### Caching
 
 By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`
@@ -612,7 +634,7 @@ takes precedence over cached data.
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
-`config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+`config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`, `stripspace`,
 `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `changed_paths`, `line_changes`,
 `tree_entries`, `status`, `worktrees` and `CatFile`. It has no public way to run a command of
 the caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`,
