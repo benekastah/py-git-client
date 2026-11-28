@@ -82,6 +82,7 @@ from git_client.history import (
     count,
     reflogs,
 )
+from git_client.hooks import HookResult, run_hook, stripspace
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.porcelain import (
@@ -125,6 +126,9 @@ from git_client.worktree import (
     Unmerged,
     Untracked,
     Worktree,
+    add_worktree,
+    prune_worktrees,
+    remove_worktree,
     status,
     worktrees,
 )
@@ -158,6 +162,7 @@ __all__ = [
     "GitError",
     "GitTimeoutError",
     "Head",
+    "HookResult",
     "Ignored",
     "LineChange",
     "Merge",
@@ -201,6 +206,7 @@ __all__ = [
     "Worktree",
     "WrongTypeError",
     "abort",
+    "add_worktree",
     "any_commit",
     "changed_paths",
     "cherry_pick",
@@ -233,18 +239,22 @@ __all__ = [
     "merge_trees",
     "patch_ids",
     "printable",
+    "prune_worktrees",
     "push",
     "ref_transaction",
     "reflogs",
     "refs",
     "remote_refs",
     "remote_urls",
+    "remove_worktree",
     "rename_branch",
     "reset",
     "revert",
+    "run_hook",
     "set_upstream",
     "skip",
     "status",
+    "stripspace",
     "switch",
     "tree_entries",
     "update_refs",

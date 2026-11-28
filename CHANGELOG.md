@@ -127,6 +127,25 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `run_hook(git, name, *args, ignore_missing=True, env=None)` runs a hook with one `git hook run`
+  (git 2.36), wherever git finds it, and returns a `HookResult` (exit status, and stderr, which
+  holds all the hook printed: git sends its stdout there), raising `GitError` only where git ran no
+  hook and said why. git-recommit replaces its `process("hook", "run", "--ignore-missing",
+  "commit-msg", "--", path)` (`git_recommit/session.py:495-497`).
+- `stripspace(git, text, *, strip_comments=False, comment_char=None)`, one `git stripspace`,
+  which a `ReadOnlyGit` offers. git-recommit replaces its `run("-c",
+  "core.commentChar=...", "stripspace", ...)` (`git_recommit/editor.py:89`). It still chooses
+  the character for core.commentChar=auto in Python (`editor.py:63-66`): stripspace takes
+  `auto` as "#", and git has no command that chooses as `git commit` does.
+- `add_worktree(git, path, commit, *, detach=False)`, `remove_worktree(git, path, *,
+  force=False)` and `prune_worktrees(git)`, `git worktree add`, `remove` and `prune`, one process
+  each. git-recommit replaces `worktree add --quiet --detach`, `worktree remove --force` and
+  `worktree prune` (`git_recommit/validate.py:35`, `50`, `52`; its `checkout --detach --force`
+  in the worktree, `:37`, waits for a typed `switch`), and git-stack `worktree remove [--force]`
+  and `worktree add --quiet --detach` (`git_stack/integrations.py:321`, `914`). If the
+  post-checkout hook fails, `add_worktree` raises `GitError` though git added the worktree:
+  git-stack (`integrations.py:914`) raises and leaves it for its next call to reopen as cached;
+  a tool that doesn't want it calls `remove_worktree(..., force=True)`.
 - `ref_transaction(git, *, message=None, deref=True, timeout=...)`, for a `with` block: a
   `RefTransaction` over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify`
   changes git checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
