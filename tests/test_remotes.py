@@ -1,10 +1,13 @@
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import git_client.remotes
 from git_client import (
+    Arg,
     FetchRef,
     FetchRefspec,
     FetchStatus,
@@ -198,13 +201,12 @@ OID = "a" * 40
     "stdout",
     [
         f"x {OID} {OID} refs/heads/a\n",  # a flag git doesn't document
-        f"* {OID} refs/heads/a\n",  # too few fields
-        f"* {OID} {OID} refs/heads/a b\n",  # too many
+        f"* {OID} {OID} refs/heads/a b\n",  # too many fields
         f"* {OID} {OID[1:]} refs/heads/a\n",  # not an object id
-        f"*{OID} {OID} refs/heads/a\n",
+        f"* {OID} {OID}\n",  # no ref
     ],
 )
-def test_output_git_never_gives_raises(stdout: str) -> None:
+def test_a_porcelain_line_git_never_gives_raises(stdout: str) -> None:
     git = FakeGit()
     git.respond(["fetch", "--porcelain"], stdout=stdout, stderr="what git said\n")
 
@@ -212,6 +214,116 @@ def test_output_git_never_gives_raises(stdout: str) -> None:
         fetch(git, "origin")
 
     assert raised.value.stderr == "what git said\n"
+
+
+@pytest.mark.parametrize(
+    "line", [f"* {OID} refs/heads/a", f"*{OID} {OID} refs/heads/a", "a message", ""]
+)
+def test_a_line_not_shaped_as_porcelain_is_skipped(line: str) -> None:
+    git = FakeGit()
+    ref = f"* {'0' * 40} {OID} refs/heads/b\n"
+    git.respond(["fetch", "--porcelain"], stdout=f"{ref}{line}\n{ref}")
+
+    assert fetch(git, "origin").refs == (FetchRef("refs/heads/b", FetchStatus.NEW, None, OID),) * 2
+
+
+@pytest.mark.needs_git(2, 48, reason="for followRemoteHEAD")
+def test_gits_warning_among_the_porcelain_lines_is_skipped(
+    remote: tuple[Git, dict[str, str]],
+) -> None:
+    git, ids = remote
+    # git prints its warning that origin's HEAD isn't what origin/HEAD says to stdout, among
+    # the refs, even with --porcelain.
+    origin(git).run("symbolic-ref", "HEAD", "refs/heads/kept")
+    git.run("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/moved")
+    git.run("config", "remote.origin.followRemoteHEAD", "warn")
+
+    result = fetch(git, "origin", tags=False)
+
+    assert "'HEAD' at 'origin' is 'kept', but we have 'moved' locally." in result.stdout
+    assert result.returncode == 0
+    assert result.refs is not None
+    assert FetchRef("refs/remotes/origin/new", FetchStatus.NEW, None, ids["next"]) in result.refs
+    assert len(result.refs) == 3  # moved, forced and new
+
+
+class Recording(Git):
+    """A Git that records each process's `env` and `timeout`."""
+
+    seen: list[tuple[object, object]]
+
+    def process(self, *args: Arg, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        self.seen.append((kwargs.get("env"), kwargs.get("timeout")))
+        return super().process(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "porcelain",
+    [pytest.param(True, marks=NEEDS_PORCELAIN, id="porcelain"), pytest.param(False, id="without")],
+)
+def test_fetch_runs_git_with_the_env_and_timeout_given(
+    remote: tuple[Git, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int, int],
+    porcelain: bool,
+) -> None:
+    git, ids = remote
+    if not porcelain and git_version >= (2, 41):
+        monkeypatch.setattr(git_client.remotes, "_PORCELAIN", "--no-such-option")
+    recording = Recording(git.directory)
+    recording.seen = []
+    # A remote named only by this env.
+    url = Path(origin(git).directory).as_posix()
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.{url}.insteadOf",
+           "GIT_CONFIG_VALUE_0": "probe"}  # fmt: skip
+
+    result = fetch(recording, "probe", [FetchRefspec("refs/heads/new", "refs/heads/fetched")],
+                   env=env, timeout=30.0)  # fmt: skip
+
+    assert result.returncode == 0
+    assert refs(git, "refs/heads/fetched")["refs/heads/fetched"].object == ids["next"]
+    assert recording.seen == [(env, 30.0)] * (1 if porcelain else 2)
+
+
+def make_superproject(git: Git) -> None:
+    """make_repo's repository as a submodule, `sub`, of `super`, cloned with it as `clone`
+    (which may fetch submodules from a path); then a commit of sub's, refs/ids/new, that
+    super's main points to and clone hasn't fetched."""
+    allow = ("-c", "protocol.file.allow=always")
+    top = Path(git.directory).parent
+    Git(top).run("init", "--quiet", "super")
+    sup = Git(top / "super")
+    sup.run(*allow, "submodule", "--quiet", "add", "../repo", "sub")
+    sup.run("commit", "--quiet", "-m", "add sub")
+    Git(top).run(*allow, "clone", "--quiet", "--recurse-submodules", "super", "clone")
+    Git(top / "clone").run("config", "protocol.file.allow", "always")
+    git.run("commit", "--quiet", "--allow-empty", "-m", "new")
+    git.run("update-ref", "refs/ids/new", "HEAD")
+    Git(top / "super" / "sub").run("pull", "--quiet", "origin", "main")
+    sup.run("commit", "--quiet", "-am", "move sub")
+
+
+@pytest.mark.parametrize(
+    "porcelain",
+    [pytest.param(True, marks=NEEDS_PORCELAIN, id="porcelain"), pytest.param(False, id="without")],
+)
+def test_fetch_fetches_no_submodules_on_any_git(
+    repo_from: Callable[[str, Changes], Git],
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int, int],
+    porcelain: bool,
+) -> None:
+    sub = repo_from("superproject", make_superproject)
+    new = sub.run("rev-parse", "refs/ids/new")
+    clone = Path(sub.directory).parent / "clone"
+    if not porcelain and git_version >= (2, 41):
+        monkeypatch.setattr(git_client.remotes, "_PORCELAIN", "--no-such-option")
+
+    result = fetch(Git(clone), "origin")
+
+    assert result.returncode == 0
+    # `git fetch` would have fetched it, by fetch.recurseSubmodules' on-demand.
+    assert Git(clone / "sub").resolve(new) is None
 
 
 def origin(git: Git) -> Git:
@@ -340,3 +452,13 @@ def test_remote_urls_lists_every_url(repo: Git, push: bool, urls: list[str]) -> 
 def test_remote_urls_of_no_remote_raises(repo: Git) -> None:
     with pytest.raises(GitError, match="No such remote '-r'"):
         remote_urls(repo, "-r")
+
+
+def test_remote_urls_takes_no_remote_of_the_global_config(repo: Git, tmp_path: Path) -> None:
+    # fetch and ls-remote take it, but git remote doesn't.
+    config = tmp_path / "global"
+    config.write_text('[remote "g"]\n    url = https://host/g\n', encoding="utf-8")
+    git = Git(repo.directory, env={"GIT_CONFIG_GLOBAL": str(config)})
+
+    with pytest.raises(GitError, match="No such remote 'g'"):
+        remote_urls(git, "g")

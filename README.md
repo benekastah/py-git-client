@@ -356,8 +356,16 @@ destination is `""`, raises ValueError: only `force` forces, and only None leave
 destination. Fetching from a remote's name, git also updates (and reports) the
 remote-tracking refs its config maps what's fetched to. `fetch` runs `git fetch --porcelain
 [options] -- <remote> <refspecs>`, so a `FakeGit` test responds to `["fetch", "--porcelain"]`
-with porcelain output. Git before 2.41 has no `--porcelain`: fetch runs again without it, and
-`refs` is None.
+with porcelain output; lines of other shapes (git prints some messages to stdout) are
+skipped. Git before 2.41 has no `--porcelain`: fetch runs again without it, and `refs` is None.
+A ref already up to date isn't in `refs` (git lists those only with `--verbose`). Output is
+captured: nothing shows while git fetches, and git prints no summary of its own.
+
+`fetch` fetches no submodules, on any git: git takes no `--recurse-submodules` with
+`--porcelain`, so it ignores `fetch.recurseSubmodules` (whose default fetches the submodule
+commits a fetched superproject commit needs), and on older git `fetch` passes
+`--no-recurse-submodules` to match. A tool that wants them runs `git submodule update`, or
+fetches in each submodule.
 
 `remote_refs` asks a remote what refs it has, with one `git ls-remote` (a remote each), and
 raises GitError if git can't (e.g. it can't reach the remote):
@@ -385,8 +393,9 @@ remote_urls(git, "origin", push=True)  # each push URL: its pushurls, else its U
 ```
 
 git prints a URL a line each, as it is, so one with a newline in it reads as two. A remote the
-repository's config doesn't name raises GitError. A `FakeGit` test responds to `["remote",
-"get-url"]`.
+repository's own config doesn't name raises GitError: git ignores one set only in the global or
+system config, by `-c` or by the environment (which `fetch` and `remote_refs` take). A
+`FakeGit` test responds to `["remote", "get-url"]`.
 
 ### Status and worktrees
 

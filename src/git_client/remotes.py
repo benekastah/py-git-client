@@ -1,6 +1,7 @@
 """What a repository's remotes have, and fetches from them."""
 
 import enum
+import re
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
@@ -21,6 +22,9 @@ from git_client.errors import GitError
 # fetch's machine-readable output (git 2.41). A variable, so a test can have git refuse it,
 # as an older git does.
 _PORCELAIN = "--porcelain"
+
+# What starts a line of fetch --porcelain's: a flag, then two ids (which may be malformed).
+_PORCELAIN_LINE = re.compile(r". [0-9a-f]+ [0-9a-f]+(?: |$)")
 
 # git's exit status for a usage error: an option it doesn't know.
 _USAGE = 129
@@ -56,7 +60,8 @@ class FetchRefspec:
 
 
 class FetchStatus(enum.StrEnum):
-    """What fetch did to a ref: git's porcelain flag."""
+    """What fetch did to a ref: git's porcelain flag. git prints UP_TO_DATE only with
+    `--verbose`, which `fetch` doesn't pass: a ref already up to date isn't in its `refs`."""
 
     FAST_FORWARD = " "
     FORCED = "+"
@@ -81,8 +86,9 @@ class FetchRef:
 
 @dataclass(frozen=True)
 class FetchResult:
-    """What one fetch did: its exit status, captured output, and each ref git reported, or
-    None on git older than 2.41, which can't report them for a program."""
+    """What one fetch did: its exit status, captured output, and each ref git reported (each
+    it changed or rejected: not one already up to date), or None on git older than 2.41, which
+    can't report them for a program."""
 
     returncode: int
     stdout: str
@@ -115,10 +121,18 @@ def fetch(
     `write_fetch_head=False` leaves FETCH_HEAD as it was (`--no-write-fetch-head`), and a
     refspec with no destination then only fetches its objects.
 
+    It fetches no submodules, whatever `fetch.recurseSubmodules` or `submodule.recurse` say,
+    where `git fetch` by default fetches the commits a fetched superproject commit needs: git
+    takes no `--recurse-submodules` with `--porcelain`. A tool that wants them fetches them
+    itself (e.g. `git submodule update`, or a fetch in each submodule).
+
     It runs `git fetch --porcelain [options] -- <remote> <refspecs>`, so a `FakeGit` test
-    responds to `["fetch", "--porcelain"]` with porcelain output. `--porcelain` is git 2.41's:
-    an older git refuses it, and fetch runs again without it, with `refs` None. Raises GitError
-    for output git doesn't document; launch errors and timeouts are raised as usual."""
+    responds to `["fetch", "--porcelain"]` with porcelain output. Its stdout is captured, so
+    nothing shows while git fetches, and git prints no summary of its own (`From ...`, `[new
+    branch]`). `--porcelain` is git 2.41's: an older git refuses it, and fetch runs again
+    without it (but with `--no-recurse-submodules`, so it fetches the same), with `refs` None.
+    Raises GitError for a porcelain line git doesn't document, and skips lines of other shapes
+    (git prints some messages to stdout); launch errors and timeouts are raised as usual."""
     specs = [
         f"{'+' if r.force else ''}{r.source}{'' if r.destination is None else ':'}"
         f"{r.destination or ''}"
@@ -135,7 +149,8 @@ def fetch(
     result = git.process(*args, capture_output=True, env=env, timeout=timeout)
     reported: tuple[FetchRef, ...] | None
     if result.returncode == _USAGE:
-        args = ("fetch", *options, "--", remote, *specs)
+        # As --porcelain does: so whatever the git, fetch fetches no submodules.
+        args = ("fetch", "--no-recurse-submodules", *options, "--", remote, *specs)
         result = git.process(*args, capture_output=True, env=env, timeout=timeout)
         reported = None
     else:
@@ -147,14 +162,17 @@ def _fetched(
     args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]
 ) -> tuple[FetchRef, ...]:
     """The refs in `fetch --porcelain`'s output: a line for each, `<flag> <old id> <new id>
-    <ref>`, an id of zeros for none."""
+    <ref>`, an id of zeros for none. Other lines are skipped: git prints some messages to
+    stdout among them, even with --porcelain (from 2.48, followRemoteHEAD's warning that the
+    remote's HEAD isn't what `<remote>/HEAD` says)."""
     fetched: list[FetchRef] = []
     for line in decode(result.stdout).splitlines():
-        flag, space, rest = line[:1], line[1:2], line[2:]
+        if not _PORCELAIN_LINE.match(line):
+            continue
+        flag, rest = line[0], line[2:]
         fields = rest.split(" ")
         if (
-            space != " "
-            or flag not in FetchStatus
+            flag not in FetchStatus
             or len(fields) != 3
             or not all(OBJECT_ID.fullmatch(oid) for oid in fields[:2])
         ):
@@ -227,8 +245,9 @@ def remote_urls(
     URL with a newline in it reads as two. A remote with no URL gives its name, as git takes
     it for one (a path).
 
-    Raises GitError if git fails, e.g. for a remote the repository's config doesn't name (git
-    ignores remotes set only by `-c` or the environment). A `FakeGit` test responds to
-    `["remote", "get-url"]`."""
+    Raises GitError if git fails, e.g. for a remote the repository's own config doesn't name:
+    git ignores one set only in the global or system config, by `-c` or by the environment
+    (which `fetch` and `remote_refs` take). A `FakeGit` test responds to `["remote",
+    "get-url"]`."""
     args = ("remote", "get-url", "--all", *(["--push"] if push else []), "--", remote)
     return decode(read_output(git, *args, timeout=timeout)).splitlines()
