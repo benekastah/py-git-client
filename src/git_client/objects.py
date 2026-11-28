@@ -112,8 +112,9 @@ def write_commit(
     NUL in it). A str is stored as UTF-8, and labeled so whatever `i18n.commitEncoding` says
     (git runs with `-c i18n.commitEncoding=UTF-8`). Bytes are stored as given, labeled as
     the repository's `i18n.commitEncoding` says, as `git commit-tree` does: with an
-    `encoding` header naming it if it isn't UTF-8; if it is (the default), git takes bytes
-    that aren't UTF-8 as Latin-1 and stores them as UTF-8, warning.
+    `encoding` header naming it if it isn't UTF-8 (a header that covers the identities too,
+    which are written as UTF-8 whatever it says, as commit-tree writes them); if it is (the
+    default), git takes bytes that aren't UTF-8 as Latin-1 and stores them as UTF-8, warning.
 
     `author` and `committer` default to git's own (user.name, GIT_AUTHOR_NAME and the like,
     and now); one given is git's for this commit alone (its variables are set for this
@@ -122,7 +123,8 @@ def write_commit(
     read and written again keeps a date a datetime can't hold (e.g. past the year 9999);
     else its `date`, stored to the second, in its own time zone. git writes no zone it can't
     read back as hours and minutes: "-0000", which it reads as "+0000", stays "+0000", and
-    one past "+2359" is written otherwise. git takes no date before 1970. For now, give
+    one past "+2359", or with minutes past 59 (e.g. "+0060", written "+0100"), is written
+    otherwise. git takes no date before 1970. For now, give
     `datetime.now().astimezone()`. git takes the name and email as they are, but for what it
     strips (e.g. "<", ">" and newlines), and refuses an empty name.
 
