@@ -324,7 +324,9 @@ def rebase(
     each of those commits "edit": it returns once git stops at the first, the rebase left for
     the user to change it and `git rebase --continue`. A commit that isn't replayed makes git
     stop the rebase before it starts, raising GitError. Raises ValueError for a stop that
-    isn't a full id.
+    isn't a full id. git runs with `-c core.abbrev=no`, so the todo list gives each commit's
+    full id, which the editor matches exactly; git passes that setting on to what it runs
+    (hooks), whose own git commands then print full ids too.
 
     A conflict stops the rebase, the rest left for the user: see `merge` for the ConflictError
     that raises, and for `inherit_output`, `stdout` and what else is raised. With
@@ -344,6 +346,8 @@ def rebase(
     }
     args = (
         *(("-c", "rebase.updateRefs=false") if update_refs is False else ()),
+        # So the todo list names each commit by its full id, which the editor matches.
+        *(("-c", "core.abbrev=no") if stop_at else ()),
         "rebase",
         *(switch for switch, on in switches.items() if on),
         *(() if onto is None else (f"--onto={onto}",)),

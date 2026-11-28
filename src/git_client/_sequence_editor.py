@@ -11,18 +11,17 @@ from collections.abc import Sequence
 
 
 def mark_edit(todo: bytes, commits: Sequence[str]) -> tuple[bytes, set[str]]:
-    """`todo` with each commit's pick line ("pick" or "p", then its abbreviated id, which is
-    unique in the repository, so the one full id it begins is its commit's) made an edit
-    line, and the commits it found none for."""
+    """`todo` with each commit's pick line ("pick" or "p", then its full id: rebase runs
+    with `-c core.abbrev=no`) made an edit line, and the commits it found none for."""
     missing = set(commits)
     lines = todo.splitlines(keepends=True)
     for index, line in enumerate(lines):
         words = line.split(maxsplit=2)
         if len(words) < 2 or words[0] not in (b"pick", b"p"):
             continue
-        if found := {commit for commit in missing if commit.encode().startswith(words[1])}:
+        if (commit := words[1].decode("ascii", "replace")) in missing:
             lines[index] = b"edit" + line[line.index(words[0]) + len(words[0]) :]
-            missing -= found
+            missing.remove(commit)
     return b"".join(lines), missing
 
 

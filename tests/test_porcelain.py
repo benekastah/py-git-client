@@ -2,6 +2,7 @@
 is raised."""
 
 import io
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -18,6 +19,7 @@ from git_client import (
     cherry_pick,
     commit,
     merge,
+    porcelain,
     rebase,
     reset,
     revert,
@@ -715,6 +717,44 @@ def test_rebase_stop_at_a_commit_outside_it_raises(chained: Git) -> None:
 
     assert not rebasing(chained)
     assert subjects(chained, "y") == "y\nx\nm\nfirst"
+
+
+def test_rebase_stop_at_an_id_of_nothing_raises_though_it_begins_like_a_commit(
+    chained: Git,
+) -> None:
+    x = chained.run("rev-parse", "x")
+    made_up = x[:7] + ("0" if x[7] != "0" else "1") * (len(x) - 7)
+
+    with pytest.raises(GitError):
+        rebase(chained, "main", "y", stop_at=[made_up])
+
+    assert not rebasing(chained)
+
+
+def test_rebase_stops_at_each_commit_in_turn(chained: Git) -> None:
+    x, y = chained.run("rev-parse", "x"), chained.run("rev-parse", "y")
+
+    rebase(chained, "main", "y", stop_at=[y, x])
+
+    assert chained.run("rev-parse", "HEAD") == x
+    chained.run("rebase", "--continue")
+    assert chained.run("rev-parse", "HEAD") == y
+    assert rebasing(chained)
+
+
+def test_rebase_runs_its_editor_from_a_path_the_shell_must_quote(
+    chained: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "a b's $x"
+    directory.mkdir()
+    editor = directory / "_sequence_editor.py"
+    shutil.copy(porcelain._SEQUENCE_EDITOR, editor)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(porcelain, "_SEQUENCE_EDITOR", editor.as_posix())
+    x = chained.run("rev-parse", "x")
+
+    rebase(chained, "main", "y", stop_at=[x])
+
+    assert chained.run("rev-parse", "HEAD") == x
 
 
 def test_rebase_stop_at_needs_full_ids(chained: Git) -> None:
