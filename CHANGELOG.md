@@ -123,6 +123,35 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- Porcelain writes, one git each, typed: `switch(git, target, *, detach, create,
+  start_point, track, force, quiet)`, `reset(git, commit=None, *, mode, quiet)`, `merge(git,
+  commit, *, ff, message, edit, quiet)`, `cherry_pick(git, *commits, ff, record_origin,
+  allow_empty)`, `revert(git, *commits, edit)`, `commit(git, message=None, *, all, amend,
+  allow_empty, no_verify, quiet)`, `abort(git, operation)` and `skip(git, operation)`. Each
+  returns a `CommandOutput` (stdout and stderr), raises `ConflictError` for a conflict that
+  stopped it and `GitError` for any other failure (a hook's refusal too), and takes
+  `inherit_output=True` (and `stdout=`) to leave git's input and output the tool's, as
+  `passthrough` does. Hooks run; no editor opens unless `edit=True`. They replace:
+  git-stack's `run("reset", "--quiet", "--keep", t)` (`git_stack/core.py:1112`) with
+  `reset(git, t, mode="keep", quiet=True)`; `run("merge", "--ff-only", "--quiet", new)`
+  (`core.py:1185`) and move-forward's (`plugins/git/actions.py:290`) with `merge(git, new,
+  ff="only", quiet=True)`; git-stack's `passthrough("cherry-pick", "--ff", *commits)`
+  (`core.py:1045`) with `cherry_pick(git, *commits, ff=True, inherit_output=True,
+  stdout=...)`, catching `ConflictError`; `passthrough("revert", "--no-edit", *commits)`
+  (`stack.py:1025`) with `revert(git, *commits, inherit_output=True, stdout=...)`; the
+  integration worktree's `run("merge", "--no-ff", "--no-edit", "-m", m, tip)`,
+  `run("cherry-pick", "-x", "--allow-empty", c)`, `run("cherry-pick", "--skip")` and
+  `ok(command, "--abort")` (`integrations.py:882, 892, 898, 969`) with `merge(git, tip,
+  ff="no", message=m)`, `cherry_pick(git, c, record_origin=True, allow_empty=True)`,
+  `skip(git, "cherry-pick")` and `abort(git, command)`, a `ConflictError` in place of the
+  `ls-files -u` check; its `switch` calls (`git.py:904`, `core.py:1237, 1321`, `stack.py:484, 1148`,
+  `integrations.py:930, 992`) with `switch(git, ..., quiet=True)` (`detach=True`; `create=True,
+  start_point=..., track=False`); git-recommit's `run("reset", "--quiet")`
+  (`git_recommit/session.py:527`) with `reset(git, quiet=True)`; and move-forward's
+  `run("commit", "--all", "--quiet", "-m", WIP_MESSAGE)` (`plugins/git/actions.py:307`) with
+  `commit(git, WIP_MESSAGE, all=True, quiet=True)`. git-stack's `-c
+  core.warnAmbiguousRefs=false` before `switch` has no typed form: with captured output the
+  warning is only in `stderr`.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
