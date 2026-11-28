@@ -34,9 +34,18 @@ the shape of the code or a rule here changes.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git
   reported at each destination (`PushResult`, parsed from `--porcelain`).
 - `src/git_client/worktree.py`: `status`, a worktree's (`git status --porcelain=v2 -z`),
-  and `worktrees`, the repository's (`git worktree list --porcelain -z`).
+  and `worktrees`, the repository's (`git worktree list --porcelain -z`); `add_worktree`,
+  `remove_worktree` and `prune_worktrees`, `git worktree`'s writes.
+- `src/git_client/hooks.py`: `run_hook` (`git hook run`) and `stripspace` (`git stripspace`).
 - `src/git_client/remotes.py`: `fetch`, and what it did to each ref; `remote_refs` and
   `remote_urls`.
+- `src/git_client/objects.py`: `write_trees` (one `git mktree --batch` for many trees) and
+  `write_commit` (`git commit-tree`, one process each).
+- `src/git_client/branches.py`: `Git`'s typed branch writes, each one `git branch`
+  (`delete_branches`, `create_branch`, `rename_branch`, `set_upstream`), and
+  `valid_branch_name`, a `git check-ref-format --branch`.
+- `src/git_client/transaction.py`: `ref_transaction`, a `RefTransaction` over one long-lived
+  `git update-ref --stdin` (reading its replies with `cat_file.Output`).
 - `src/git_client/porcelain.py`: the porcelain writes (`switch`, `reset`, `merge`,
   `cherry_pick`, `revert`, `rebase`, `commit`, `abort`, `skip`), one git each, their output
   captured or the tool's (`inherit_output`); `_sequence_editor.py`, the script `rebase(stop_at=)`

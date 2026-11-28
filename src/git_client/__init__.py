@@ -24,6 +24,14 @@ from git_client.batch import (
     refs,
     update_refs,
 )
+from git_client.branches import (
+    DeletedBranches,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
 from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -74,7 +82,9 @@ from git_client.history import (
     count,
     reflogs,
 )
+from git_client.hooks import HookResult, run_hook, stripspace
 from git_client.merging import Merge, MergeResult, merge_trees
+from git_client.objects import write_commit, write_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.porcelain import (
     CommandOutput,
@@ -106,6 +116,7 @@ from git_client.remotes import (
     remote_refs,
     remote_urls,
 )
+from git_client.transaction import RefTransaction, ref_transaction
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -117,6 +128,9 @@ from git_client.worktree import (
     Unmerged,
     Untracked,
     Worktree,
+    add_worktree,
+    prune_worktrees,
+    remove_worktree,
     status,
     worktrees,
 )
@@ -138,6 +152,7 @@ __all__ = [
     "ConfigValue",
     "ConflictError",
     "CorruptObjectError",
+    "DeletedBranches",
     "Diff",
     "EnvValue",
     "FetchRef",
@@ -149,6 +164,7 @@ __all__ = [
     "GitError",
     "GitTimeoutError",
     "Head",
+    "HookResult",
     "Ignored",
     "LineChange",
     "Merge",
@@ -169,6 +185,7 @@ __all__ = [
     "PushUpdate",
     "ReadOnlyGit",
     "Ref",
+    "RefTransaction",
     "RefUpdate",
     "ReflogEntry",
     "RemoteError",
@@ -191,6 +208,7 @@ __all__ = [
     "Worktree",
     "WrongTypeError",
     "abort",
+    "add_worktree",
     "any_commit",
     "changed_paths",
     "cherry_pick",
@@ -200,7 +218,9 @@ __all__ = [
     "config",
     "config_values",
     "count",
+    "create_branch",
     "decode",
+    "delete_branches",
     "encode",
     "fetch",
     "find_git",
@@ -221,18 +241,28 @@ __all__ = [
     "merge_trees",
     "patch_ids",
     "printable",
+    "prune_worktrees",
     "push",
     "rebase",
+    "ref_transaction",
     "reflogs",
     "refs",
     "remote_refs",
     "remote_urls",
+    "remove_worktree",
+    "rename_branch",
     "reset",
     "revert",
+    "run_hook",
+    "set_upstream",
     "skip",
     "status",
+    "stripspace",
     "switch",
     "tree_entries",
     "update_refs",
+    "valid_branch_name",
     "worktrees",
+    "write_commit",
+    "write_trees",
 ]

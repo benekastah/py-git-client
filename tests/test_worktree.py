@@ -15,12 +15,16 @@ from git_client import (
     Renamed,
     StatusBranch,
     SubmoduleState,
+    UnknownRevisionError,
     Unmerged,
     Untracked,
+    add_worktree,
+    prune_worktrees,
+    remove_worktree,
     status,
     worktrees,
 )
-from git_client.testing import FakeGit
+from git_client.testing import FakeGit, GitCall
 
 # The repo_from fixture's type (see conftest.py).
 RepoFrom = Callable[[str, Callable[[Git], None]], Git]
@@ -280,3 +284,81 @@ def test_status_skips_a_header_it_doesnt_know() -> None:
     git.respond(STATUS, b"# stash 3\0? new\0")
 
     assert status(git).entries == (Untracked("new"),)
+
+
+def test_add_worktree_checks_out_a_commit_or_a_branch(
+    repo: Git, tmp_path: Path, git_calls: list[GitCall]
+) -> None:
+    repo.run("branch", "topic")
+    head = repo.run("rev-parse", "HEAD")
+
+    add_worktree(repo, tmp_path / "detached", "topic", detach=True)
+    add_worktree(repo, tmp_path / "on-topic", "topic")
+
+    found = sorted((same(w.path), w.branch, w.detached) for w in worktrees(repo)[1:])
+    assert found == [
+        (same(tmp_path / "detached"), None, True),
+        (same(tmp_path / "on-topic"), "refs/heads/topic", False),
+    ]
+    assert Git(tmp_path / "detached").run("rev-parse", "HEAD") == head
+    assert [call for call in git_calls if call[:2] == ["worktree", "add"]] == [
+        ["worktree", "add", "--detach", "--", str(tmp_path / "detached"), "topic"],
+        ["worktree", "add", "--", str(tmp_path / "on-topic"), "topic"],
+    ]
+
+
+def test_worktrees_are_added_and_removed_at_paths_from_the_clients_directory(repo: Git) -> None:
+    # One that starts with "-", which git would otherwise read as an option.
+    add_worktree(repo, "-linked", "HEAD", detach=True)
+    assert (Path(repo.directory) / "-linked" / "a").exists()
+
+    remove_worktree(repo, "-linked")
+    assert not (Path(repo.directory) / "-linked").exists()
+
+
+def test_add_worktree_raises_what_git_refuses(repo: Git, tmp_path: Path) -> None:
+    with pytest.raises(UnknownRevisionError):
+        add_worktree(repo, tmp_path / "linked", "no-such-commit", detach=True)
+    with pytest.raises(GitError, match="already"):  # main is checked out in repo
+        add_worktree(repo, tmp_path / "linked", "main")
+
+
+def test_remove_worktree_removes_one_with_changes_only_when_forced(
+    repo: Git, tmp_path: Path
+) -> None:
+    linked = tmp_path / "linked"
+    add_worktree(repo, linked, "HEAD", detach=True)
+    (linked / "a").write_bytes(b"changed\n")
+
+    with pytest.raises(GitError, match="contains modified or untracked files"):
+        remove_worktree(repo, linked)
+    assert linked.exists()
+    remove_worktree(repo, linked, force=True)
+
+    assert not linked.exists()
+    assert len(worktrees(repo)) == 1
+
+
+def test_prune_worktrees_forgets_one_whose_directory_is_gone(repo: Git, tmp_path: Path) -> None:
+    add_worktree(repo, tmp_path / "kept", "HEAD", detach=True)
+    add_worktree(repo, tmp_path / "gone", "HEAD", detach=True)
+    shutil.rmtree(tmp_path / "gone")
+
+    prune_worktrees(repo)
+
+    assert [same(w.path) for w in worktrees(repo)[1:]] == [same(tmp_path / "kept")]
+
+
+def test_add_worktree_raises_when_post_checkout_fails_but_leaves_the_worktree(
+    repo: Git, tmp_path: Path
+) -> None:
+    # A hook in git's sh, which runs it on every system.
+    hook = Path(repo.directory) / ".git" / "hooks" / "post-checkout"
+    hook.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    with pytest.raises(GitError) as raised:
+        add_worktree(repo, tmp_path / "linked", "HEAD", detach=True)
+
+    assert raised.value.returncode == 7
+    assert [same(w.path) for w in worktrees(repo)[1:]] == [same(tmp_path / "linked")]

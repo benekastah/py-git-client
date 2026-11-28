@@ -127,6 +127,82 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `write_trees(git, trees, *, missing=False)` writes many trees, each a list of `TreeEntry`s
+  (one name each, in any order), with one `git mktree -z --batch`, and `write_commit(git, tree,
+  parents, message, *, author=None, committer=None, sign=False)` a commit with one `git
+  commit-tree` (git has no form that writes many), its identities typed (`Signature`, its
+  date required) and set for that one process, its message bytes (or a str, as UTF-8)
+  stored as they are, `sign` giving `-S` (True) or `-S<key>`. Neither runs a hook nor touches
+  an index or ref. git-recommit replaces its temporary-index route, `read-tree`, then
+  `update-index -z --index-info`, `write-tree` and `commit-tree -F -` with `GIT_AUTHOR_*` for
+  each new commit (`git_recommit/session.py:433-447`), with one `write_trees` for each depth of
+  the trees of all the new commits and one `write_commit` each, and no `post-index-change`
+  hook. It then builds each rebuilt directory's entries, and the nesting, itself, reading the
+  base's entries for those directories (one `tree_entries(..., recursive=True)`, or one per
+  directory), where `read-tree` read them all into the index. It also replaces `commit-tree`
+  of each later commit (`session.py:556`: `author=` the `Signature` `commits()` read, whose
+  `raw_date` keeps the date as its `%ad --date=raw` copy does), `mktree` of no entries for the
+  empty tree (`revisions.py:60`: `write_trees(git, [[]])`), and `commit-tree -m` of its
+  worktree commit (`revisions.py:151`, whose tree still comes from `add` on a copied index,
+  `:147-150`): `-m` ends the message with a newline, which `write_commit` doesn't add, so it
+  passes `"Uncommitted changes\n"`.
+- `Signature.raw_date`: the date as git's `--date=raw` prints it, which `commits()` sets, and
+  `write_commit` writes, so a date git prints raw but a datetime can't hold (`date` None,
+  e.g. past the year 9999) survives a copy; one git can't read (no raw date) doesn't. `==`
+  leaves it out, and it defaults to None, so a tool's own `Signature(name, email, date)` is
+  unchanged.
+- A tree given where git wants a commit, or a commit where it wants a tree, in `commit-tree`
+  (`... is not a valid 'commit' object`) raises `WrongTypeError`, not a plain `GitError`.
+- `run_hook(git, name, *args, ignore_missing=True, env=None)` runs a hook with one `git hook run`
+  (git 2.36), wherever git finds it, and returns a `HookResult` (exit status, and stderr, which
+  holds all the hook printed: git sends its stdout there), raising `GitError` only where git ran no
+  hook and said why. git-recommit replaces its `process("hook", "run", "--ignore-missing",
+  "commit-msg", "--", path)` (`git_recommit/session.py:495-497`).
+- `stripspace(git, text, *, strip_comments=False, comment_char=None)`, one `git stripspace`,
+  which a `ReadOnlyGit` offers. git-recommit replaces its `run("-c",
+  "core.commentChar=...", "stripspace", ...)` (`git_recommit/editor.py:89`). It still chooses
+  the character for core.commentChar=auto in Python (`editor.py:63-66`): stripspace takes
+  `auto` as "#", and git has no command that chooses as `git commit` does.
+- `add_worktree(git, path, commit, *, detach=False)`, `remove_worktree(git, path, *,
+  force=False)` and `prune_worktrees(git)`, `git worktree add`, `remove` and `prune`, one process
+  each. git-recommit replaces `worktree add --quiet --detach`, `worktree remove --force` and
+  `worktree prune` (`git_recommit/validate.py:35`, `50`, `52`; its `checkout --detach --force`
+  in the worktree, `:37`, waits for a typed `switch`), and git-stack `worktree remove [--force]`
+  and `worktree add --quiet --detach` (`git_stack/integrations.py:321`, `914`). If the
+  post-checkout hook fails, `add_worktree` raises `GitError` though git added the worktree:
+  git-stack (`integrations.py:914`) raises and leaves it for its next call to reopen as cached;
+  a tool that doesn't want it calls `remove_worktree(..., force=True)`.
+- `ref_transaction(git, *, message=None, deref=True, timeout=...)`, for a `with` block: a
+  `RefTransaction` over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify`
+  changes git checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
+  (`abort()`, or the block's end) them. git-stack replaces its hand-built `start`, changes,
+  `prepare`, `commit`/`abort` input (`git_stack/git.py:314`, called from `integrations.py:1017`)
+  with it, `deref=False` for its `option no-deref`, and can now decide after `prepare` rather
+  than before. A step that runs past `timeout` stops git: on Windows that kills it, leaving a
+  prepared transaction's lock files behind, and on any system a commit stopped partway may have
+  made only some of its changes (see the README).
+- Typed branch writes, each one `git branch` on a `Git`, names after `--end-of-options`:
+  `delete_branches(git, names, *, force=False)` deletes many with one `git branch
+  --delete`/`-D` (and their config), each git can, and returns `DeletedBranches` (each
+  deleted branch's full id, git's exit status, and its reasons for the others), raising only
+  for a failure not of one branch; `create_branch(git, name, start_point=None, *, force=False,
+  track=None)` (`track`: True, False, "inherit", or None for git's config);
+  `rename_branch(git, old, new, *, force=False)`; and `set_upstream(git, branch, upstream)`,
+  None to remove it. `valid_branch_name(git, name)` (a read) asks `git check-ref-format
+  --branch`, and says no to a name git expands (`@{-1}`). git-stack replaces `branch --quiet
+  --delete --force` (`git_stack/core.py:1239`), `branch --quiet --track` (`stack.py:754`,
+  `777`, `780`; `track=True`), `--no-track` (`stack.py:1016`; `track=False`), `--move`
+  (`stack.py:934`), `--set-upstream-to=` (`stack.py:760`, `3457`), `--unset-upstream`
+  (`stack.py:947`), and its two `check-ref-format` runs (`stack.py:1403`) with one
+  `valid_branch_name`; move-forward replaces `branch -D`
+  (`src/move_forward/plugins/git/actions.py:104`, `127`) and its one `branch -D` per line
+  (`actions.py:195`) with one `delete_branches(..., force=True)` per repository, reporting
+  each name not in `deleted` as failed, with `stderr`. Unlike `git.run`, `delete_branches`
+  doesn't raise when a branch isn't deleted: git-stack's untrack (`core.py:1239`) checks
+  `branch in result.deleted` before saving its state. move-forward passes each name once: a
+  name given twice makes git delete none of that repository's branches (its loop deleted the
+  first and reported the second as failed); and its per-name failure text becomes git's
+  `stderr` for all of them, as git's reasons aren't one per name.
 - Porcelain writes, one git each, typed: `switch(git, target, *, detach, create,
   start_point, track, force, quiet)`, `reset(git, commit=None, *, mode, quiet)`, `merge(git,
   commit, *, ff, message, edit, quiet)`, `cherry_pick(git, *commits, ff, record_origin,

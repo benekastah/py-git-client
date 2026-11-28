@@ -15,11 +15,13 @@ what git-stack, git-recommit and move-forward share for that:
   their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`; `ref_transaction` to
+  prepare them, then commit or abort).
 - **Remotes**: a fetch, and what it did to each ref (`fetch`), the refs a remote has
   (`remote_refs`), and the URLs git fetches it from and pushes it to (`remote_urls`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
-  through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
+  through its filters (`hash_blob_at`), a three-way merge of contents (`merge_file`), and
+  branches created, renamed, deleted (many in one process) and given upstreams.
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
   merge-tree --stdin`; on git 2.38, one each), each with a merge base of its own if given
   (git 2.40), as for a cherry-pick: each merge's tree and conflicted paths, or why git
@@ -411,6 +413,57 @@ tree_entries(reader, "main", ["README.md", "src/"])
 A name that names nothing raises `UnknownRevisionError`, and one of a blob `WrongTypeError`. A
 `FakeGit` test responds to `["ls-tree", "-z", "--full-tree"]` with git's output.
 
+### Writing trees and commits
+
+`write_trees` writes many trees from their entries with one `git mktree -z --batch`, and
+`write_commit` a commit of a tree with one `git commit-tree` (git has no form that writes many
+commits), without an index:
+
+```python
+from datetime import UTC, datetime
+
+from git_client import Git, RefUpdate, Signature, TreeEntry, hash_blobs, update_refs
+from git_client import write_commit, write_trees
+
+git = Git("path/to/repo")
+[blob] = hash_blobs(git, [b"print('hello')\n"])
+# Each entry is one name, in any order (git sorts them). A tree that holds another needs its
+# id: one call for each depth, each writing that depth's trees for any number of commits.
+[src] = write_trees(git, [[TreeEntry("100644", "blob", blob, "main.py")]])
+[top, empty] = write_trees(git, [[TreeEntry("040000", "tree", src, "src")], []])
+head = git.resolve("HEAD")
+assert head is not None
+commit = write_commit(
+    git,
+    top,
+    [head],  # in order; [] for a root commit
+    b"Add main.py\n",  # stored as it is (a str as UTF-8): no newline added, no cleanup
+    author=Signature("Ann", "ann@example.com", datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)),
+    committer=None,  # git's own (user.name, GIT_COMMITTER_NAME, ...), now
+    sign=False,  # True: -S, with the default key; "KEY": -SKEY
+)
+update_refs(git, [RefUpdate("refs/heads/new", commit)])  # putting it on a branch is a write too
+```
+
+They run no hook and change no index or ref (building trees on a temporary index runs the
+`post-index-change` hook for each `read-tree`, `update-index` and `write-tree`). An identity
+given is set for that one process (`GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE`), whole, whatever
+the environment says; one not given is git's. Its date is needed (for now,
+`datetime.now().astimezone()`), with a time zone of whole minutes, from 1970 on. A `Signature`
+from `commits()` carries git's date as printed (`raw_date`), which `write_commit` writes while
+`date` still describes it, so a commit read and written again keeps a date a datetime can't
+hold (e.g. past the year 9999). A str message is stored as UTF-8 and labeled so; bytes are
+labeled as `i18n.commitEncoding` says. commit-tree doesn't read `commit.gpgSign`: a tool that
+follows it reads it and passes `sign=True`.
+
+git checks that each tree entry's object exists and is of its mode's kind (`missing=True` leaves
+that to the caller), and refuses a path with a "/". Otherwise mktree writes what it's given: a
+name given twice, ".", "..", ".git" or a mode that isn't one of git's give a tree `git fsck`
+reports, which is git's check of trees. An empty path, or a field mktree's input can't hold,
+raises ValueError. A `FakeGit` test responds to `["mktree"]` with an id on a line for each
+tree, and to `["commit-tree"]` (for a str message, `["-c", "i18n.commitEncoding=UTF-8",
+"commit-tree"]`) with the commit's id and a newline.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says
@@ -526,6 +579,82 @@ repository's own config doesn't name raises GitError: git ignores one set only i
 system config, by `-c` or by the environment (which `fetch` and `remote_refs` take). A
 `FakeGit` test responds to `["remote", "get-url"]`.
 
+### Branches
+
+Typed writes to branches, each one `git branch` on a `Git` (a `ReadOnlyGit` has none), and
+whether a name can be a branch's:
+
+```python
+from git_client import (
+    Git,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
+
+git = Git("path/to/repo")
+create_branch(git, "topic", "main")  # at a start point (HEAD if left out); force=True moves
+# an existing one. track: True follows the start point, False nothing, "inherit" the start
+# point's upstream, None (the default) as branch.autoSetupMerge says.
+create_branch(git, "mine", "origin/main", track=False)
+set_upstream(git, "mine", "origin/main")  # branch.mine.remote and .merge
+set_upstream(git, "mine", None)  # no upstream (GitError if it has none)
+rename_branch(git, "mine", "ours")  # with its config and reflog; force=True replaces one
+valid_branch_name(git, "a..b")  # False, as git's check-ref-format --branch says; a ReadOnlyGit too
+# One git for all of them: it deletes each it can (with its config), says why not of others.
+result = delete_branches(git, ["topic", "ours", "missing"])  # force=True: even unmerged
+result.deleted  # {"topic": "<full id>", "ours": "<full id>"}: by name, what each pointed at
+result.returncode, result.stderr  # 1 as some weren't deleted, and git's reasons
+```
+
+Names go to git after `--end-of-options`, so a name starting with `-` is a name, which git
+refuses as a branch's. git decides what a valid name is and whether a branch can be deleted,
+created, renamed or tracked, and raises GitError when it refuses (`delete_branches` only for a
+failure not of a single branch, e.g. not a repository, as its result says which it deleted).
+`valid_branch_name` says no to a name git expands rather than takes as it is (`@{-1}`, the
+branch checked out before), as git-stack checked with a second `check-ref-format`. A `FakeGit`
+test responds to `["-c", "core.abbrev=no", "branch"]` for `delete_branches`, with a line
+`Deleted branch <name> (was <id>).` for each branch deleted, to `["branch"]` for the other
+writes, and to `["check-ref-format", "--branch"]` with the name and exit status 0, or 128 for
+no.
+
+### Ref transactions
+
+`update_refs` makes its changes, or none, at once. `ref_transaction` lets a tool decide
+between git checking them and git making them, over one `git update-ref --stdin`:
+
+```python
+from git_client import Git, ref_transaction
+
+git = Git("path/to/repo")
+main, a = git.run("rev-parse", "main"), git.run("rev-parse", "a")
+with ref_transaction(git, message="publish") as transaction:  # message: for the reflogs
+    transaction.update("refs/heads/a", main, a)  # to main, only if a is still at a
+    transaction.verify("refs/heads/b", main)  # changes nothing, but only if b is at main
+    transaction.verify("refs/heads/c", None)  # only if there's no c
+    transaction.delete("refs/heads/old")  # wherever it is
+    transaction.prepare()  # git checks every change and locks its ref: GitError if it can't
+    ...  # nothing else can move those refs now: e.g. push, and commit only if that worked
+    transaction.commit()  # or abort(); a block that ends without either makes no change
+```
+
+An `old` of None, for `update` and `delete`, is anywhere, and all zeros nowhere (the ref must
+not exist yet). git checks refs and values (an object id, or any revision), and raises
+GitError at `prepare` or `commit` if it can't make a change, as the `reference-transaction`
+hook, which runs, can say too; after a GitError, the transaction takes nothing more. A value
+that's empty or holds a NUL raises ValueError, as git would read it differently.
+`deref=False` changes a symbolic ref itself, not the ref it points to. A `FakeGit` can't start
+it.
+
+Each step (start, `prepare`, `commit`, `abort`) has `timeout` seconds (the client's unless
+given) for git to answer, past which git is stopped and `GitTimeoutError` raised. Stopping git
+aborts what it hasn't committed, with two exceptions. On Windows, stopping git kills it, so a
+transaction it had prepared leaves its refs' lock files (`<ref>.lock` in the git directory):
+every later change to those refs fails until they're removed (elsewhere git removes them as it
+stops). And stopped while committing, git may have made some changes and not others.
+
 ### Status and worktrees
 
 `status` reads a worktree's status from one `git status --porcelain=v2 -z`, and `worktrees`
@@ -565,6 +694,44 @@ repository whose index is stale pays for that at each call. A `ReadOnlyGit`'s
 `-c core.fsmonitor=false` also keeps an fsmonitor from speeding it up; a `Git` keeps it.
 A `FakeGit` test responds to `["--no-optional-locks", "status", "--porcelain=v2", "-z"]` and
 to `["worktree", "list", "--porcelain", "-z"]` with git's output.
+
+`add_worktree`, `remove_worktree` and `prune_worktrees` are `git worktree`'s writes, one process
+each, which take a `Git`:
+
+```python
+git = Git("path/to/repo")
+# A path from the client's directory; a commit, or a branch, checked out there unless detach.
+add_worktree(git, "../scratch", "main", detach=True)  # git runs the post-checkout hook
+remove_worktree(git, "../scratch", force=True)  # even with changes (not if it's locked)
+prune_worktrees(git)  # forget those git would prune, e.g. whose directory is gone
+```
+
+Each raises `GitError` for what git refuses (`UnknownRevisionError` for a commit that names
+nothing), e.g. a branch checked out in another worktree, or changes without `force`. A failing
+post-checkout hook makes `add_worktree` raise too, but git has added the worktree by then: the
+caller removes it if it doesn't want it.
+
+### Hooks and messages
+
+`run_hook` runs one of the repository's hooks with one `git hook run`, and `stripspace` cleans a
+message up as git does, with one `git stripspace`:
+
+```python
+git = Git("path/to/repo")
+# Wherever git finds it (core.hooksPath, ...); none: success, unless ignore_missing=False.
+result = run_hook(git, "commit-msg", "path/to/message", ignore_missing=True, env=None)
+result.returncode, result.stderr  # its answer, and all it printed (git sends stdout there)
+stripspace(git.read_only(), "Subject  \n\n\n# a comment\n", strip_comments=True)  # "Subject\n"
+stripspace(git, "Subject\n; a comment\n", strip_comments=True, comment_char=";")
+```
+
+`run_hook` returns a hook's failure rather than raise: it's the hook's answer. It raises
+`GitError` when git runs no hook and says why: without one and `ignore_missing=False`, or for a
+name newer git doesn't know as a hook's. git's other failures (e.g. 2.36's outside a
+repository) come back as a result, as their exit status can't be told from a hook's. A
+`FakeGit` test responds to `["hook", "run"]`. `stripspace` takes the comment character from
+core.commentChar unless given one; for `auto`, it takes "#" (only `git commit` chooses one from
+the message). It reads nothing, so a `ReadOnlyGit` offers it.
 
 ### Porcelain writes
 
@@ -663,7 +830,7 @@ takes precedence over cached data.
 A tool that only reads can show that it does with a `ReadOnlyGit`, which takes the same
 arguments as `Git` and offers the library's fixed read operations: `resolve`, `var`, `prefix()`,
 `cdup()` and `object_id_length()`, and the functions that take one: `refs`, `config`,
-`config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+`config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`, `stripspace`,
 `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `changed_paths`, `line_changes`,
 `tree_entries`, `status`, `worktrees` and `CatFile`. It has no public way to run a command of
 the caller's: no `run`, `run_bytes`, `ok`, `succeeds`, `passthrough`, `process` or `popen`,
