@@ -127,13 +127,15 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
-- `ref_transaction(git, *, message=None, deref=True)`, for a `with` block: a `RefTransaction`
-  over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify` changes git
-  checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
+- `ref_transaction(git, *, message=None, deref=True, timeout=...)`, for a `with` block: a
+  `RefTransaction` over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify`
+  changes git checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
   (`abort()`, or the block's end) them. git-stack replaces its hand-built `start`, changes,
-  `prepare`, `commit`/`abort` input (`git_stack/git.py:314`, called from
-  `integrations.py:1017`) with it, `deref=False` for its `option no-deref`, and can now
-  decide after `prepare` rather than before.
+  `prepare`, `commit`/`abort` input (`git_stack/git.py:314`, called from `integrations.py:1017`)
+  with it, `deref=False` for its `option no-deref`, and can now decide after `prepare` rather
+  than before. A step that runs past `timeout` stops git: on Windows that kills it, leaving a
+  prepared transaction's lock files behind, and on any system a commit stopped partway may have
+  made only some of its changes (see the README).
 - Typed branch writes, each one `git branch` on a `Git`, names after `--end-of-options`:
   `delete_branches(git, names, *, force=False)` deletes many with one `git branch
   --delete`/`-D` (and their config), each git can, and returns `DeletedBranches` (each

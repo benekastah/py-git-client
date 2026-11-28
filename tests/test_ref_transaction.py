@@ -139,13 +139,22 @@ def test_refuses_what_git_would_read_differently(refs: Git, ref: str, value: str
             transaction.verify(ref, value)
 
 
-def test_a_closed_transaction_takes_nothing_more(refs: Git) -> None:
+def test_a_closed_transaction_takes_nothing_more(refs: Git, git_calls: list[GitCall]) -> None:
     with ref_transaction(refs) as transaction:
         transaction.commit()
         with pytest.raises(ValueError, match="closed"):
             transaction.update("refs/heads/a", "1" * 40)
         with pytest.raises(ValueError, match="closed"):
             transaction.prepare()
+    with ref_transaction(refs) as transaction:
+        pass
+    with pytest.raises(ValueError, match="closed"):
+        transaction.update("refs/heads/a", "1" * 40)
+    with pytest.raises(ValueError, match="closed"):
+        transaction.commit()
+    with pytest.raises(ValueError, match="closed"), transaction:
+        pass
+    assert [call[0] for call in git_calls] == ["update-ref"] * 2  # not a third for the last
 
 
 @pytest.mark.usefixtures("outside_any_repository")
@@ -200,6 +209,12 @@ def test_raises_and_stops_git_past_the_timeout(repo: Git) -> None:
     if sys.platform != "win32":  # where terminating is killing
         # Terminated, as git removes its lock files then, not killed.
         assert process.returncode == -signal.SIGTERM
+
+
+def test_its_own_timeout_overrides_the_clients(repo: Git) -> None:
+    git = scripted(repo, "time.sleep(60)")  # the client has no timeout
+    with pytest.raises(GitTimeoutError), ref_transaction(git, timeout=0.2):
+        pass
 
 
 def test_kills_git_that_doesnt_exit_once_its_input_ends(

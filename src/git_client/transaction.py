@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import IO, Self
 
 from git_client.cat_file import EXIT_WAIT, Output, PastDeadline
-from git_client.client import Git, decode, encode, error_from
+from git_client.client import CLIENT_TIMEOUT, Git, Timeout, decode, encode, error_from
 from git_client.errors import GitError, GitTimeoutError
 
 
@@ -28,13 +28,15 @@ class RefTransaction:
     _output: Output
     _stderr: IO[bytes]
 
-    def __init__(self, git: Git, args: tuple[str, ...]) -> None:
-        self._git, self._args = git, args
+    def __init__(self, git: Git, args: tuple[str, ...], timeout: float | None) -> None:
+        self._git, self._args, self._timeout = git, args, timeout
         self._changes: list[bytes] = []
         self._closed = False
 
     def __enter__(self) -> Self:
-        """Start git, and the transaction."""
+        """Start git, and the transaction. A transaction starts once: ValueError after."""
+        if self._closed:
+            raise ValueError("the ref transaction is closed")
         import tempfile  # here: at the top, it slows every tool's start
 
         # git's stderr, which nothing reads until it exits, goes to a file: a pipe could fill.
@@ -61,6 +63,7 @@ class RefTransaction:
     ) -> None:
         """End git, if a failure didn't, which aborts the transaction if it wasn't ended.
         Raises GitError if git failed, unless the block raised."""
+        self._closed = True
         try:
             if self._process.returncode is None and (returncode := self._end()) and type is None:
                 stderr = encode(self._said())
@@ -122,7 +125,7 @@ class RefTransaction:
         with contextlib.suppress(OSError):
             self._process.stdin.write(sent)
             self._process.stdin.flush()
-        seconds = self._git.timeout
+        seconds = self._timeout
         try:
             reply = self._output.readline(None if seconds is None else time.monotonic() + seconds)
         except PastDeadline:
@@ -142,7 +145,8 @@ class RefTransaction:
     def _end(self, *, stop: bool = False) -> int:
         """Close git's stdin, which aborts a transaction not ended, as git does at the end of
         its input, and wait for it to exit (with `stop`, stopping it first), stopping it past
-        EXIT_WAIT: its exit status. Stopped, not killed, git removes its lock files."""
+        EXIT_WAIT: its exit status. Off Windows, stopping is SIGTERM, on which git removes its
+        lock files; on Windows it's TerminateProcess, which kills git, leaving them."""
         assert self._process.stdin is not None
         with contextlib.suppress(OSError):
             self._process.stdin.close()
@@ -162,7 +166,13 @@ class RefTransaction:
         return decode(self._stderr.read()).strip()
 
 
-def ref_transaction(git: Git, *, message: str | None = None, deref: bool = True) -> RefTransaction:
+def ref_transaction(
+    git: Git,
+    *,
+    message: str | None = None,
+    deref: bool = True,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> RefTransaction:
     """A ref transaction, for a `with` block, which starts it over one `git update-ref
     --stdin` (with `-m <message>`, the message its changes leave in the reflogs): git makes
     its changes as it's committed, and none if the block ends first (or raises), or if git
@@ -177,8 +187,17 @@ def ref_transaction(git: Git, *, message: str | None = None, deref: bool = True)
             ...  # e.g. push, then commit only if that worked
             transaction.commit()
 
-    Raises GitTimeoutError if git doesn't answer within the client's timeout (it's then
-    stopped, which aborts the transaction, unless it was committed already), and GitError if git fails other than for a
-    change (e.g. not a repository). `FakeGit` can't start it (it needs `popen`)."""
+    Raises GitTimeoutError if git doesn't answer a step (start, prepare, commit, abort)
+    within `timeout` seconds (the client's by default; None: no limit), and GitError if git
+    fails other than for a change (e.g. not a repository). Past the timeout git is stopped,
+    which aborts what it hasn't committed, but:
+
+    - On Windows, stopping git kills it, so a transaction it had prepared leaves its refs'
+      lock files (`<ref>.lock` in the git directory), and every later change to those refs
+      fails until they're removed. Elsewhere git removes them as it stops.
+    - Stopped while committing, git may have made some of the changes and not others.
+
+    `FakeGit` can't start it (it needs `popen`)."""
     args = ("update-ref", *(["-m", message] if message else []))
-    return RefTransaction(git, (*args, *([] if deref else ["--no-deref"]), "--stdin", "-z"))
+    args += (*([] if deref else ["--no-deref"]), "--stdin", "-z")
+    return RefTransaction(git, args, git.timeout if timeout is CLIENT_TIMEOUT else timeout)

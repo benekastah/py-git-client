@@ -597,6 +597,13 @@ that's empty or holds a NUL raises ValueError, as git would read it differently.
 `deref=False` changes a symbolic ref itself, not the ref it points to. A `FakeGit` can't start
 it.
 
+Each step (start, `prepare`, `commit`, `abort`) has `timeout` seconds (the client's unless
+given) for git to answer, past which git is stopped and `GitTimeoutError` raised. Stopping git
+aborts what it hasn't committed, with two exceptions. On Windows, stopping git kills it, so a
+transaction it had prepared leaves its refs' lock files (`<ref>.lock` in the git directory):
+every later change to those refs fails until they're removed (elsewhere git removes them as it
+stops). And stopped while committing, git may have made some changes and not others.
+
 ### Status and worktrees
 
 `status` reads a worktree's status from one `git status --porcelain=v2 -z`, and `worktrees`
