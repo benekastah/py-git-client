@@ -130,10 +130,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   runs fetch again without `--porcelain`). It fetches no submodules on any git (git takes no
   `--recurse-submodules` with `--porcelain`; on older git it passes `--no-recurse-submodules`),
   where `git fetch` by default fetches the commits a fetched superproject commit needs: a tool
-  that wants them runs `git submodule update`. Its output is captured, so it shows no progress
-  and no summary: git-stack's `passthrough("fetch", "--prune", remote)`
-  (`git_stack/git.py:1223`) stays a passthrough, unless git-stack accepts losing them (it can
-  print `refs` itself). git-stack replaces
+  that wants them runs `git submodule update`. Its output is captured, so it shows no progress,
+  and with `--porcelain` git prints no summary (older git's goes to `stderr`): git-stack's
+  `passthrough("fetch", "--prune", remote)` (`git_stack/git.py:1223`) stays a passthrough,
+  unless git-stack accepts losing them (it can print `refs` itself). git-stack replaces
   `fetch --quiet --no-write-fetch-head <remote> <refspecs>` (`git_stack/stack.py:3039`,
   `git_stack/adapters/github.py:580`); move-forward, `fetch --quiet <remote>` and `fetch --quiet
   . <commit>:refs/heads/<branch>` (`src/move_forward/plugins/git/actions.py:260`, `283`).

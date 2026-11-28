@@ -358,8 +358,9 @@ remote-tracking refs its config maps what's fetched to. `fetch` runs `git fetch 
 [options] -- <remote> <refspecs>`, so a `FakeGit` test responds to `["fetch", "--porcelain"]`
 with porcelain output; lines of other shapes (git prints some messages to stdout) are
 skipped. Git before 2.41 has no `--porcelain`: fetch runs again without it, and `refs` is None.
-A ref already up to date isn't in `refs` (git lists those only with `--verbose`). Output is
-captured: nothing shows while git fetches, and git prints no summary of its own.
+A ref already up to date isn't in `refs` (git lists those only with `--verbose`). Its output
+is captured, so nothing shows while git fetches; with `--porcelain` git prints no summary
+(`From ...`, `[new branch]`), and older git's goes to `stderr`.
 
 `fetch` fetches no submodules, on any git: git takes no `--recurse-submodules` with
 `--porcelain`, so it ignores `fetch.recurseSubmodules` (whose default fetches the submodule

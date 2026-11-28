@@ -127,10 +127,11 @@ def fetch(
     itself (e.g. `git submodule update`, or a fetch in each submodule).
 
     It runs `git fetch --porcelain [options] -- <remote> <refspecs>`, so a `FakeGit` test
-    responds to `["fetch", "--porcelain"]` with porcelain output. Its stdout is captured, so
-    nothing shows while git fetches, and git prints no summary of its own (`From ...`, `[new
-    branch]`). `--porcelain` is git 2.41's: an older git refuses it, and fetch runs again
-    without it (but with `--no-recurse-submodules`, so it fetches the same), with `refs` None.
+    responds to `["fetch", "--porcelain"]` with porcelain output. Its output is captured, so
+    nothing shows while git fetches; with `--porcelain` git prints no summary (`From ...`,
+    `[new branch]`), and older git's goes to `stderr`. `--porcelain` is git 2.41's: an older
+    git refuses it, and fetch runs again without it (but with `--no-recurse-submodules`, so it
+    fetches the same), with `refs` None.
     Raises GitError for a porcelain line git doesn't document, and skips lines of other shapes
     (git prints some messages to stdout); launch errors and timeouts are raised as usual."""
     specs = [
@@ -166,7 +167,7 @@ def _fetched(
     stdout among them, even with --porcelain (from 2.48, followRemoteHEAD's warning that the
     remote's HEAD isn't what `<remote>/HEAD` says)."""
     fetched: list[FetchRef] = []
-    for line in decode(result.stdout).splitlines():
+    for line in _lines(decode(result.stdout)):
         if not _PORCELAIN_LINE.match(line):
             continue
         flag, rest = line[0], line[2:]
@@ -224,7 +225,7 @@ def remote_refs(
     args += tuple(patterns)
     output = decode(read_output(git, *args, env=env, timeout=timeout))
     found = RemoteRefs({})
-    for line in output.splitlines():
+    for line in _lines(output):
         value, tab, name = line.partition("\t")
         symref = value.startswith("ref: ")
         target = value.removeprefix("ref: ")
@@ -250,4 +251,10 @@ def remote_urls(
     (which `fetch` and `remote_refs` take). A `FakeGit` test responds to `["remote",
     "get-url"]`."""
     args = ("remote", "get-url", "--all", *(["--push"] if push else []), "--", remote)
-    return decode(read_output(git, *args, timeout=timeout)).splitlines()
+    return _lines(decode(read_output(git, *args, timeout=timeout)))
+
+
+def _lines(output: str) -> list[str]:
+    """The lines git printed, each ended by a newline. Not splitlines(), which also ends one at
+    characters a ref name or URL can hold (e.g. U+2028, U+0085)."""
+    return output.removesuffix("\n").split("\n") if output else []

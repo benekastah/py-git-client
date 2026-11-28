@@ -462,3 +462,45 @@ def test_remote_urls_takes_no_remote_of_the_global_config(repo: Git, tmp_path: P
 
     with pytest.raises(GitError, match="No such remote 'g'"):
         remote_urls(git, "g")
+
+
+# Names git takes that str.splitlines() would split: line and paragraph separators, and NEL.
+ODD = ["a b", "c\u0085d", "e f"]
+
+
+def add_odd_branches(git: Git, target: str) -> None:
+    """Add a branch of each ODD name to make_remote's origin, at target."""
+    updates = "".join(f"update refs/heads/{name} {target}\n" for name in ODD)
+    origin(git).run("update-ref", "--stdin", input=updates)
+
+
+@NEEDS_PORCELAIN
+def test_fetch_reports_refs_whose_names_splitlines_would_split(
+    remote: tuple[Git, dict[str, str]],
+) -> None:
+    git, ids = remote
+    add_odd_branches(git, ids["next"])
+    specs = [FetchRefspec(f"refs/heads/{name}", f"refs/heads/{name}") for name in ODD]
+
+    result = fetch(git, "origin", specs, tags=False)
+
+    assert result.refs is not None
+    assert {ref.ref for ref in result.refs} >= {f"refs/heads/{name}" for name in ODD}
+
+
+def test_remote_refs_lists_refs_whose_names_splitlines_would_split(
+    remote: tuple[Git, dict[str, str]],
+) -> None:
+    git, ids = remote
+    add_odd_branches(git, ids["next"])
+
+    found = remote_refs(git, "origin", heads=True)
+
+    assert {f"refs/heads/{name}" for name in ODD} <= found.refs.keys()
+    assert found.refs[f"refs/heads/{ODD[0]}"] == ids["next"]
+
+
+def test_remote_urls_keeps_a_url_that_splitlines_would_split(repo: Git) -> None:
+    git = configured(repo, '[remote "r"]\n    url = https://host/a b\u0085c\n')
+
+    assert remote_urls(git, "r") == ["https://host/a b\u0085c"]
