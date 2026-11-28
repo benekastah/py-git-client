@@ -47,8 +47,9 @@ the shape of the code or a rule here changes.
 - `src/git_client/transaction.py`: `ref_transaction`, a `RefTransaction` over one long-lived
   `git update-ref --stdin` (reading its replies with `cat_file.Output`).
 - `src/git_client/porcelain.py`: the porcelain writes (`switch`, `reset`, `merge`,
-  `cherry_pick`, `revert`, `commit`, `abort`, `skip`), one git each, their output captured or
-  the tool's (`inherit_output`).
+  `cherry_pick`, `revert`, `rebase`, `commit`, `abort`, `skip`), one git each, their output
+  captured or the tool's (`inherit_output`); `_sequence_editor.py`, the script `rebase(stop_at=)`
+  gives git as its sequence editor, which marks those commits "edit" in the todo list.
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'

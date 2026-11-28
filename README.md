@@ -736,8 +736,9 @@ the message). It reads nothing, so a `ReadOnlyGit` offers it.
 
 ### Porcelain writes
 
-`switch`, `reset`, `merge`, `cherry_pick`, `revert` and `commit` each run one git of that
-name, taking a `Git`, with typed switches, and return what it printed (a `CommandOutput`):
+`switch`, `reset`, `merge`, `cherry_pick`, `revert`, `rebase` and `commit` each run one git
+of that name, taking a `Git`, with typed switches, and return what it printed (a
+`CommandOutput`):
 
 ```python
 git = Git("path/to/repo")
@@ -756,6 +757,13 @@ revert(git, "topic")  # with git's message; edit=True (with inherit_output) open
 # git's input and output the tool's (its stdout to sys.stderr, here), for git to show its
 # progress and ask the user, as passthrough gives them: then nothing is captured.
 merge(git, "topic", inherit_output=True, stdout=sys.stderr)
+# topic's commits that main lacks onto main~1, as `git rebase --onto main~1 main topic`.
+# update_refs=True moves the branches in between too (git 2.38), False never, None: the config.
+rebase(git, "main", "topic", onto="main~1", update_refs=False)
+# Stop at a commit (a full id) for the user to change: an interactive rebase, the library's
+# sequence editor marking it "edit". None for upstream: from the root (--root).
+rebase(git, None, stop_at=[git.run("rev-list", "--max-parents=0", "HEAD")])
+git.run("rebase", "--abort")
 ```
 
 Hooks run as they would from a shell (pre-commit, commit-msg, post-checkout, ...): only
@@ -770,24 +778,26 @@ that names no branch but a remote's (`origin/feat` for `"feat"`) makes git creat
 tracking it (`checkout.guess`), `track` without `create` creates a branch from the remote
 branch named, and `start_point` without `create`, or `detach` with it, are usage errors.
 
-A failure raises `GitError`, as `run` does, a hook's refusal too, and a conflict that stops
-a merge, cherry-pick or revert (git's exit status 1) raises `ConflictError`, the stopped
-operation left for the user or for `abort` and `skip`. With captured output, that's from
-what git says (a `CONFLICT (` line); with `inherit_output`, whose output the library doesn't
-see, from exit status 1 and unmerged paths in the index, asked with one more git after such
-a failure (`ls-files --unmerged -z -- :/`), and every other failure is a plain `GitError`
-with no `stderr`. So with `inherit_output`, a conflict `rerere.autoUpdate` resolved and staged
-(git still stops, but leaves no unmerged path) is a plain `GitError`, where captured output
-raises `ConflictError`. A stop that isn't a conflict (e.g. a cherry-picked commit that's
-become empty, or one stopped partway by an untracked file) is a plain `GitError` too, the
-operation still in progress. `reset`, `cherry_pick` and `revert` raise ValueError for a
-commit starting with `-`, which git 2.36 reads as an option; `switch` and `merge` read it as
-a name (`--end-of-options`). A `FakeGit` test responds to the command's name (e.g.
-`["merge"]`), and to an `inherit_output` stop of a merge, cherry-pick, revert or skip (exit
-status 1) also to `["ls-files", "--unmerged", "-z", "--", ":/"]`, whose stdout, empty or
-not, says whether it was a conflict. Not supported: `commit`'s author,
-committer, signing and paths, `reset`'s paths, `merge`'s `--squash` and several commits, and
-the operations' `--continue`.
+A failure raises `GitError`, as `run` does, a hook's refusal too, and a conflict that stops a
+merge, cherry-pick, revert or rebase (git's exit status 1) raises `ConflictError`, the stopped
+operation left for the user or for `abort` and `skip`. With captured output, that's from what
+git says (a `CONFLICT (` line); with `inherit_output`, whose output the library doesn't see,
+from exit status 1 and unmerged paths in the index, asked with one more git after such a failure
+(`ls-files --unmerged -z -- :/`; so a rebase refused for unmerged paths already in the index
+raises it too), and every other failure is a plain `GitError` with no `stderr`. So with
+`inherit_output`, a conflict `rerere.autoUpdate` resolved and staged (git still stops, but
+leaves no unmerged path) is a plain `GitError`, where captured output raises `ConflictError`. A
+stop that isn't a conflict (e.g. a cherry-picked commit that's become empty, or one stopped
+partway by an untracked file) is a plain `GitError` too, the operation still in progress.
+`reset`, `cherry_pick` and `revert` raise ValueError for a commit starting with `-`, which git
+2.36 reads as an option; `switch`, `merge` and `rebase` read it as a name (`--end-of-options`).
+A `FakeGit` test responds to the command's name (e.g. `["merge"]`; `["-c",
+"rebase.updateRefs=false", "rebase"]` for `update_refs=False`), and to an `inherit_output` stop
+of a merge, cherry-pick, revert, rebase or skip (exit status 1) also to `["ls-files",
+"--unmerged", "-z", "--", ":/"]`, whose stdout, empty or not, says whether it was a conflict.
+Not supported: `commit`'s author, committer, signing and paths, `reset`'s paths, `merge`'s
+`--squash` and several commits, `rebase`'s `--exec` and other interactive edits, and the
+operations' `--continue`.
 
 ### Caching
 

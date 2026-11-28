@@ -2,6 +2,7 @@
 is raised."""
 
 import io
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -18,6 +19,8 @@ from git_client import (
     cherry_pick,
     commit,
     merge,
+    porcelain,
+    rebase,
     reset,
     revert,
     skip,
@@ -579,3 +582,200 @@ def test_fake_git_answers_an_inherited_stop_with_the_unmerged_paths() -> None:
 
     with pytest.raises(ConflictError):
         cherry_pick(git, "b", inherit_output=True)
+
+
+# rebase
+
+
+def chain(git: Git) -> None:
+    """branches(), then x on main and y on x, each adding a file of its name."""
+    branches(git)
+    for branch in ("x", "y"):
+        git.run("switch", "--quiet", "-c", branch)
+        (Path(git.directory) / branch).write_bytes(f"{branch}\n".encode())
+        git.run("add", branch)
+        git.run("commit", "--quiet", "-m", branch)
+    git.run("switch", "--quiet", "main")
+
+
+@pytest.fixture
+def chained(repo_from: RepoFrom) -> Git:
+    return repo_from("porcelain-chain", chain)
+
+
+def subjects(git: Git, revision: str) -> str:
+    return git.run("log", "--format=%s", revision, "--")
+
+
+def rebasing(git: Git) -> bool:
+    return Path(
+        git.run("rev-parse", "--path-format=absolute", "--git-path", "rebase-merge")
+    ).exists()
+
+
+def test_rebase_onto_moves_the_branch(chained: Git) -> None:
+    rebase(chained, "x", "y", onto="ahead")
+
+    assert subjects(chained, "y") == "y\ne\nm\nfirst"
+    assert head(chained) == "refs/heads/y"
+
+
+@pytest.mark.needs_git(2, 38, reason="--update-refs")
+def test_rebase_update_refs_moves_the_branches_between(chained: Git) -> None:
+    rebase(chained, "main", "y", onto="ahead", update_refs=True)
+
+    assert subjects(chained, "x") == "x\ne\nm\nfirst"
+
+
+def test_rebase_without_update_refs_leaves_them_whatever_the_config(chained: Git) -> None:
+    chained.run("config", "rebase.updateRefs", "true")
+    x = chained.run("rev-parse", "x")
+
+    rebase(chained, "main", "y", onto="ahead", update_refs=False)
+
+    assert chained.run("rev-parse", "x") == x
+    assert subjects(chained, "y") == "y\nx\ne\nm\nfirst"
+
+
+def test_rebase_update_refs_raises_before_git_2_38(
+    chained: Git, git_version: tuple[int, int, int]
+) -> None:
+    if git_version >= (2, 38):
+        pytest.skip("git 2.38 has --update-refs")
+    with pytest.raises(GitError):
+        rebase(chained, "main", "y", onto="ahead", update_refs=True)
+
+
+def test_rebase_conflict_raises_conflict_error(repo: Git) -> None:
+    with pytest.raises(ConflictError) as raised:
+        rebase(repo, "main", "b")
+
+    assert "CONFLICT (content): Merge conflict in a" in raised.value.stdout
+    assert rebasing(repo)
+
+
+def test_inherited_rebase_conflict_raises_conflict_error(repo: Git) -> None:
+    with pytest.raises(ConflictError):
+        rebase(repo, "main", "b", inherit_output=True, stdout=subprocess.DEVNULL)
+    assert rebasing(repo)
+
+
+def test_rebase_refuses_a_dirty_worktree(repo: Git) -> None:
+    (Path(repo.directory) / "a").write_bytes(b"changed\n")
+
+    with pytest.raises(GitError) as raised:
+        rebase(repo, "main", "b")
+    assert type(raised.value) is GitError
+    assert not rebasing(repo)
+
+
+def test_rebase_refused_by_its_hook_is_an_error(repo: Git) -> None:
+    hook(repo, "pre-rebase", "exit 1")
+
+    with pytest.raises(GitError, match="pre-rebase hook refused"):
+        rebase(repo, "main", "c")
+
+
+def test_rebase_reads_names_like_options_as_names(repo: Git) -> None:
+    with pytest.raises(UnknownRevisionError):
+        rebase(repo, "--root")
+    with pytest.raises(GitError):
+        rebase(repo, "main", "--root")
+    assert not rebasing(repo)
+    assert head(repo) == "refs/heads/main"
+
+
+@pytest.mark.parametrize("abbreviate", ["false", "true"])
+def test_rebase_stops_at_a_commit_to_edit(chained: Git, abbreviate: str) -> None:
+    chained.run("config", "rebase.abbreviateCommands", abbreviate)
+    chained.run("config", "rebase.autoSquash", "true")  # which it doesn't
+    chained.run("switch", "--quiet", "y")
+    chained.run("commit", "--quiet", "--allow-empty", "-m", "fixup! x")
+    x = chained.run("rev-parse", "x")
+
+    rebase(chained, "main", stop_at=[x, x])
+
+    assert rebasing(chained)
+    assert chained.run("rev-parse", "HEAD") == x
+    chained.run("commit", "--quiet", "--amend", "-m", "x amended")
+    chained.run("rebase", "--continue")
+    assert subjects(chained, "y") == "fixup! x\ny\nx amended\nm\nfirst"
+
+
+def test_rebase_root_stops_at_the_root(chained: Git) -> None:
+    root = chained.run("rev-list", "--max-parents=0", "HEAD")
+
+    rebase(chained, None, stop_at=[root])
+
+    assert chained.run("rev-parse", "HEAD") == root
+    assert rebasing(chained)
+
+
+def test_rebase_stop_at_a_commit_outside_it_raises(chained: Git) -> None:
+    with pytest.raises(GitError):
+        rebase(chained, "main", "y", stop_at=[chained.run("rev-parse", "c")])
+
+    assert not rebasing(chained)
+    assert subjects(chained, "y") == "y\nx\nm\nfirst"
+
+
+def test_rebase_stop_at_an_id_of_nothing_raises_though_it_begins_like_a_commit(
+    chained: Git,
+) -> None:
+    x = chained.run("rev-parse", "x")
+    made_up = x[:7] + ("0" if x[7] != "0" else "1") * (len(x) - 7)
+
+    with pytest.raises(GitError):
+        rebase(chained, "main", "y", stop_at=[made_up])
+
+    assert not rebasing(chained)
+
+
+def test_rebase_stops_at_each_commit_in_turn(chained: Git) -> None:
+    x, y = chained.run("rev-parse", "x"), chained.run("rev-parse", "y")
+
+    rebase(chained, "main", "y", stop_at=[y, x])
+
+    assert chained.run("rev-parse", "HEAD") == x
+    chained.run("rebase", "--continue")
+    assert chained.run("rev-parse", "HEAD") == y
+    assert rebasing(chained)
+
+
+def test_rebase_runs_its_editor_from_a_path_the_shell_must_quote(
+    chained: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "a b's $x"
+    directory.mkdir()
+    editor = directory / "_sequence_editor.py"
+    shutil.copy(porcelain._SEQUENCE_EDITOR, editor)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(porcelain, "_SEQUENCE_EDITOR", editor.as_posix())
+    x = chained.run("rev-parse", "x")
+
+    rebase(chained, "main", "y", stop_at=[x])
+
+    assert chained.run("rev-parse", "HEAD") == x
+
+
+def test_rebase_stop_at_needs_full_ids(chained: Git) -> None:
+    with pytest.raises(ValueError, match="full"):
+        rebase(chained, "main", stop_at=["x"])
+
+
+def test_rebase_argv(git_calls: list[GitCall], chained: Git) -> None:
+    rebase(chained, "x", "y", onto="ahead", update_refs=False)
+
+    assert git_calls == [
+        GitCall(
+            [
+                "-c",
+                "rebase.updateRefs=false",
+                "rebase",
+                "--onto=ahead",
+                "--end-of-options",
+                "x",
+                "y",
+            ],
+            chained.program,
+        )
+    ]
