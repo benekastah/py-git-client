@@ -84,6 +84,7 @@ from git_client.history import (
 )
 from git_client.hooks import HookResult, run_hook, stripspace
 from git_client.merging import Merge, MergeResult, merge_trees
+from git_client.objects import write_commit, write_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.porcelain import (
     CommandOutput,
@@ -260,4 +261,6 @@ __all__ = [
     "update_refs",
     "valid_branch_name",
     "worktrees",
+    "write_commit",
+    "write_trees",
 ]

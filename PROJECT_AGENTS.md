@@ -39,6 +39,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/hooks.py`: `run_hook` (`git hook run`) and `stripspace` (`git stripspace`).
 - `src/git_client/remotes.py`: `fetch`, and what it did to each ref; `remote_refs` and
   `remote_urls`.
+- `src/git_client/objects.py`: `write_trees` (one `git mktree --batch` for many trees) and
+  `write_commit` (`git commit-tree`, one process each).
 - `src/git_client/branches.py`: `Git`'s typed branch writes, each one `git branch`
   (`delete_branches`, `create_branch`, `rename_branch`, `set_upstream`), and
   `valid_branch_name`, a `git check-ref-format --branch`.

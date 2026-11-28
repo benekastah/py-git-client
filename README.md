@@ -413,6 +413,57 @@ tree_entries(reader, "main", ["README.md", "src/"])
 A name that names nothing raises `UnknownRevisionError`, and one of a blob `WrongTypeError`. A
 `FakeGit` test responds to `["ls-tree", "-z", "--full-tree"]` with git's output.
 
+### Writing trees and commits
+
+`write_trees` writes many trees from their entries with one `git mktree -z --batch`, and
+`write_commit` a commit of a tree with one `git commit-tree` (git has no form that writes many
+commits), without an index:
+
+```python
+from datetime import UTC, datetime
+
+from git_client import Git, RefUpdate, Signature, TreeEntry, hash_blobs, update_refs
+from git_client import write_commit, write_trees
+
+git = Git("path/to/repo")
+[blob] = hash_blobs(git, [b"print('hello')\n"])
+# Each entry is one name, in any order (git sorts them). A tree that holds another needs its
+# id: one call for each depth, each writing that depth's trees for any number of commits.
+[src] = write_trees(git, [[TreeEntry("100644", "blob", blob, "main.py")]])
+[top, empty] = write_trees(git, [[TreeEntry("040000", "tree", src, "src")], []])
+head = git.resolve("HEAD")
+assert head is not None
+commit = write_commit(
+    git,
+    top,
+    [head],  # in order; [] for a root commit
+    b"Add main.py\n",  # stored as it is (a str as UTF-8): no newline added, no cleanup
+    author=Signature("Ann", "ann@example.com", datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)),
+    committer=None,  # git's own (user.name, GIT_COMMITTER_NAME, ...), now
+    sign=False,  # True: -S, with the default key; "KEY": -SKEY
+)
+update_refs(git, [RefUpdate("refs/heads/new", commit)])  # putting it on a branch is a write too
+```
+
+They run no hook and change no index or ref (building trees on a temporary index runs the
+`post-index-change` hook for each `read-tree`, `update-index` and `write-tree`). An identity
+given is set for that one process (`GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE`), whole, whatever
+the environment says; one not given is git's. Its date is needed (for now,
+`datetime.now().astimezone()`), with a time zone of whole minutes, from 1970 on. A `Signature`
+from `commits()` carries git's date as printed (`raw_date`), which `write_commit` writes while
+`date` still describes it, so a commit read and written again keeps a date a datetime can't
+hold (e.g. past the year 9999). A str message is stored as UTF-8 and labeled so; bytes are
+labeled as `i18n.commitEncoding` says. commit-tree doesn't read `commit.gpgSign`: a tool that
+follows it reads it and passes `sign=True`.
+
+git checks that each tree entry's object exists and is of its mode's kind (`missing=True` leaves
+that to the caller), and refuses a path with a "/". Otherwise mktree writes what it's given: a
+name given twice, ".", "..", ".git" or a mode that isn't one of git's give a tree `git fsck`
+reports, which is git's check of trees. An empty path, or a field mktree's input can't hold,
+raises ValueError. A `FakeGit` test responds to `["mktree"]` with an id on a line for each
+tree, and to `["commit-tree"]` (for a str message, `["-c", "i18n.commitEncoding=UTF-8",
+"commit-tree"]`) with the commit's id and a newline.
+
 ### Push results
 
 `push` makes many changes to a remote's refs with one `git push`, and reads what git says
