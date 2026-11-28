@@ -9,6 +9,7 @@ from git_client import (
     CorruptObjectError,
     Git,
     GitError,
+    Merge,
     MergeResult,
     MissingObjectError,
     NotARepositoryError,
@@ -25,6 +26,8 @@ Changes = Callable[[Git], None]
 
 NEEDS_WRITE_TREE = pytest.mark.needs_git(2, 38, reason="for merge-tree --write-tree")
 NEEDS_STDIN = pytest.mark.needs_git(2, 39, reason="for merge-tree --stdin")
+NEEDS_BASE = pytest.mark.needs_git(2, 40, reason="for merge-tree's merge base")
+NEEDS_TREES = pytest.mark.needs_git(2, 45, reason="for merge-tree's merges of trees")
 
 
 def commit(git: Git, parent: str | None, changes: Mapping[bytes, bytes | None]) -> str:
@@ -59,6 +62,9 @@ def make_branches(git: Git) -> None:
         "theirs": commit(git, main, {b"a": b"theirs\n"}),
         "x": topic,
         "y": commit(git, main, {b"y": b"y\n"}),
+        # A commit on x, and its change alone made again on y: a cherry-pick of it.
+        "stacked": commit(git, topic, {b"z": b"z\n"}),
+        "picked": commit(git, commit(git, main, {b"y": b"y\n"}), {b"z": b"z\n"}),
         "renamed": commit(git, main, {b"a": None, b"b": b"a\n"}),
         "deleted": commit(git, main, {b"a": None}),
         "added-1": commit(git, main, {b"n": b"1\n"}),
@@ -468,3 +474,131 @@ def test_output_git_never_gives_raises_with_gits_status_and_stderr(
 
     assert raised.value.returncode == returncode
     assert raised.value.stderr == "warning: what git said\n"
+
+
+def tree_of(git: Git, commit: str) -> str:
+    return git.run("rev-parse", f"{commit}^{{tree}}")
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        pytest.param(True, marks=NEEDS_BASE, id="batch"),
+        pytest.param(False, marks=NEEDS_BASE, id="one-at-a-time"),
+    ],
+)
+def test_a_merge_with_a_base_cherry_picks_and_pairs_merge_as_before(
+    merges: tuple[Git, dict[str, str]],
+    git_calls: list[GitCall],
+    monkeypatch: pytest.MonkeyPatch,
+    batch: bool,
+) -> None:
+    git, ids = merges
+    if not batch:
+        monkeypatch.setattr(git_client.merging, "_STDIN", "--no-such-option")
+    git_calls.clear()
+
+    # stacked's own change (z), onto y: with x, stacked's parent, as the base, not main, the
+    # merge base, whose change (x) a merge would bring too.
+    pair, picked, merged = merge_trees(
+        git,
+        [
+            (ids["x"], ids["y"]),
+            Merge(ids["y"], ids["stacked"], base=ids["x"]),
+            Merge(ids["y"], ids["stacked"]),
+        ],
+    )
+
+    # The batch, or the batch refused and one for each.
+    assert len(git_calls) == (1 if batch else 4)
+    assert pair == merged_alone(git, ids["x"], ids["y"])
+    assert picked == MergeResult(True, tree_of(git, ids["picked"]))
+    assert merged == merged_alone(git, ids["y"], ids["stacked"])
+
+
+@NEEDS_TREES
+def test_with_a_base_trees_are_enough(merges: tuple[Git, dict[str, str]]) -> None:
+    git, ids = merges
+    ours, theirs, base = (tree_of(git, ids[name]) for name in ("y", "stacked", "x"))
+
+    [picked] = merge_trees(git, [Merge(ours, theirs, base=base)])
+
+    assert picked == MergeResult(True, tree_of(git, ids["picked"]))
+
+
+@NEEDS_TREES
+def test_a_base_git_cant_read_gets_its_error_and_the_rest_their_results(
+    merges: tuple[Git, dict[str, str]],
+) -> None:
+    git, ids = merges
+    missing = "1" * 40
+
+    pair, failed, picked = merge_trees(
+        git,
+        [
+            (ids["x"], ids["y"]),
+            Merge(ids["y"], ids["stacked"], base=missing),
+            Merge(ids["y"], ids["stacked"], base=ids["x"]),
+        ],
+    )
+
+    assert pair == merged_alone(git, ids["x"], ids["y"])
+    assert failed.clean is None and failed.error is not None
+    assert f"unable to read tree ({missing})" in failed.error.stderr
+    assert picked == MergeResult(True, tree_of(git, ids["picked"]))
+
+
+@NEEDS_STDIN
+def test_with_a_base_on_git_older_than_2_40_it_says_which_git_it_needs(
+    merges: tuple[Git, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int, int],
+) -> None:
+    git, ids = merges
+    if git_version >= (2, 40):
+        # As git 2.39 reads a line with a base: as more than two names.
+        monkeypatch.setattr(git_client.merging, "_BASE_SEPARATOR", "-no-such-separator-")
+
+    with pytest.raises(GitError, match="malformed input line") as raised:
+        merge_trees(git, [(ids["x"], ids["y"]), Merge(ids["y"], ids["stacked"], base=ids["x"])])
+
+    assert "merge_trees needs git 2.40 or newer for a merge base" in str(raised.value.__notes__)
+
+
+@NEEDS_WRITE_TREE
+def test_with_a_base_on_git_2_38_it_says_which_git_it_needs(
+    merges: tuple[Git, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    git_version: tuple[int, int, int],
+) -> None:
+    git, ids = merges
+    # As git 2.38 does --stdin and --merge-base, which it doesn't know.
+    monkeypatch.setattr(git_client.merging, "_STDIN", "--no-such-option")
+    if git_version >= (2, 40):
+        monkeypatch.setattr(git_client.merging, "_MERGE_BASE", "--no-such-option")
+
+    with pytest.raises(GitError, match=r"merge_trees needs git 2\.40 or newer for a merge base"):
+        merge_trees(git, [Merge(ids["y"], ids["stacked"], base=ids["x"])])
+
+
+@pytest.mark.parametrize("name", ["-x", "main", "a" * 39, "a" * 40 + " --"])
+def test_a_base_but_a_full_object_id_is_refused_before_git_starts(
+    repo: Git, name: str, git_calls: list[GitCall]
+) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    git_calls.clear()
+
+    with pytest.raises(ValueError, match="full object id"):
+        merge_trees(repo, [Merge(head, head, base=name)])
+
+    assert git_calls == []
+
+
+def test_a_tuple_of_three_is_refused_before_git_starts(repo: Git, git_calls: list[GitCall]) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    git_calls.clear()
+
+    with pytest.raises(ValueError, match="too many values"):
+        merge_trees(repo, [(head, head, head)])  # pyright: ignore[reportArgumentType]
+
+    assert git_calls == []
