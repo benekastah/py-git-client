@@ -183,7 +183,7 @@ class CatFile:
             reply, said = self._request(b"info " + line, name, self._deadline())
             self._unanswered = False
         header = object_header(reply)
-        return None if header is None else ObjectInfo(*header, tuple(said.splitlines()))
+        return None if header is None else ObjectInfo(*header, _lines(said))
 
     @record_read()
     def resolve(self, name: str) -> str | None:
@@ -417,6 +417,12 @@ def _said(stderr: IO[bytes]) -> str:
     return decode(stderr.read()).strip()
 
 
+def _lines(said: str) -> tuple[str, ...]:
+    """The lines of what cat-file said. Not splitlines(), which also ends one at characters a
+    ref name can hold (e.g. U+2028, U+0085), splitting a warning that quotes one."""
+    return tuple(said.split("\n")) if said else ()
+
+
 def _check_intact(reason: str, returncode: int) -> None:
     """Raise CorruptObjectError if what cat-file said of a request, `reason`, is that an object
     it read is damaged, and MissingObjectError if it's that a partial clone couldn't fetch it:
@@ -436,7 +442,7 @@ def _failure(name: str, said: str, *, exited: bool) -> GitError:
     returncode = FATAL if exited else 1
     if WRONG_TYPE.search(said):
         return WrongTypeError(_COMMAND, returncode, said)
-    lines = said.splitlines()
+    lines = list(_lines(said))
     reason = "\n".join(line for line in lines if not line.startswith(_NO_REASON))
     if reason:
         return UnknownRevisionError(_COMMAND, returncode, said, reason=reason)
