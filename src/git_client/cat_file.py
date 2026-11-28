@@ -598,9 +598,10 @@ class Output:
         chunk of its end, until it ends or this is closed. It waits for room before each
         read, so that until a read takes them it holds at most _READ_AHEAD chunks."""
         try:
-            while (
-                self._room.acquire() and not self._closed and (chunk := os.read(self._fd, _CHUNK))
-            ):
+            while True:
+                self._room.acquire()
+                if self._closed or not (chunk := os.read(self._fd, _CHUNK)):
+                    break
                 self._chunks.put(chunk)
         except OSError:
             pass
