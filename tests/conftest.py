@@ -41,7 +41,9 @@ def utf8_encodable(value: object) -> object:
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_report_to_serializable(report: pytest.TestReport) -> Generator[None, object, object]:
+def pytest_report_to_serializable(
+    report: pytest.TestReport | pytest.CollectReport,
+) -> Generator[None, object, object]:
     return utf8_encodable((yield))
 
 
