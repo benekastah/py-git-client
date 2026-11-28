@@ -76,6 +76,17 @@ from git_client.history import (
 )
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
+from git_client.porcelain import (
+    CommandOutput,
+    abort,
+    cherry_pick,
+    commit,
+    merge,
+    reset,
+    revert,
+    skip,
+    switch,
+)
 from git_client.pushing import (
     PushDestination,
     PushRef,
@@ -115,6 +126,7 @@ __all__ = [
     "CatFile",
     "ChangeStatus",
     "Changed",
+    "CommandOutput",
     "Commit",
     "ConfigChange",
     "ConfigLockedError",
@@ -177,9 +189,12 @@ __all__ = [
     "Untracked",
     "Worktree",
     "WrongTypeError",
+    "abort",
     "any_commit",
     "changed_paths",
+    "cherry_pick",
     "color_enabled",
+    "commit",
     "commits",
     "config",
     "config_values",
@@ -198,6 +213,7 @@ __all__ = [
     "independent",
     "is_ancestor",
     "line_changes",
+    "merge",
     "merge_base",
     "merge_bases",
     "merge_file",
@@ -209,7 +225,11 @@ __all__ = [
     "refs",
     "remote_refs",
     "remote_urls",
+    "reset",
+    "revert",
+    "skip",
     "status",
+    "switch",
     "tree_entries",
     "update_refs",
     "worktrees",

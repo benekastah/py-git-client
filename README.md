@@ -566,6 +566,61 @@ repository whose index is stale pays for that at each call. A `ReadOnlyGit`'s
 A `FakeGit` test responds to `["--no-optional-locks", "status", "--porcelain=v2", "-z"]` and
 to `["worktree", "list", "--porcelain", "-z"]` with git's output.
 
+### Porcelain writes
+
+`switch`, `reset`, `merge`, `cherry_pick`, `revert` and `commit` each run one git of that
+name, taking a `Git`, with typed switches, and return what it printed (a `CommandOutput`):
+
+```python
+git = Git("path/to/repo")
+# Also detach=True, force=True (throw away changes in the way) and track=True or False.
+switch(git, "topic", create=True, start_point="main", track=False)
+(Path("path/to/repo") / "README.md").write_text("# Changed\n", encoding="utf-8")
+commit(git, "Change the README", all=True)  # also amend, allow_empty and no_verify
+switch(git, "main", quiet=True)  # quiet: git prints nothing (switch, reset, merge, commit)
+try:
+    cherry_pick(git, "topic", record_origin=True)  # -x; several commits; ff, allow_empty
+except ConflictError:  # it stopped: resolved by the user, or given up with abort()
+    abort(git, "cherry-pick")  # or skip(git, "cherry-pick"): on to the next commit
+reset(git, "HEAD~1", mode="hard")  # or "soft", "mixed" (the default), "keep" or "merge"
+merge(git, "topic", ff="no", message="Merge topic")  # ff="only": fast-forward, or fail
+revert(git, "topic")  # with git's message; edit=True (with inherit_output) opens the editor
+# git's input and output the tool's (its stdout to sys.stderr, here), for git to show its
+# progress and ask the user, as passthrough gives them: then nothing is captured.
+merge(git, "topic", inherit_output=True, stdout=sys.stderr)
+```
+
+Hooks run as they would from a shell (pre-commit, commit-msg, post-checkout, ...): only
+`commit(no_verify=True)` skips pre-commit and commit-msg. No editor opens unless asked
+(`merge` and `revert`'s `edit=True`), whatever git's default for a terminal; `commit` takes
+its message, or, amending, keeps the commit's. Without `inherit_output`, git reads nothing,
+so `edit=True` raises ValueError: an editor given no terminal (e.g. vim) would wait for one,
+forever without a timeout.
+
+`switch` passes its arguments to git as they are, and git decides what they mean: a target
+that names no branch but a remote's (`origin/feat` for `"feat"`) makes git create that branch
+tracking it (`checkout.guess`), `track` without `create` creates a branch from the remote
+branch named, and `start_point` without `create`, or `detach` with it, are usage errors.
+
+A failure raises `GitError`, as `run` does, a hook's refusal too, and a conflict that stops
+a merge, cherry-pick or revert (git's exit status 1) raises `ConflictError`, the stopped
+operation left for the user or for `abort` and `skip`. With captured output, that's from
+what git says (a `CONFLICT (` line); with `inherit_output`, whose output the library doesn't
+see, from exit status 1 and unmerged paths in the index, asked with one more git after such
+a failure (`ls-files --unmerged -z -- :/`), and every other failure is a plain `GitError`
+with no `stderr`. So with `inherit_output`, a conflict `rerere.autoUpdate` resolved and staged
+(git still stops, but leaves no unmerged path) is a plain `GitError`, where captured output
+raises `ConflictError`. A stop that isn't a conflict (e.g. a cherry-picked commit that's
+become empty, or one stopped partway by an untracked file) is a plain `GitError` too, the
+operation still in progress. `reset`, `cherry_pick` and `revert` raise ValueError for a
+commit starting with `-`, which git 2.36 reads as an option; `switch` and `merge` read it as
+a name (`--end-of-options`). A `FakeGit` test responds to the command's name (e.g.
+`["merge"]`), and to an `inherit_output` stop of a merge, cherry-pick, revert or skip (exit
+status 1) also to `["ls-files", "--unmerged", "-z", "--", ":/"]`, whose stdout, empty or
+not, says whether it was a conflict. Not supported: `commit`'s author,
+committer, signing and paths, `reset`'s paths, `merge`'s `--squash` and several commits, and
+the operations' `--continue`.
+
 ### Caching
 
 By default, a client asks Git for repository metadata on each call. Pass `cache=GitCache()`
@@ -711,7 +766,7 @@ said and raises a subclass:
 | `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. The promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
-| `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
+| `ConflictError` | A rebase, merge, cherry-pick or revert stopped on a conflict. |
 
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).
