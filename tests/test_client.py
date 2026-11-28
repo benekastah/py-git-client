@@ -63,6 +63,14 @@ def test_run_returns_stdout_stripped(repo: Git) -> None:
     assert repo.run("rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
+@pytest.mark.parametrize("char", ["\x85", "\u2028", "\u2029"])
+def test_run_keeps_a_last_character_that_is_not_ascii_space(repo: Git, char: str) -> None:
+    # Which str.strip() would take off, though git allows it at the end of a ref name.
+    repo.run("update-ref", f"refs/heads/z{char}", repo.run("rev-parse", "HEAD"))
+
+    assert repo.run("for-each-ref", "--format=%(refname)", "refs/heads/z*") == f"refs/heads/z{char}"
+
+
 @pytest.mark.parametrize("client", [Git, ReadOnlyGit, FakeGit])
 def test_client_constructors_have_no_descriptor_inheritance_option(
     client: type[ReadOnlyGit],

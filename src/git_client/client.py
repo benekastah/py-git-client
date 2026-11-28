@@ -189,9 +189,11 @@ def check_names_nothing(git: ReadOnlyGit, name: str, *, timeout: Timeout = CLIEN
         raise error_from(args, result)
 
 
-# How long git, asked to stop, has to clean up (e.g. remove index.lock) before it's killed: as
-# long as subprocess gives a child after Ctrl-C.
-_GRACE = 0.25
+# How long git, asked to stop, has to clean up (e.g. remove index.lock) and exit before it's
+# killed. It usually takes milliseconds, but on a machine busy writing to disk, over a second
+# (seen locally; in CI, cut short, it left index.lock behind). Spent only on a git that
+# doesn't exit when asked (e.g. one waiting for an editor, which ignores SIGINT).
+_GRACE = 5.0
 
 # How long a command that was stopped is given to let go of its output.
 _AFTER_STOP = 1.0
@@ -238,8 +240,7 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: boo
     if sys.platform == "win32":
         try:
             if interrupted:
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(_GRACE)
+                _wait_for_exit(process, _GRACE)
         finally:
             _kill_tree(process)
         return
@@ -250,13 +251,21 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: boo
                 os.killpg(process.pid, signal.SIGINT)
             else:
                 process.send_signal(signal.SIGINT)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(_GRACE)
+        _wait_for_exit(process, _GRACE)
     finally:
         if own_group:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
         process.kill()
+
+
+def _wait_for_exit(process: subprocess.Popen[bytes], seconds: float) -> None:
+    """Wait at most `seconds` for the process to exit, in short sleeps, so that an interrupt
+    (e.g. a second Ctrl-C) ends the wait at once on every system: on Windows, Popen.wait
+    doesn't wake for Ctrl-C, but time.sleep does."""
+    deadline = time.monotonic() + seconds
+    while process.poll() is None and (left := deadline - time.monotonic()) > 0:
+        time.sleep(min(left, 0.01))
 
 
 def _kill_tree(process: subprocess.Popen[bytes]) -> None:
@@ -354,8 +363,8 @@ def error_from(args: Sequence[Arg], result: subprocess.CompletedProcess[bytes]) 
 
 # What a ReadOnlyGit's git gets, last: no fetching a missing object in a partial clone (which
 # writes a pack; git before 2.45 ignores this, and fetches, but for the security releases
-# 2.39.4 to 2.44.1). Not GIT_OPTIONAL_LOCKS=0: none of its reads (rev-parse, cat-file,
-# for-each-ref, var, config --list) refreshes the index, as status and diff do.
+# 2.39.4 to 2.44.1). Not GIT_OPTIONAL_LOCKS=0: status, its one read that would refresh the
+# index, is given --no-optional-locks itself, as a Git's is too.
 _READ_ONLY_ENVIRONMENT = {"GIT_NO_LAZY_FETCH": "1"}
 
 # What a ReadOnlyGit gives git before each command but `config --list` (whose entries it would
@@ -581,13 +590,15 @@ def read_process(
     capture_output: bool = False,
     input: bytes | None = None,
     stdout: int | IO[bytes] | IO[str] | None = None,
+    env: Mapping[str, EnvValue] | None = None,
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run one of the library's reads, a command it fixes, through `git`: the way every typed
     read (e.g. `refs`, `config`, `resolve`) starts a process. A Git's goes through its own
-    `process`, which a subclass may override; a ReadOnlyGit offers no such method."""
+    `process`, which a subclass may override; a ReadOnlyGit offers no such method. `env` is
+    added to the client's environment, as Git.process adds it."""
     return git._process(  # pyright: ignore[reportPrivateUsage]
-        *args, capture_output=capture_output, input=input, stdout=stdout, timeout=timeout
+        *args, capture_output=capture_output, input=input, stdout=stdout, env=env, timeout=timeout
     )
 
 
@@ -600,11 +611,15 @@ def read_popen(
 
 
 def read_output(
-    git: ReadOnlyGit, *args: Arg, input: bytes | None = None, timeout: Timeout = CLIENT_TIMEOUT
+    git: ReadOnlyGit,
+    *args: Arg,
+    input: bytes | None = None,
+    env: Mapping[str, EnvValue] | None = None,
+    timeout: Timeout = CLIENT_TIMEOUT,
 ) -> bytes:
     """What one of the library's reads printed, as Git.run_bytes gives it, run as read_process
     runs it."""
-    result = read_process(git, *args, capture_output=True, input=input, timeout=timeout)
+    result = read_process(git, *args, capture_output=True, input=input, env=env, timeout=timeout)
     return stdout_of(args, result)
 
 
@@ -900,16 +915,18 @@ def local_object(
 
 class ReadOnlyGit:
     """Reads a repository with git in `directory`, as `git -C <directory>` does, offering the
-    library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`,
-    `cdup` and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`,
-    `config`, `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-    `git_common_dir` and `CatFile`). It has no public way to run a command of the caller's (no
-    `run`, `process` and the like), so a tool that only reads can show that it does by making
-    one: what it doesn't offer, it can't be asked to run (the library's private helpers can,
-    as anything private can be misused). Git extends it with those, so a function that only
-    reads takes a ReadOnlyGit, and is given either; a Git's `read_only()` gives a ReadOnlyGit
-    of its own. A tool that reads with other commands (`log`, `status`, ...) runs them through
-    a Git.
+    library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`, `cdup`
+    and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`, `config`,
+    `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
+    `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `is_ancestor`, `merge_base`,
+    `merge_bases`, `independent`, `fork_point`, `changed_paths`, `line_changes`, `tree_entries`,
+    `status`, `worktrees`, `stripspace` and `CatFile`).
+    It has no public way to run a command of the caller's (no `run`, `process` and the like),
+    so a tool that only reads can show that it does by making one: what it doesn't offer, it
+    can't be asked to run (the library's private helpers can, as anything private can be
+    misused). Git extends it with those, so a function that only reads takes a ReadOnlyGit, and
+    is given either; a Git's `read_only()` gives a ReadOnlyGit of its own. A tool that reads
+    with other commands (`log`, `diff`, ...) runs them through a Git.
 
     Its git gets GIT_NO_LAZY_FETCH=1, so in a partial clone a missing object isn't fetched (git
     2.45 and newer, and 2.39.4 to 2.44.1; older git fetches it): `resolve` and CatFile take it
@@ -941,18 +958,18 @@ class ReadOnlyGit:
     or discarded, so use a fresh cache for each refresh in a long-lived tool.
 
     Past its timeout, or when the tool is interrupted (KeyboardInterrupt) while it runs, git is
-    first asked to stop, so it can remove its lock files (e.g. index.lock), and killed a quarter
-    of a second later, or at once if the tool is interrupted again meanwhile; the call then
-    waits at most a second more for its output. On Linux and macOS it's asked with SIGINT, as
-    Ctrl-C asks it. When the tool has no controlling terminal (as in CI, or a service), a
-    command with a timeout runs in a process group of its own, so what git started (hooks, ssh,
-    credential helpers) is stopped with it. With a terminal, git stays in its foreground, as
-    from a shell, so it can ask for a password and open an editor, and Ctrl-C reaches it; only
-    git is stopped then. On Windows, git and what it started are killed (taskkill /T): past a
-    timeout at once, with no chance to clean up, and on an interrupt once git has had a quarter
-    of a second to handle the Ctrl-C that reached it too, from the tool's console. taskkill
-    finds what git started through git, so what outlives git's own exit (e.g. a hook that
-    ignores Ctrl-C) runs on.
+    first asked to stop, so it can remove its lock files (e.g. index.lock), and killed if it
+    hasn't exited 5 seconds later, or at once if the tool is interrupted again meanwhile; the
+    call then waits at most a second more for its output. On Linux and macOS it's asked with
+    SIGINT, as Ctrl-C asks it. When the tool has no controlling terminal (as in CI, or a
+    service), a command with a timeout runs in a process group of its own, so what git started
+    (hooks, ssh, credential helpers) is stopped with it. With a terminal, git stays in its
+    foreground, as from a shell, so it can ask for a password and open an editor, and Ctrl-C
+    reaches it; only git is stopped then. On Windows, git and what it started are killed
+    (taskkill /T): past a timeout at once, with no chance to clean up, and on an interrupt once
+    git has exited, or had 5 seconds to handle the Ctrl-C that reached it too, from the tool's
+    console. taskkill finds what git started through git, so what outlives git's own exit (e.g.
+    a hook that ignores Ctrl-C) runs on.
 
     A git in a group of its own doesn't get a signal sent to the tool's group (e.g. SIGTERM
     from `timeout` or a CI runner cancelling a job), and Python's default SIGTERM ends the
@@ -1131,6 +1148,7 @@ class ReadOnlyGit:
         capture_output: bool = False,
         input: bytes | None = None,
         stdout: int | IO[bytes] | IO[str] | None = None,
+        env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         """Run one of the library's reads (see read_process), as Git.process runs a command,
@@ -1140,7 +1158,7 @@ class ReadOnlyGit:
             self,
             args,
             command_line(self, command),
-            environment_for(self, None, english=capture_output, read_only=True),
+            environment_for(self, env, english=capture_output, read_only=True),
             capture_output=capture_output,
             input=input,
             stdout=stdout,
@@ -1214,11 +1232,17 @@ class Git(ReadOnlyGit):
         capture_output: bool = False,
         input: bytes | None = None,
         stdout: int | IO[bytes] | IO[str] | None = None,
+        env: Mapping[str, EnvValue] | None = None,
         timeout: Timeout = CLIENT_TIMEOUT,
     ) -> subprocess.CompletedProcess[bytes]:
         """One of the library's reads, through `process`, which a subclass may override."""
         return self.process(
-            *args, capture_output=capture_output, input=input, stdout=stdout, timeout=timeout
+            *args,
+            capture_output=capture_output,
+            input=input,
+            stdout=stdout,
+            env=env,
+            timeout=timeout,
         )
 
     def _popen(
@@ -1335,9 +1359,10 @@ class Git(ReadOnlyGit):
         timeout: Timeout = CLIENT_TIMEOUT,
         strip: bool = True,
     ) -> str:
-        """Run git and return its stdout as text (see decode), stripped of space at both ends
-        unless `strip` is False: then as git wrote it, for output whose edges matter (e.g.
-        `status --porcelain`'s " M file", or a name that starts or ends with a space).
+        """Run git and return its stdout as text (see decode), stripped of ASCII space and
+        newlines (" \\t\\r\\n") at both ends, not of other characters a name can end in (e.g.
+        U+2028), unless `strip` is False: then as git wrote it, for output whose edges matter
+        (e.g. `status --porcelain`'s " M file", or a name that starts or ends with a space).
         Raises GitError if it fails, as `run_bytes` does.
 
         Input and output pass as bytes, so line endings stay as they are: text mode would
@@ -1345,7 +1370,7 @@ class Git(ReadOnlyGit):
         """
         encoded = None if input is None else encode(input)
         output = decode(self.run_bytes(*args, input=encoded, env=env, timeout=timeout))
-        return output.strip() if strip else output
+        return output.strip(" \t\r\n") if strip else output
 
     def ok(
         self,

@@ -126,7 +126,9 @@ class WrongTypeError(GitError):
     ) -> None:
         super().__init__(args, returncode, stderr, stdout)
         said = WRONG_TYPE.search(stderr)
-        self.expected: str | None = None if said is None else said["expected"] or said["expected2"]
+        self.expected: str | None = (
+            None if said is None else said["expected"] or said["expected2"] or said["expected3"]
+        )
         self.found: str | None = None if said is None else said["found"] or said["found2"]
 
 
@@ -164,7 +166,7 @@ class PushRejectedError(GitError):
 
 
 class ConflictError(GitError):
-    """A rebase, merge or cherry-pick stopped on a conflict."""
+    """A rebase, merge, cherry-pick or revert stopped on a conflict."""
 
 
 # What git says (on stderr, but for a conflict: on stdout) for each failure, in the order
@@ -306,7 +308,9 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
             "| - not something we can merge|Failed to resolve '.*' as a valid ref"
             # Of a full id the repository lacks, as some commands say it.
             "|Not a valid commit name |Invalid revision range |Does not point to a valid commit '"
-            "| is not a valid object$|Could not parse object '|^fatal: unknown commit ",
+            "| is not a valid object$|Could not parse object '|^fatal: unknown commit "
+            # merge-base --fork-point's, of a name that names no ref.
+            "|^fatal: No such ref: '",
             re.MULTILINE,
         ),
     ),
@@ -319,7 +323,9 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
 WRONG_TYPE = re.compile(
     r"^error: object \S+ is a (?P<found>\w+), not an? (?P<expected>\w+)$"
     r"|^error: .*: expected (?P<expected2>\w+) type, but the object dereferences to"
-    r" (?P<found2>\w+) type$",
+    r" (?P<found2>\w+) type$"
+    # commit-tree's, of a tree or a parent (of a full id it lacks, it says "a valid object").
+    r"|^fatal: \S+ is not a valid '(?P<expected3>\w+)' object$",
     re.MULTILINE,
 )
 
@@ -338,4 +344,6 @@ def error_for(stderr: str, stdout: str, *, command: object) -> type[GitError]:
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
                 return WrongTypeError  # it names something
             return error
+    if WRONG_TYPE.search(stderr):  # alone, as merge-base --fork-point says it
+        return WrongTypeError
     return GitError

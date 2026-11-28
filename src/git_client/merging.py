@@ -15,10 +15,16 @@ from git_client.errors import (
 )
 
 # The options that make merge-tree merge two commits and write the result (git 2.38), and
-# take many pairs on its stdin (git 2.39). Variables, so a test can have git refuse each, as
-# an older git does.
+# take many pairs on its stdin (git 2.39); and the merge base, as an option and on a line of
+# stdin, before the pair (git 2.40). Variables, so a test can have git refuse each, as an
+# older git does.
 _WRITE_TREE = "--write-tree"
 _STDIN = "--stdin"
+_MERGE_BASE = "--merge-base"
+_BASE_SEPARATOR = "--"
+
+# What git before 2.40 says of a line of stdin with a merge base.
+_MALFORMED = "fatal: malformed input line"
 
 # What merge_trees asks of every merge: conflicted paths, each once, and not the messages
 # ("Auto-merging a", "CONFLICT (content): ..."), which git's documentation says aren't made
@@ -48,6 +54,19 @@ _SAYS_OF_THE_PAIR = re.compile(
 
 
 @dataclass(frozen=True)
+class Merge:
+    """A merge for `merge_trees`, by full object ids: theirs into ours, as `git merge-tree
+    --write-tree [--merge-base=<base>] <ours> <theirs>` merges them. With no `base`, git finds
+    their merge base, as for a pair (ours, theirs). With one, git takes it as their only merge
+    base: a cherry-pick of commit C onto ours is `Merge(ours, C, base=<C's parent>)`. From git
+    2.45, with a base, all three can be trees."""
+
+    ours: str
+    theirs: str
+    base: str | None = None
+
+
+@dataclass(frozen=True)
 class MergeResult:
     """What `merge_trees` gives for one pair, as `git merge-tree --write-tree` gives it.
     `clean`: whether the merge had no conflicts (True or False), or None if git couldn't merge
@@ -65,12 +84,13 @@ class MergeResult:
     error: GitError | None = None
 
 
-def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]:
+def merge_trees(git: Git, pairs: Sequence[tuple[str, str] | Merge]) -> list[MergeResult]:
     """Merge each pair of commits (ours, theirs), given by their full object ids, as `git
-    merge-tree --write-tree <ours> <theirs>` does, and give a MergeResult for each, in order:
-    with one `git merge-tree --stdin` for them all, so many pairs cost one process. It takes a
-    Git, not a ReadOnlyGit, as merge-tree writes the merged trees and blobs to the object
-    database (no ref points to them, so `git gc` removes them in time).
+    merge-tree --write-tree <ours> <theirs>` does, or each Merge (which can give a merge base),
+    and give a MergeResult for each, in order, with one `git merge-tree --stdin` for them all,
+    so many pairs cost one process. It takes a Git, not a ReadOnlyGit, as merge-tree writes the
+    merged trees and blobs to the object database (no ref points to them, so `git gc` removes
+    them in time).
 
     A pair git can't merge gets a MergeResult whose `clean` is None and whose `error` says why:
     an UnknownRevisionError for an id that names no commit the repository has, a
@@ -82,23 +102,38 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
     NotARepositoryError, no room to write objects, or MissingObjectError, for an object a
     partial clone couldn't fetch, as each pair after it would wait to fail the same way.
 
-    Raises ValueError, starting no git, for a pair that isn't two full object ids: names (a
-    branch, `HEAD`) aren't taken, so nothing given can be read as an option or as more than
+    With a base, git doesn't check that ours and theirs share history, and ours or theirs that
+    names nothing gets an UnknownRevisionError, as for a pair. From git 2.45, any of the three
+    can be a tree, and a base git can't read as a tree (e.g. one that names nothing) gets a
+    GitError of its own. Before 2.45, a base that is a tree gets a WrongTypeError, but one that
+    names nothing stops git (`could not lookup commit`), which is raised, losing the other
+    merges' results too.
+
+    Raises ValueError, starting no git, for a pair or Merge that isn't full object ids: names
+    (a branch, `HEAD`) aren't taken, so nothing given can be read as an option or as more than
     one name. Needs git 2.38 (merge-tree's `--write-tree`), else raises GitError. On git 2.38,
     whose merge-tree takes no `--stdin` (2.39's), each pair takes a process of its own, with
-    the same results, after the batch was tried once and refused."""
+    the same results, after the batch was tried once and refused. A Merge with a base needs git
+    2.40 (merge-tree's merge base), else raises GitError."""
+    merges: list[Merge] = []
     for pair in pairs:
-        for object_id in pair:
-            if not OBJECT_ID.fullmatch(object_id):
+        if isinstance(pair, Merge):
+            merges.append(pair)
+        else:
+            ours, theirs = pair  # a tuple of another length raises ValueError
+            merges.append(Merge(ours, theirs))
+    for merge in merges:
+        for object_id in (merge.ours, merge.theirs, merge.base):
+            if object_id is not None and not OBJECT_ID.fullmatch(object_id):
                 raise ValueError(f"merge_trees takes full object ids, not {object_id!r}")
     results: list[MergeResult] = []
-    while len(results) < len(pairs):
-        rest = pairs[len(results) :]
+    while len(results) < len(merges):
+        rest = merges[len(results) :]
         args = ("merge-tree", _WRITE_TREE, _STDIN, *_OUTPUT)
-        lines = "".join(f"{ours} {theirs}\n" for ours, theirs in rest).encode()
+        lines = "".join(map(_line, rest)).encode()
         result = git.process(*args, capture_output=True, input=lines)
         if result.returncode == _USAGE:
-            return _one_at_a_time(git, pairs)
+            return _one_at_a_time(git, merges)
         merged = _merges(args, result, result.stdout)
         results += merged
         if result.returncode == 0 and len(merged) == len(rest):
@@ -107,23 +142,35 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]
             why = f"merge-tree gave {len(merged)} results for {len(rest)} pairs"
             raise _unexpected(args, result, why)
         # git stopped at the next pair.
+        if rest[len(merged)].base is not None and decode(result.stderr).startswith(_MALFORMED):
+            error = error_from(args, result)
+            error.add_note("merge_trees needs git 2.40 or newer for a merge base")
+            raise error
         results.append(_failed(args, result))
     return results
 
 
-def _one_at_a_time(git: Git, pairs: Sequence[tuple[str, str]]) -> list[MergeResult]:
-    """merge_trees for a git whose merge-tree takes no --stdin: a process for each pair."""
+def _line(merge: Merge) -> str:
+    """merge's line of `merge-tree --stdin`'s input."""
+    base = "" if merge.base is None else f"{merge.base} {_BASE_SEPARATOR} "
+    return f"{base}{merge.ours} {merge.theirs}\n"
+
+
+def _one_at_a_time(git: Git, merges: Sequence[Merge]) -> list[MergeResult]:
+    """merge_trees for a git whose merge-tree takes no --stdin: a process for each merge."""
     results: list[MergeResult] = []
-    for ours, theirs in pairs:
-        args = ("merge-tree", _WRITE_TREE, "-z", *_OUTPUT, "--end-of-options", ours, theirs)
+    for merge in merges:
+        base = () if merge.base is None else (f"{_MERGE_BASE}={merge.base}",)
+        args = ("merge-tree", _WRITE_TREE, "-z", *_OUTPUT, *base, "--end-of-options")
+        args += (merge.ours, merge.theirs)
         result = git.process(*args, capture_output=True)
         if result.returncode == _USAGE:
-            raise GitError(
-                args,
-                result.returncode,
-                decode(result.stderr)
-                + "merge_trees needs git 2.38 or newer, whose merge-tree has --write-tree",
+            needs = (
+                "merge_trees needs git 2.38 or newer, whose merge-tree has --write-tree"
+                if merge.base is None
+                else "merge_trees needs git 2.40 or newer for a merge base"
             )
+            raise GitError(args, result.returncode, decode(result.stderr) + needs)
         # Exit status 1 is a conflict, but also a commit git can't find, for which it prints
         # nothing.
         if result.returncode in (0, 1) and result.stdout:

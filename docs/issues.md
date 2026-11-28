@@ -4,6 +4,10 @@ What's wrong with what's built: bugs, and gaps against the rules in `AGENTS.md` 
 `PROJECT_AGENTS.md`, most severe first. New work is in [roadmap.md](roadmap.md). When a change
 fixes one, remove it in the same change; when a change leaves something wrong, add it.
 
+- **`RepoTemplates.build` reuses a template of the same name silently.** Two test modules
+  that each build a template `name` with a different `make` share whichever ran first in that
+  worker, so a test fails only under some orders (it happened with two "submodule"s). Fix:
+  remember each name's `make` and raise when another asks for the name.
 - **`dev.py coverage` warns that a data file "isn't a coverage data file".** With
   `patch = ["subprocess"]`, each Python process the tests start is measured, and the tests in
   `tests/test_timeouts.py` kill some (the tools and hooks under a timeout or a signal) before

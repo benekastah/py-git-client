@@ -8,6 +8,7 @@ import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -364,27 +365,84 @@ def test_a_timeout_stops_git_when_taskkill_cant_run(
     assert time.monotonic() - started < 3.5
 
 
-def test_a_second_interrupt_while_git_cleans_up_still_kills_it(
+SLOW_CLEANUP = """\
+import pathlib, signal, sys, time
+started, cleaned = map(pathlib.Path, sys.argv[1:])
+def clean_up(*_):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # git passes the SIGINT on, too
+    time.sleep(1)
+    cleaned.touch()
+    sys.exit(130)
+signal.signal(signal.SIGINT, clean_up)
+started.touch()
+time.sleep(10)
+"""
+
+
+@NO_INTERRUPT_TEST_ON_WINDOWS
+def test_an_interrupted_git_has_a_second_or_more_to_clean_up(repo: Git, tmp_path: Path) -> None:
+    # On a busy machine git can take that long to remove its lock files and exit. Here it waits
+    # for an alias's command, as git does on SIGINT, which takes a second to clean up. The
+    # alias names a script on PATH, which git runs without a shell, and which execs Python: so
+    # git's child is the command itself.
+    (tmp_path / "slow.py").write_text(SLOW_CLEANUP, encoding="utf-8")
+    paths = (Path(sys.executable), tmp_path / "slow.py", tmp_path / "started", tmp_path / "cleaned")
+    script = tmp_path / "slow-cleanup"
+    script.write_text(
+        "#!/bin/sh\nexec " + " ".join(f'"{path.as_posix()}"' for path in paths) + "\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    path = f"{tmp_path}{os.pathsep}{os.environ['PATH']}"
+    process = repo.popen("-c", "alias.slow=!slow-cleanup", "slow", env={"PATH": path})
+    deadline = time.monotonic() + 10
+    while not (tmp_path / "started").exists():
+        assert time.monotonic() < deadline, "the alias didn't start"
+        time.sleep(0.01)
+
+    with process:
+        _stop(process, False, interrupted=True)
+
+    assert process.returncode == -signal.SIGINT  # it exited as asked, rather than killed
+    assert (tmp_path / "cleaned").exists()
+
+
+def interrupt_main_thread() -> None:
+    """Ctrl-C's SIGINT, for the main thread, as a thread can send it: on Linux and macOS to the
+    main thread itself (else another thread could take it); on Windows raised, which runs
+    Python's handler, and wakes the main thread's time.sleep as Ctrl-C would."""
+    if sys.platform == "win32":
+        signal.raise_signal(signal.SIGINT)
+    else:
+        signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGINT)
+
+
+def test_a_second_interrupt_while_git_cleans_up_kills_it_at_once(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A git that waits for its stdin, and a second Ctrl-C as _stop waits for it to clean up.
-    process = repo.popen("cat-file", "--batch")
+    assert threading.current_thread() is threading.main_thread()  # where SIGINT raises
+    # A git that waits for its stdin, and ignores SIGINT (as one waiting for an editor does),
+    # so _stop waits for it the whole grace, but for the second Ctrl-C.
+    ignoring = signal.signal(signal.SIGINT, signal.SIG_IGN)  # what git inherits
+    try:
+        process = repo.popen("cat-file", "--batch")
+    finally:
+        signal.signal(signal.SIGINT, ignoring)
     killed: list[bool] = []
     kill = process.kill
     monkeypatch.setattr(process, "kill", lambda: (killed.append(True), kill()))
+    second = threading.Timer(0.2, interrupt_main_thread)
+    started = time.monotonic()
 
-    wait = process.wait
+    try:
+        with process, pytest.raises(KeyboardInterrupt):
+            second.start()
+            _stop(process, False, interrupted=True)
+    finally:
+        second.cancel()  # Else, if _stop returned first, its SIGINT would hit the next test.
+        second.join()
 
-    def interrupted(timeout: float | None = None) -> int:
-        if timeout is not None:  # _stop's wait for git, not Popen's on the way out
-            raise KeyboardInterrupt
-        return wait()
-
-    monkeypatch.setattr(process, "wait", interrupted)
-
-    with process, pytest.raises(KeyboardInterrupt):
-        _stop(process, False, interrupted=True)
-
+    assert time.monotonic() - started < 2  # not the grace's 5 seconds
     assert killed
 
 

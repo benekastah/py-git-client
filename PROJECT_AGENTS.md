@@ -23,10 +23,35 @@ the shape of the code or a rule here changes.
   and active CatFile work. Uses one monotonic clock so callers can combine intervals.
 - `src/git_client/cat_file.py`: `CatFile`, the long-lived `git cat-file --batch-command`.
 - `src/git_client/batch.py`: reads and writes that each take one git process.
+- `src/git_client/history.py`: `commits`, `count` and `any_commit`, a `git rev-list` each for
+  the commits a `Revisions` describes, parsed into `Commit`s; and `reflogs`, one `git log
+  --walk-reflogs` for many refs' reflogs, parsed into `ReflogEntry`s.
+- `src/git_client/ancestry.py`: `is_ancestor`, `merge_base`, `merge_bases`, `independent` and
+  `fork_point`, each one `git merge-base`.
+- `src/git_client/diffs.py`: `changed_paths` and `line_changes`, one `git diff-tree --stdin`
+  for many diffs, after a CatFile resolves their names; and
+  `tree_entries`, a `git ls-tree -z`.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git
   reported at each destination (`PushResult`, parsed from `--porcelain`).
+- `src/git_client/worktree.py`: `status`, a worktree's (`git status --porcelain=v2 -z`),
+  and `worktrees`, the repository's (`git worktree list --porcelain -z`); `add_worktree`,
+  `remove_worktree` and `prune_worktrees`, `git worktree`'s writes.
+- `src/git_client/hooks.py`: `run_hook` (`git hook run`) and `stripspace` (`git stripspace`).
+- `src/git_client/remotes.py`: `fetch`, and what it did to each ref; `remote_refs` and
+  `remote_urls`.
+- `src/git_client/objects.py`: `write_trees` (one `git mktree --batch` for many trees) and
+  `write_commit` (`git commit-tree`, one process each).
+- `src/git_client/branches.py`: `Git`'s typed branch writes, each one `git branch`
+  (`delete_branches`, `create_branch`, `rename_branch`, `set_upstream`), and
+  `valid_branch_name`, a `git check-ref-format --branch`.
+- `src/git_client/transaction.py`: `ref_transaction`, a `RefTransaction` over one long-lived
+  `git update-ref --stdin` (reading its replies with `cat_file.Output`).
+- `src/git_client/porcelain.py`: the porcelain writes (`switch`, `reset`, `merge`,
+  `cherry_pick`, `revert`, `rebase`, `commit`, `abort`, `skip`), one git each, their output
+  captured or the tool's (`inherit_output`); `_sequence_editor.py`, the script `rebase(stop_at=)`
+  gives git as its sequence editor, which marks those commits "edit" in the todo list.
 - `src/git_client/config_file.py`: the changes `Git.write_configs` makes
   (`ConfigSet`, `ConfigUnset`), and what each did (`ConfigResult`).
 - `src/git_client/testing.py`: a pytest plugin for projects that use the library: the tests'
@@ -119,8 +144,12 @@ the shape of the code or a rule here changes.
 
 - **main's ruleset requires the "CI passed" check.**
 - **`ci.yml`'s time limits are this project's**, lower than the template's 5 minutes: static
-  and coverage 1 minute, the tests 2 (they take up to about a minute, on macOS and Windows).
-  Where an update changes one of those lines, keep this project's limit. `project.yml`'s
+  and coverage 1 minute, the tests 2 on Linux and macOS (about 15 to 40 seconds of tests) and 3
+  on Windows, set by `matrix.os` in the tests job's `timeout-minutes`: there process starts
+  are slow, so its job takes 1.5 to 1.75 minutes (the tests step 76 to 86 seconds, of
+  which pytest 63, plus checkout), and one run was cancelled at 2.3 minutes by the old limit,
+  with no one slow test to fix (the slowest is 2 seconds on
+  Linux). Where an update changes one of those lines, keep this project's limit. `project.yml`'s
   `oldest-git` has 2 too: about a minute when it builds git, 15 seconds from its cache.
 - **`project.yml`'s `oldest-git` job runs the tests with git 2.36**, the oldest the README
   supports, built from kernel.org's tarball and cached; CI's other jobs run the newest. A test
