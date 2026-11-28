@@ -359,6 +359,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `Git.run` (with `strip`, the default) strips only ASCII space, tab, CR and newline from the
+  ends of git's output, no longer U+0085, U+2028, U+2029 or other characters `str.strip()`
+  takes: a ref name or path printed last keeps such a final character. A tool that relied on
+  those being stripped strips them itself.
 - `CatFile` no longer splits what git said at U+0085, U+2028 or U+2029, which a ref name can
   hold: a warning in `ObjectInfo.warnings` that quotes such a name is one warning, and
   `UnknownRevisionError.reason` keeps the name whole.
