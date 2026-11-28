@@ -8,6 +8,7 @@ import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -406,27 +407,38 @@ def test_an_interrupted_git_has_a_second_or_more_to_clean_up(repo: Git, tmp_path
     assert (tmp_path / "cleaned").exists()
 
 
-def test_a_second_interrupt_while_git_cleans_up_still_kills_it(
+def interrupt_main_thread() -> None:
+    """Ctrl-C's SIGINT, for the main thread, as a thread can send it: on Linux and macOS to the
+    main thread itself (else another thread could take it); on Windows raised, which runs
+    Python's handler, and wakes the main thread's time.sleep as Ctrl-C would."""
+    if sys.platform == "win32":
+        signal.raise_signal(signal.SIGINT)
+    else:
+        signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGINT)
+
+
+def test_a_second_interrupt_while_git_cleans_up_kills_it_at_once(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A git that waits for its stdin, and a second Ctrl-C as _stop waits for it to clean up.
-    process = repo.popen("cat-file", "--batch")
+    assert threading.current_thread() is threading.main_thread()  # where SIGINT raises
+    # A git that waits for its stdin, and ignores SIGINT (as one waiting for an editor does),
+    # so _stop waits for it the whole grace, but for the second Ctrl-C.
+    ignoring = signal.signal(signal.SIGINT, signal.SIG_IGN)  # what git inherits
+    try:
+        process = repo.popen("cat-file", "--batch")
+    finally:
+        signal.signal(signal.SIGINT, ignoring)
     killed: list[bool] = []
     kill = process.kill
     monkeypatch.setattr(process, "kill", lambda: (killed.append(True), kill()))
-
-    wait = process.wait
-
-    def interrupted(timeout: float | None = None) -> int:
-        if timeout is not None:  # _stop's wait for git, not Popen's on the way out
-            raise KeyboardInterrupt
-        return wait()
-
-    monkeypatch.setattr(process, "wait", interrupted)
+    second = threading.Timer(0.2, interrupt_main_thread)
+    started = time.monotonic()
 
     with process, pytest.raises(KeyboardInterrupt):
+        second.start()
         _stop(process, False, interrupted=True)
 
+    assert time.monotonic() - started < 2  # not the grace's 5 seconds
     assert killed
 
 

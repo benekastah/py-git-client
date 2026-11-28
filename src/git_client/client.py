@@ -240,8 +240,7 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: boo
     if sys.platform == "win32":
         try:
             if interrupted:
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(_GRACE)
+                _wait_for_exit(process, _GRACE)
         finally:
             _kill_tree(process)
         return
@@ -252,13 +251,21 @@ def _stop(process: subprocess.Popen[bytes], own_group: bool, *, interrupted: boo
                 os.killpg(process.pid, signal.SIGINT)
             else:
                 process.send_signal(signal.SIGINT)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(_GRACE)
+        _wait_for_exit(process, _GRACE)
     finally:
         if own_group:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
         process.kill()
+
+
+def _wait_for_exit(process: subprocess.Popen[bytes], seconds: float) -> None:
+    """Wait at most `seconds` for the process to exit, in short sleeps, so that an interrupt
+    (e.g. a second Ctrl-C) ends the wait at once on every system: on Windows, Popen.wait
+    doesn't wake for Ctrl-C, but time.sleep does."""
+    deadline = time.monotonic() + seconds
+    while process.poll() is None and (left := deadline - time.monotonic()) > 0:
+        time.sleep(min(left, 0.01))
 
 
 def _kill_tree(process: subprocess.Popen[bytes]) -> None:
