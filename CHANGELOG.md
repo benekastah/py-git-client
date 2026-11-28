@@ -245,14 +245,20 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `git rebase`, typed like the porcelain writes (a `ConflictError` for a conflict stop,
   `inherit_output`). `update_refs` True is `--update-refs` (git 2.38; older git raises
   `GitError`), False `-c rebase.updateRefs=false` (any git), None the config; `upstream`
-  None is `--root`. `stop_at` (full ids) makes it interactive, the library's sequence editor
-  marking those commits "edit". It replaces git-stack's `passthrough("rebase",
-  "--no-update-refs" | "--update-refs", "--onto", parent_tip, base, branch)`
-  (`git_stack/core.py:672, 848`) with `rebase(git, base, branch, onto=parent_tip,
-  update_refs=False | True, inherit_output=True, stdout=...)`, catching `ConflictError`;
-  and git-recommit's `passthrough("rebase", "--interactive", "--no-autosquash", ...)` with
-  its own `GIT_SEQUENCE_EDITOR` (`git_recommit/edit_commit.py:29`, `sequence_editor.py`)
-  with `rebase(git, f"{sha}^" or None, stop_at=[sha], inherit_output=True)`.
+  None is `--root`. `stop_at` (full ids) makes it interactive (with `-c core.abbrev=no`),
+  the library's sequence editor marking those commits "edit". It replaces:
+  - git-stack's `passthrough("rebase", "--no-update-refs" | "--update-refs", "--onto",
+    parent_tip, base, branch)` (`git_stack/core.py:672, 848`) with `rebase(git, base, branch,
+    onto=parent_tip, update_refs=False | True, inherit_output=True, stdout=...)`: catching
+    `ConflictError`, and on any other `GitError` still checking `operation_in_progress()`,
+    as now (a stop that isn't a conflict, e.g. a commit that's become empty, is a plain
+    `GitError` with the rebase still in progress).
+  - git-recommit's `passthrough("rebase", "--interactive", "--no-autosquash", ...)` with its
+    own `GIT_SEQUENCE_EDITOR` (`git_recommit/edit_commit.py:29`, `sequence_editor.py`) with
+    `rebase(git, f"{sha}^" if <sha has a parent> else None, stop_at=[sha],
+    inherit_output=True)`. git-recommit keeps its own checks that `sha` is an ancestor of
+    HEAD and that no merge follows it: `rebase` flattens merges without a word, as `git
+    rebase -i` does.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
