@@ -384,7 +384,7 @@ def test_a_process_whose_setting_up_fails_is_stopped(
 
     with CatFile(git) as cat_file:
         with monkeypatch.context() as patched, pytest.raises(RuntimeError):
-            patched.setattr("git_client.cat_file._Output", cant_read)
+            patched.setattr("git_client.cat_file.Output", cant_read)
             cat_file.resolve("HEAD")
         assert git.started[0].wait(10) is not None
         assert cat_file.resolve("HEAD") == repo.run("rev-parse", "HEAD")
@@ -801,7 +801,7 @@ except OSError:
 def test_closing_stops_a_process_writing_what_nothing_reads(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 60)  # past which it would be killed
+    monkeypatch.setattr("git_client.cat_file.EXIT_WAIT", 60)  # past which it would be killed
     git = GitThatAnswersOnce(repo.directory, WRITES_ON)
     cat_file = CatFile(git)
     cat_file.resolve("HEAD")
@@ -814,7 +814,7 @@ def test_closing_stops_a_process_writing_what_nothing_reads(
 def test_closing_kills_a_process_that_doesnt_exit(
     repo: Git, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("git_client.cat_file._EXIT_WAIT", 0.01)
+    monkeypatch.setattr("git_client.cat_file.EXIT_WAIT", 0.01)
     git = GitThatAnswersOnce(repo.directory, "time.sleep(60)")
     cat_file = CatFile(git)
     cat_file.resolve("HEAD")

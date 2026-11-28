@@ -15,11 +15,13 @@ what git-stack, git-recommit and move-forward share for that:
   their upstreams, symbolic refs, HEAD and typed tracking fields (`refs`), patch ids for many
   commands (`patch_ids`), where git keeps many files in the git directory (`git_paths`), the
   git directory and the common one (`git_dir`, `git_common_dir`), blobs as they are
-  (`hash_blobs`), and ref updates in one transaction (`update_refs`).
+  (`hash_blobs`), and ref updates in one transaction (`update_refs`; `ref_transaction` to
+  prepare them, then commit or abort).
 - **Remotes**: a fetch, and what it did to each ref (`fetch`), the refs a remote has
   (`remote_refs`), and the URLs git fetches it from and pushes it to (`remote_urls`).
 - **Other writes and merges**, each one process: a blob as `git add` would store it at a path,
-  through its filters (`hash_blob_at`), and a three-way merge of contents (`merge_file`).
+  through its filters (`hash_blob_at`), a three-way merge of contents (`merge_file`), and
+  branches created, renamed, deleted (many in one process) and given upstreams.
 - **Merges of many pairs of commits in one process** (`merge_trees`, git 2.39's `git
   merge-tree --stdin`; on git 2.38, one each), each with a merge base of its own if given
   (git 2.40), as for a cherry-pick: each merge's tree and conflicted paths, or why git
@@ -526,6 +528,82 @@ repository's own config doesn't name raises GitError: git ignores one set only i
 system config, by `-c` or by the environment (which `fetch` and `remote_refs` take). A
 `FakeGit` test responds to `["remote", "get-url"]`.
 
+### Branches
+
+Typed writes to branches, each one `git branch` on a `Git` (a `ReadOnlyGit` has none), and
+whether a name can be a branch's:
+
+```python
+from git_client import (
+    Git,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
+
+git = Git("path/to/repo")
+create_branch(git, "topic", "main")  # at a start point (HEAD if left out); force=True moves
+# an existing one. track: True follows the start point, False nothing, "inherit" the start
+# point's upstream, None (the default) as branch.autoSetupMerge says.
+create_branch(git, "mine", "origin/main", track=False)
+set_upstream(git, "mine", "origin/main")  # branch.mine.remote and .merge
+set_upstream(git, "mine", None)  # no upstream (GitError if it has none)
+rename_branch(git, "mine", "ours")  # with its config and reflog; force=True replaces one
+valid_branch_name(git, "a..b")  # False, as git's check-ref-format --branch says; a ReadOnlyGit too
+# One git for all of them: it deletes each it can (with its config), says why not of others.
+result = delete_branches(git, ["topic", "ours", "missing"])  # force=True: even unmerged
+result.deleted  # {"topic": "<full id>", "ours": "<full id>"}: by name, what each pointed at
+result.returncode, result.stderr  # 1 as some weren't deleted, and git's reasons
+```
+
+Names go to git after `--end-of-options`, so a name starting with `-` is a name, which git
+refuses as a branch's. git decides what a valid name is and whether a branch can be deleted,
+created, renamed or tracked, and raises GitError when it refuses (`delete_branches` only for a
+failure not of a single branch, e.g. not a repository, as its result says which it deleted).
+`valid_branch_name` says no to a name git expands rather than takes as it is (`@{-1}`, the
+branch checked out before), as git-stack checked with a second `check-ref-format`. A `FakeGit`
+test responds to `["-c", "core.abbrev=no", "branch"]` for `delete_branches`, with a line
+`Deleted branch <name> (was <id>).` for each branch deleted, to `["branch"]` for the other
+writes, and to `["check-ref-format", "--branch"]` with the name and exit status 0, or 128 for
+no.
+
+### Ref transactions
+
+`update_refs` makes its changes, or none, at once. `ref_transaction` lets a tool decide
+between git checking them and git making them, over one `git update-ref --stdin`:
+
+```python
+from git_client import Git, ref_transaction
+
+git = Git("path/to/repo")
+main, a = git.run("rev-parse", "main"), git.run("rev-parse", "a")
+with ref_transaction(git, message="publish") as transaction:  # message: for the reflogs
+    transaction.update("refs/heads/a", main, a)  # to main, only if a is still at a
+    transaction.verify("refs/heads/b", main)  # changes nothing, but only if b is at main
+    transaction.verify("refs/heads/c", None)  # only if there's no c
+    transaction.delete("refs/heads/old")  # wherever it is
+    transaction.prepare()  # git checks every change and locks its ref: GitError if it can't
+    ...  # nothing else can move those refs now: e.g. push, and commit only if that worked
+    transaction.commit()  # or abort(); a block that ends without either makes no change
+```
+
+An `old` of None, for `update` and `delete`, is anywhere, and all zeros nowhere (the ref must
+not exist yet). git checks refs and values (an object id, or any revision), and raises
+GitError at `prepare` or `commit` if it can't make a change, as the `reference-transaction`
+hook, which runs, can say too; after a GitError, the transaction takes nothing more. A value
+that's empty or holds a NUL raises ValueError, as git would read it differently.
+`deref=False` changes a symbolic ref itself, not the ref it points to. A `FakeGit` can't start
+it.
+
+Each step (start, `prepare`, `commit`, `abort`) has `timeout` seconds (the client's unless
+given) for git to answer, past which git is stopped and `GitTimeoutError` raised. Stopping git
+aborts what it hasn't committed, with two exceptions. On Windows, stopping git kills it, so a
+transaction it had prepared leaves its refs' lock files (`<ref>.lock` in the git directory):
+every later change to those refs fails until they're removed (elsewhere git removes them as it
+stops). And stopped while committing, git may have made some changes and not others.
+
 ### Status and worktrees
 
 `status` reads a worktree's status from one `git status --porcelain=v2 -z`, and `worktrees`
@@ -603,6 +681,61 @@ repository) come back as a result, as their exit status can't be told from a hoo
 `FakeGit` test responds to `["hook", "run"]`. `stripspace` takes the comment character from
 core.commentChar unless given one; for `auto`, it takes "#" (only `git commit` chooses one from
 the message). It reads nothing, so a `ReadOnlyGit` offers it.
+
+### Porcelain writes
+
+`switch`, `reset`, `merge`, `cherry_pick`, `revert` and `commit` each run one git of that
+name, taking a `Git`, with typed switches, and return what it printed (a `CommandOutput`):
+
+```python
+git = Git("path/to/repo")
+# Also detach=True, force=True (throw away changes in the way) and track=True or False.
+switch(git, "topic", create=True, start_point="main", track=False)
+(Path("path/to/repo") / "README.md").write_text("# Changed\n", encoding="utf-8")
+commit(git, "Change the README", all=True)  # also amend, allow_empty and no_verify
+switch(git, "main", quiet=True)  # quiet: git prints nothing (switch, reset, merge, commit)
+try:
+    cherry_pick(git, "topic", record_origin=True)  # -x; several commits; ff, allow_empty
+except ConflictError:  # it stopped: resolved by the user, or given up with abort()
+    abort(git, "cherry-pick")  # or skip(git, "cherry-pick"): on to the next commit
+reset(git, "HEAD~1", mode="hard")  # or "soft", "mixed" (the default), "keep" or "merge"
+merge(git, "topic", ff="no", message="Merge topic")  # ff="only": fast-forward, or fail
+revert(git, "topic")  # with git's message; edit=True (with inherit_output) opens the editor
+# git's input and output the tool's (its stdout to sys.stderr, here), for git to show its
+# progress and ask the user, as passthrough gives them: then nothing is captured.
+merge(git, "topic", inherit_output=True, stdout=sys.stderr)
+```
+
+Hooks run as they would from a shell (pre-commit, commit-msg, post-checkout, ...): only
+`commit(no_verify=True)` skips pre-commit and commit-msg. No editor opens unless asked
+(`merge` and `revert`'s `edit=True`), whatever git's default for a terminal; `commit` takes
+its message, or, amending, keeps the commit's. Without `inherit_output`, git reads nothing,
+so `edit=True` raises ValueError: an editor given no terminal (e.g. vim) would wait for one,
+forever without a timeout.
+
+`switch` passes its arguments to git as they are, and git decides what they mean: a target
+that names no branch but a remote's (`origin/feat` for `"feat"`) makes git create that branch
+tracking it (`checkout.guess`), `track` without `create` creates a branch from the remote
+branch named, and `start_point` without `create`, or `detach` with it, are usage errors.
+
+A failure raises `GitError`, as `run` does, a hook's refusal too, and a conflict that stops
+a merge, cherry-pick or revert (git's exit status 1) raises `ConflictError`, the stopped
+operation left for the user or for `abort` and `skip`. With captured output, that's from
+what git says (a `CONFLICT (` line); with `inherit_output`, whose output the library doesn't
+see, from exit status 1 and unmerged paths in the index, asked with one more git after such
+a failure (`ls-files --unmerged -z -- :/`), and every other failure is a plain `GitError`
+with no `stderr`. So with `inherit_output`, a conflict `rerere.autoUpdate` resolved and staged
+(git still stops, but leaves no unmerged path) is a plain `GitError`, where captured output
+raises `ConflictError`. A stop that isn't a conflict (e.g. a cherry-picked commit that's
+become empty, or one stopped partway by an untracked file) is a plain `GitError` too, the
+operation still in progress. `reset`, `cherry_pick` and `revert` raise ValueError for a
+commit starting with `-`, which git 2.36 reads as an option; `switch` and `merge` read it as
+a name (`--end-of-options`). A `FakeGit` test responds to the command's name (e.g.
+`["merge"]`), and to an `inherit_output` stop of a merge, cherry-pick, revert or skip (exit
+status 1) also to `["ls-files", "--unmerged", "-z", "--", ":/"]`, whose stdout, empty or
+not, says whether it was a conflict. Not supported: `commit`'s author,
+committer, signing and paths, `reset`'s paths, `merge`'s `--squash` and several commits, and
+the operations' `--continue`.
 
 ### Caching
 
@@ -749,7 +882,7 @@ said and raises a subclass:
 | `MissingObjectError` | A partial clone lacks an object git needs, and couldn't fetch it. The promisor remote couldn't be reached or lacks it (its `stderr` says why): where that raised `RemoteError` before, so catch both. From git 2.39: older git doesn't say which object it couldn't fetch, so its failure raises what it says instead (e.g. `RemoteError`). |
 | `RemoteError` | A remote can't be reached or read from, or has no such repository. |
 | `PushRejectedError` | A push was (or, with `--dry-run`, would be) rejected, e.g. not a fast-forward. |
-| `ConflictError` | A rebase, merge or cherry-pick stopped on a conflict. |
+| `ConflictError` | A rebase, merge, cherry-pick or revert stopped on a conflict. |
 
 Any other failure is a plain `GitError`. `ok` raises them too, for any exit status but 0
 (True) and 1 (False, git's no for `merge-base --is-ancestor`, `diff --quiet` and the like).

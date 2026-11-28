@@ -24,6 +24,14 @@ from git_client.batch import (
     refs,
     update_refs,
 )
+from git_client.branches import (
+    DeletedBranches,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
 from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -77,6 +85,17 @@ from git_client.history import (
 from git_client.hooks import HookResult, run_hook, stripspace
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
+from git_client.porcelain import (
+    CommandOutput,
+    abort,
+    cherry_pick,
+    commit,
+    merge,
+    reset,
+    revert,
+    skip,
+    switch,
+)
 from git_client.pushing import (
     PushDestination,
     PushRef,
@@ -95,6 +114,7 @@ from git_client.remotes import (
     remote_refs,
     remote_urls,
 )
+from git_client.transaction import RefTransaction, ref_transaction
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -119,6 +139,7 @@ __all__ = [
     "CatFile",
     "ChangeStatus",
     "Changed",
+    "CommandOutput",
     "Commit",
     "ConfigChange",
     "ConfigLockedError",
@@ -129,6 +150,7 @@ __all__ = [
     "ConfigValue",
     "ConflictError",
     "CorruptObjectError",
+    "DeletedBranches",
     "Diff",
     "EnvValue",
     "FetchRef",
@@ -161,6 +183,7 @@ __all__ = [
     "PushUpdate",
     "ReadOnlyGit",
     "Ref",
+    "RefTransaction",
     "RefUpdate",
     "ReflogEntry",
     "RemoteError",
@@ -182,15 +205,20 @@ __all__ = [
     "Untracked",
     "Worktree",
     "WrongTypeError",
+    "abort",
     "add_worktree",
     "any_commit",
     "changed_paths",
+    "cherry_pick",
     "color_enabled",
+    "commit",
     "commits",
     "config",
     "config_values",
     "count",
+    "create_branch",
     "decode",
+    "delete_branches",
     "encode",
     "fetch",
     "find_git",
@@ -204,6 +232,7 @@ __all__ = [
     "independent",
     "is_ancestor",
     "line_changes",
+    "merge",
     "merge_base",
     "merge_bases",
     "merge_file",
@@ -212,15 +241,23 @@ __all__ = [
     "printable",
     "prune_worktrees",
     "push",
+    "ref_transaction",
     "reflogs",
     "refs",
     "remote_refs",
     "remote_urls",
     "remove_worktree",
+    "rename_branch",
+    "reset",
+    "revert",
     "run_hook",
+    "set_upstream",
+    "skip",
     "status",
     "stripspace",
+    "switch",
     "tree_entries",
     "update_refs",
+    "valid_branch_name",
     "worktrees",
 ]
