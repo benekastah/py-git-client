@@ -214,14 +214,15 @@ well.
 
 Past its timeout, or when the tool is interrupted (`KeyboardInterrupt`) while it runs, git is
 first asked to stop (on Linux and macOS with SIGINT, as Ctrl-C asks it), so it can remove its
-lock files, and killed a quarter of a second later (at once, if the tool is interrupted again
-meanwhile); the call then waits at most a second more for its output. When the tool has no
+lock files, and killed if it hasn't exited 5 seconds later (at once, if the tool is interrupted
+again meanwhile): git usually exits within milliseconds, but can take over a second on a busy
+machine. The call then waits at most a second more for its output. When the tool has no
 terminal (CI, a service), a command with a timeout runs in a process group of its own on Linux
 and macOS, so what git started (hooks, ssh, credential helpers) is stopped with it. With a
 terminal, git stays in its foreground, as from a shell, so it can ask for a password or open an
 editor whatever its timeout, and only git is stopped. On Windows, git and what it started are
 killed: past a timeout at once, with no chance to clean up, and on an interrupt once git has
-had a quarter of a second to handle the Ctrl-C that reached it too. What outlives git's own
+exited, or had 5 seconds to handle the Ctrl-C that reached it too. What outlives git's own
 exit then (e.g. a hook that ignores Ctrl-C) runs on: Windows finds what git started through
 git.
 

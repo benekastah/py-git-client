@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import tracemalloc
+import types
 import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -517,11 +518,53 @@ def test_reads_an_objects_type_and_content(repo: Git) -> None:
     assert commit.endswith(b"\n\nfirst\n")
 
 
-def test_reading_a_large_object_holds_it_once(repo: Git, tmp_path: Path) -> None:
+READ_AHEAD = cat_file_module._READ_AHEAD  # pyright: ignore[reportPrivateUsage]
+
+
+def read_with_a_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Have Outputs read their pipes with a thread, as on Windows, where only that runs: so that
+    it's tested on every system."""
+    monkeypatch.setattr(cat_file_module, "sys", types.SimpleNamespace(platform="win32"))
+
+
+@pytest.fixture(params=["poll", "thread"])
+def reading(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """How Outputs read their pipes: with poll, as on Linux and macOS, or with a thread (see
+    read_with_a_thread)."""
+    if request.param == "poll" and sys.platform == "win32":
+        pytest.skip("Windows can't poll a pipe")
+    if request.param == "thread":
+        read_with_a_thread(monkeypatch)
+    return str(request.param)
+
+
+def chunks_read_ahead(output: Any) -> int:
+    """How many chunks an Output's thread holds that no read has taken, once it holds as many
+    as it may: it should then wait for room."""
+    deadline = time.monotonic() + 10
+    while output._chunks.qsize() < READ_AHEAD:
+        assert time.monotonic() < deadline, "the thread didn't read ahead"
+        time.sleep(0.01)
+    time.sleep(0.05)  # Time to read more, which it mustn't.
+    return output._chunks.qsize()
+
+
+def test_reading_a_large_object_holds_it_once(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reading: str
+) -> None:
     size = 8 * 1024 * 1024
     (tmp_path / "large").write_bytes(b"x" * size)
     blob = repo.run("hash-object", "-w", str(tmp_path / "large"))
+    read = cat_file_module.Output.read
+    read_ahead: list[int] = []
 
+    def once_read_ahead(output: Any, size: int, deadline: float | None) -> bytes:
+        """Output.read, once its thread holds all it may: that's held besides the object."""
+        if size > 1 and reading == "thread":
+            read_ahead.append(chunks_read_ahead(output))
+        return read(output, size, deadline)
+
+    monkeypatch.setattr(cat_file_module.Output, "read", once_read_ahead)
     with CatFile(repo) as cat_file:
         cat_file.resolve("HEAD")
         tracemalloc.start()
@@ -533,6 +576,31 @@ def test_reading_a_large_object_holds_it_once(repo: Git, tmp_path: Path) -> None
 
     assert len(content) == size
     assert peak < 1.25 * size
+    assert read_ahead == ([READ_AHEAD] if reading == "thread" else [])
+
+
+def test_closing_output_whose_thread_waits_for_room_lets_git_exit(
+    repo: Git, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read_with_a_thread(monkeypatch)
+    (tmp_path / "large").write_bytes(b"x" * (8 * 1024 * 1024))
+    blob = repo.run("hash-object", "-w", str(tmp_path / "large"))
+    process = repo.popen("cat-file", "--batch")
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        process.stdin.write(blob.encode() + b"\n")
+        process.stdin.flush()
+        output = cat_file_module.Output(process.stdout)
+        chunks_read_ahead(output)
+
+        output.close()
+        process.stdin.close()
+
+        # The thread closes the pipe, so git's writes of the rest fail, and it exits.
+        assert process.wait(10) is not None
+    finally:
+        process.kill()
+        process.wait()
 
 
 def test_reads_an_object_of_the_type_asked_for(repo: Git) -> None:

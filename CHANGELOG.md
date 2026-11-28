@@ -8,6 +8,12 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- A git that doesn't exit when asked to stop (e.g. one waiting for an editor) is killed after
+  5 seconds, not a quarter of a second (see "Fixed"). So, with such a git, a call with a
+  timeout raises `GitTimeoutError` up to the timeout plus 6 seconds after it started (it was
+  plus 1.25) on Linux and macOS, and an interrupt takes up to 5 seconds longer to raise
+  `KeyboardInterrupt`, on every system. A tool with its own deadline or watchdog around a
+  call, or tests that time how soon a timeout returns, may need to allow for that.
 - `Git.run` (with `strip`, the default) strips only ASCII space, tab, CR and newline from the
   ends of git's output, no longer U+0085, U+2028, U+2029 or other characters `str.strip()`
   takes: a ref name or path printed last keeps such a final character. A tool that relied on
@@ -498,9 +504,19 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 - `CatFile.close()`, and a CatFile's stopping when it's no longer used, could wait forever for
   a process that doesn't exit when its stdin closes (e.g. one waiting on a lazy fetch). It now
   closes the process's stdout too, and kills it if it hasn't exited within a second (#53).
-- On Windows, an interrupt (e.g. Ctrl-C) gives git a quarter of a second to handle the Ctrl-C
-  it got too, and remove its lock files (e.g. index.lock), before git and what it started are
-  killed; a timeout still kills them at once (#52).
+- On Windows, an interrupt (e.g. Ctrl-C) gives git time to handle the Ctrl-C it got too, and
+  remove its lock files (e.g. index.lock), before git and what it started are killed; a
+  timeout still kills them at once (#52).
+- Git, asked to stop on an interrupt, or (on Linux and macOS; on Windows a timeout still
+  kills at once) past its timeout, has 5 seconds to exit before it's killed, where it had a
+  quarter of a second: on a busy machine git can take longer than that
+  to remove its lock files, and was killed first, leaving index.lock behind. Stopping waits
+  only until git exits, usually within milliseconds; the 5 seconds are spent only on a git
+  that doesn't exit when asked (e.g. waiting for an editor), and a second interrupt still
+  kills it at once.
+- On Windows, `CatFile.read` of a large object could hold up to about twice its size: the
+  thread reading git's output read ahead of it without limit. It now holds at most 8 chunks
+  (of at most 64 KiB each) that a read hasn't taken.
 - A second interrupt while git cleans up after the first (e.g. Ctrl-C twice) kills git (and
   its group or tree) at once, where it skipped the kill and left them running (#52).
 
