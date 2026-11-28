@@ -26,6 +26,9 @@ the shape of the code or a rule here changes.
   --walk-reflogs` for many refs' reflogs, parsed into `ReflogEntry`s.
 - `src/git_client/ancestry.py`: `is_ancestor`, `merge_base`, `merge_bases`, `independent` and
   `fork_point`, each one `git merge-base`.
+- `src/git_client/diffs.py`: `changed_paths` and `line_changes`, one `git diff-tree --stdin`
+  for many diffs, after a CatFile resolves their names; and
+  `tree_entries`, a `git ls-tree -z`.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git
