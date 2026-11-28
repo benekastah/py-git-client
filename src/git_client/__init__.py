@@ -75,6 +75,7 @@ from git_client.history import (
     reflogs,
 )
 from git_client.merging import Merge, MergeResult, merge_trees
+from git_client.objects import write_commit, write_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
     PushDestination,
@@ -213,4 +214,6 @@ __all__ = [
     "tree_entries",
     "update_refs",
     "worktrees",
+    "write_commit",
+    "write_trees",
 ]
