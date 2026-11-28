@@ -24,6 +24,8 @@ the shape of the code or a rule here changes.
 - `src/git_client/history.py`: `commits`, `count` and `any_commit`, a `git rev-list` each for
   the commits a `Revisions` describes, parsed into `Commit`s; and `reflogs`, one `git log
   --walk-reflogs` for many refs' reflogs, parsed into `ReflogEntry`s.
+- `src/git_client/ancestry.py`: `is_ancestor`, `merge_base`, `merge_bases`, `independent` and
+  `fork_point`, each one `git merge-base`.
 - `src/git_client/merging.py`: `merge_trees`, many `git merge-tree --write-tree` in one
   process.
 - `src/git_client/pushing.py`: `push`, many `PushUpdate`s in one `git push`, and what git

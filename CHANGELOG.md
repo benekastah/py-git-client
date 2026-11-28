@@ -142,6 +142,28 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   all its branches' reflogs at once. Unlike those, run with `check=False`, a ref that names
   nothing raises `UnknownRevisionError`, failing the whole call: a tool passes only refs
   that exist, or catches it.
+- `is_ancestor(git, ancestor, descendant)`, `merge_base(git, a, b)`, `merge_bases(git, a, b)`,
+  `independent(git, *commits)` and `fork_point(git, upstream, commit)` ask `git merge-base`
+  (`--is-ancestor`, plain, `--all`, `--independent`, `--fork-point`) with typed results: a
+  bool, an id or None, a list of ids, a list of ids, an id or None. git's no (exit 1) is
+  False, None or []; any other failure raises (`UnknownRevisionError` for a name that names
+  nothing, `WrongTypeError` for one that names no commit). They replace a tool's
+  `ok`/`succeeds("merge-base", "--is-ancestor", ...)` (git-stack `git_stack/git.py:679`,
+  `700`, `705`; git-recommit `git_recommit/git.py:141`; move-forward
+  `src/move_forward/plugins/git/actions.py:275`), `run("merge-base", ...)` (git-stack
+  `core.py:1087`, `stack.py:3915`; git-recommit `revisions.py:35`), `--all` (git-stack
+  `core.py:723`), `--independent` (`stack.py:4005`) and `--fork-point` (`stack.py:567`). A
+  tool whose wrapper answered False or "" for a name that names nothing (git-recommit's
+  `succeeds`; git-stack's `ok`, `git_stack/git.py:306`, which wraps `succeeds`, so its
+  `is_ancestor` at `git.py:679` and `700`; and its `check=False`) catches
+  `UnknownRevisionError` where it relied on that. `fork_point` gives None for a full id the
+  repository lacks, of which git says nothing, and raises for an error git reports reading
+  upstream's reflog. git-stack's `core.py:723` and `check_ancestry`, which pass `env=` for
+  one call, use a client made with that `env`.
+- A failure whose stderr has git's wrong-type message (`error: object <id> is a <type>, not a
+  <type>`, or `...: expected <type> type, but the object dereferences to <type> type`) and no
+  other message the library knows raises `WrongTypeError` (a `GitError`) where it raised
+  `GitError`, e.g. `merge-base --fork-point` of a tree, or `branch <name> <tree>`.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,
