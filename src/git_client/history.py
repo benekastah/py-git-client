@@ -36,7 +36,8 @@ class Signature:
 
     `raw_date` is the date as git's `--date=raw` prints it (`<seconds> <zone>`, e.g.
     "1700000000 +0100"), set by `commits`, so `write_commit` can write a date `date` can't
-    hold; None for a Signature made otherwise. `==` leaves it out."""
+    hold; None where git prints none (a date it can't read, e.g. one missing or with no
+    zone), and for a Signature made otherwise. `==` leaves it out."""
 
     name: str
     email: str
@@ -189,8 +190,9 @@ def commits(
 
 
 def _signature(name: str, email: str, date: str) -> Signature:
-    """A Signature from git's fields, the date raw (see raw_datetime)."""
-    return Signature(name, email, raw_datetime(date), date)
+    """A Signature from git's fields, the date raw (see raw_datetime): "" where git prints
+    none (a date it can't read), which is no raw date."""
+    return Signature(name, email, raw_datetime(date), date or None)
 
 
 def raw_datetime(date: str) -> datetime | None:

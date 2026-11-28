@@ -147,7 +147,8 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   `:147-150`): `-m` ends the message with a newline, which `write_commit` doesn't add, so it
   passes `"Uncommitted changes\n"`.
 - `Signature.raw_date`: the date as git's `--date=raw` prints it, which `commits()` sets, and
-  `write_commit` writes, so a date a datetime can't hold (`date` None) survives a copy. `==`
+  `write_commit` writes, so a date git prints raw but a datetime can't hold (`date` None,
+  e.g. past the year 9999) survives a copy; one git can't read (no raw date) doesn't. `==`
   leaves it out, and it defaults to None, so a tool's own `Signature(name, email, date)` is
   unchanged.
 - A tree given where git wants a commit, or a commit where it wants a tree, in `commit-tree`

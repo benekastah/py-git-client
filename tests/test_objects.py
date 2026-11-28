@@ -216,6 +216,15 @@ def test_write_commit_keeps_a_read_commits_dates(repo: Git, stored: str, written
     ]
 
 
+@pytest.mark.parametrize("stored", ["garbage", "-5 +0000", "1700000000"])
+def test_write_commit_refuses_a_read_date_git_doesnt_print(repo: Git, stored: str) -> None:
+    # git prints no raw date for these, so there's none to write.
+    [old] = commits(repo, Revisions(raw_commit(repo, stored)), max_count=1)
+    assert old.author.raw_date is None
+    with pytest.raises(ValueError, match="no date"):
+        write_commit(repo, EMPTY_TREE, [], "m", author=old.author)
+
+
 def test_write_commit_takes_a_new_date_over_the_one_read(repo: Git) -> None:
     [old] = commits(repo, Revisions(raw_commit(repo, "1700000000 +0130")), max_count=1)
     author = replace(old.author, date=AUTHOR.date)
