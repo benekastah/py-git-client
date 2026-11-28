@@ -325,6 +325,33 @@ log --walk-reflogs -z --no-show-signature --format=<fields> --end-of-options <re
 `FakeGit` test responds to `["log", "--walk-reflogs"]` with each entry's selector, id, name,
 email and message, each ended by a NUL.
 
+### Ancestry
+
+How commits are related, as `git merge-base` answers, each a typed function:
+
+```python
+from git_client import Git, fork_point, independent, is_ancestor, merge_base, merge_bases
+
+git = Git("path/to/repo")
+is_ancestor(git, "main", "a")  # whether main is in a's history (or is a)
+merge_base(git, "main", "a")  # a best common ancestor's id, or None with no history in common
+merge_bases(git, "main", "a")  # all of them (more than one after criss-cross merges), or []
+independent(git, "main", "a", "b")  # the ids of those none of the others reaches
+# Where a forked from main, looking in main's reflog too, for a commit main was rewritten
+# from; None if git finds none. main must be a ref: a name that names none raises.
+fork_point(git, "refs/heads/main", "a")
+```
+
+Each runs one `git merge-base`, so `is_ancestor` takes one process a pair: git has no form for
+many pairs (to test many refs against one commit, `refs(git, merged=...)` asks once).
+`independent` takes as many commits as fit on a command line. A name that names nothing
+raises `UnknownRevisionError`, and one that names no commit (e.g. a tree) `WrongTypeError`.
+`fork_point` gives None for a full id the repository lacks, as git says nothing of it, as when
+it finds no fork point.
+In a `FakeGit` test, respond to `["merge-base", "--is-ancestor"]` (or `--all`,
+`--independent`, `--fork-point`; `["merge-base", "--end-of-options"]` for `merge_base`) with
+exit status 0 and the ids, one a line, or 1 for git's no.
+
 ### Diffs and trees
 
 `changed_paths` lists the paths each of many diffs changes, and `line_changes` how many lines

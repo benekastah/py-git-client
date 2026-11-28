@@ -1,6 +1,7 @@
 """Run git from Python with as few processes as possible: one way to start git, a long-lived
 cat-file, and batched reads and writes."""
 
+from git_client.ancestry import fork_point, independent, is_ancestor, merge_base, merge_bases
 from git_client.batch import (
     ConfigType,
     ConfigValue,
@@ -171,13 +172,18 @@ __all__ = [
     "decode",
     "encode",
     "find_git",
+    "fork_point",
     "git_common_dir",
     "git_dir",
     "git_paths",
     "git_paths_and_head",
     "hash_blob_at",
     "hash_blobs",
+    "independent",
+    "is_ancestor",
     "line_changes",
+    "merge_base",
+    "merge_bases",
     "merge_file",
     "merge_trees",
     "patch_ids",
