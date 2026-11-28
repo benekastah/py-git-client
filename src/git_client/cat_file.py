@@ -53,7 +53,7 @@ USAGE_ERROR = 129
 """git's exit status for an option it doesn't know (e.g. `--batch-command`, before git 2.36),
 unlike the 128 (FATAL) of `cat-file` exiting on a name."""
 
-_EXIT_WAIT = 1.0
+EXIT_WAIT = 1.0
 """How long a process asked to stop (its stdin and stdout closed) has to exit before it's
 killed."""
 
@@ -84,7 +84,7 @@ class ObjectInfo:
 
 
 type _Stopper = weakref.finalize[
-    [subprocess.Popen[bytes], _Output, IO[bytes], PerformanceRecorder | None], CatFile
+    [subprocess.Popen[bytes], Output, IO[bytes], PerformanceRecorder | None], CatFile
 ]
 """What stops a CatFile's process (see _end)."""
 
@@ -121,7 +121,7 @@ class CatFile:
     def __init__(self, git: ReadOnlyGit, *, weak: bool = False) -> None:
         self._git: Callable[[], ReadOnlyGit | None] = weakref.ref(git) if weak else lambda: git
         self._process: subprocess.Popen[bytes] | None = None
-        self._output: _Output | None = None
+        self._output: Output | None = None
         # Where its stderr goes (see _request).
         self._stderr: IO[bytes] | None = None
         # Stops the process when this is freed, or as it's asked to (see _stop).
@@ -300,7 +300,7 @@ class CatFile:
                 try:
                     process = read_popen(self.git, *_COMMAND, stderr=file)
                     assert process.stdout is not None
-                    output = _Output(process.stdout)
+                    output = Output(process.stdout)
                     stopper = weakref.finalize(self, _end, process, output, file, self.performance)
                     # Not as Python exits, when a daemon thread may be in a request: the
                     # process gets EOF on its stdin then, and exits by itself.
@@ -378,7 +378,7 @@ class CatFile:
         the lock."""
         try:
             yield
-        except _PastDeadline:
+        except PastDeadline:
             said = "" if self._stderr is None else _said(self._stderr)
             self._kill()
             error = GitTimeoutError(_COMMAND, None, said)
@@ -461,14 +461,14 @@ def _abandon(process: subprocess.Popen[bytes]) -> None:
 
 def _end(
     process: subprocess.Popen[bytes],
-    output: _Output,
+    output: Output,
     stderr: IO[bytes],
     performance: PerformanceRecorder | None,
 ) -> None:
     """Stop a CatFile's process, and wait for it to exit, so that it's gone when it's no longer
     used, rather than left for Python to warn of and reap. Closing its stdout stops one
     writing what nothing will read (git exits when a write fails); one that doesn't exit
-    within _EXIT_WAIT (e.g. waiting on a lazy fetch in a partial clone) is killed."""
+    within EXIT_WAIT (e.g. waiting on a lazy fetch in a partial clone) is killed."""
     with measure(performance, "process_work", "CatFile.shutdown"):
         if process.stdin is not None:
             # It may have stopped already (on Windows, not always with a BrokenPipeError).
@@ -476,14 +476,14 @@ def _end(
                 process.stdin.close()
         output.close()
         try:
-            process.wait(_EXIT_WAIT)
+            process.wait(EXIT_WAIT)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
         stderr.close()
 
 
-class _PastDeadline(Exception):
+class PastDeadline(Exception):
     """A request's answer didn't come by its deadline. Not TimeoutError, an OSError, which
     CatFile takes for a process that stopped."""
 
@@ -492,9 +492,9 @@ class _PastDeadline(Exception):
 _CHUNK = 65536
 
 
-class _Output:
+class Output:
     """A CatFile's process's stdout, read until a deadline (from time.monotonic(), or None
-    for none), past which a read raises _PastDeadline. Off Windows, it waits with poll. On
+    for none), past which a read raises PastDeadline. Off Windows, it waits with poll. On
     Windows, which can't poll a pipe, a thread of its own reads the pipe, and a read waits
     for what it passes on: a read that waits on the pipe itself can't be stopped. Either
     way, a request isn't kept waiting by what holds the pipe open once its process is killed
@@ -567,11 +567,11 @@ class _Output:
             try:
                 chunk = self._chunks.get(timeout=_left(deadline))
             except queue.Empty:
-                raise _PastDeadline from None
+                raise PastDeadline from None
         else:
             left = _left(deadline)
             if left is not None and not self._poll.poll(math.ceil(left * 1000)):
-                raise _PastDeadline
+                raise PastDeadline
             chunk = os.read(self._fd, _CHUNK)
         self._ended = not chunk
         return chunk
