@@ -282,13 +282,13 @@ def reflogs(
     A shorter one (e.g. "origin/main"), git names by the ref it finds the reflog of, which
     can't be told from the name, so it raises ValueError. So does a name that holds what no
     ref's can and git reads as something else: "~", "^" or ":" (a revision that's no ref, e.g.
-    "refs/heads/main~1", of which git prints nothing, as of a ref with no reflog), "@{" (a
-    reflog selector), or a NUL; and "". Raises UnknownRevisionError if a ref names nothing
-    (failing them all)."""
+    "refs/heads/main~1", of which git prints nothing, as of a ref with no reflog), ".." (a
+    range), "@{" (a reflog selector), or a NUL; and "". Raises UnknownRevisionError if a ref
+    names nothing (failing them all)."""
     names = list(dict.fromkeys(refs))
     for name in names:
         full = name == "HEAD" or name.startswith("refs/")
-        if not full or any(part in name for part in ("~", "^", ":", "@{", "\0")):
+        if not full or any(part in name for part in ("~", "^", ":", "..", "@{", "\0")):
             raise ValueError(f"not a full ref name: {name!r}")
     found: dict[str, list[ReflogEntry]] = {name: [] for name in names}
     if not names:

@@ -337,7 +337,7 @@ def test_reflogs_of_an_unknown_ref_raises(moves: Git) -> None:
 # What git would print another ref's name for, in its selectors (a short name of what it
 # finds the reflog of elsewhere, e.g. origin/main's, or a tag's), so its entries couldn't be
 # told apart; what git reads as a revision that's no ref (an id, `main~1`, `:/text`), of which
-# it prints nothing, as of a ref with no reflog; a reflog selector; and no name at all.
+# it prints nothing, as of a ref with no reflog; a range; a reflog selector; and no name at all.
 @pytest.mark.parametrize(
     "name",
     [
@@ -349,6 +349,8 @@ def test_reflogs_of_an_unknown_ref_raises(moves: Git) -> None:
         "refs/heads/main~1",
         "refs/heads/main^0",
         "refs/heads/main:a",
+        "refs/heads/a..refs/heads/b",  # a range
+        "refs/heads/a...refs/heads/b",
         "refs/heads/main@{1}",
         "refs/heads/main@{u}",
         "",

@@ -297,11 +297,11 @@ for ref, entries in reflogs(git, "refs/heads/b", "HEAD").items():  # by each ref
         entry.name, entry.email  # who moved it
 ```
 
-Each ref is a full name, `HEAD` or one starting with `refs/`, which git names each entry by:
-a shorter one (`origin/main`), git names by the ref it finds the reflog of, which can't be
-told from the name, so it raises ValueError, as does one that holds `~`, `^` or `:` (a
-revision that's no ref, e.g. `refs/heads/main~1`, of which git prints nothing, as of a ref
-with no reflog), `@{` (a reflog selector) or a NUL. A ref that names nothing raises
+Each ref is a full name: `HEAD` or one starting with `refs/`. A shorter one (`origin/main`)
+raises ValueError, because git names its entries by whichever ref it finds the reflog of, so
+they might not match the name given. So do names holding `~`, `^` or `:` (no ref's name can,
+so git reads a revision, e.g. `refs/heads/main~1`, and prints nothing), `..` (a range), `@{`
+or a NUL. A ref that names nothing raises
 `UnknownRevisionError`, for the whole call. git prints neither an
 entry's old id nor, beside its index, its date, so an entry has neither. `reflogs` runs `git
 log --walk-reflogs -z --no-show-signature --format=<fields> --end-of-options <refs> --`, so a
