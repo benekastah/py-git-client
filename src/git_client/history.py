@@ -272,18 +272,24 @@ class ReflogEntry:
 def reflogs(
     git: ReadOnlyGit, *refs: str, timeout: Timeout = CLIENT_TIMEOUT
 ) -> dict[str, list[ReflogEntry]]:
-    """Each ref's reflog, newest first, by the ref as given (each once, in the order given,
-    e.g. "refs/heads/main", "main" or "HEAD"): [] for a ref with none. One `git log
-    --walk-reflogs` for all of them (none for no refs), so git's rules apply: it shows only
-    entries of commits it can read, and none past what `git reflog expire` removed.
+    """Each ref's reflog, newest first, by the ref as given (each once, in the order given):
+    [] for a ref with none. One `git log --walk-reflogs` for all of them (none for no refs),
+    so git's rules apply: it shows only entries of commits it can read, and none past what
+    `git reflog expire` removed.
 
-    Raises UnknownRevisionError if a ref names nothing (failing them all), and ValueError for
-    one that is empty, holds a NUL, or holds "@{", which git would read as a reflog selector
-    (e.g. "main@{1}") rather than a ref."""
+    Each ref is a full ref name: "HEAD", or one starting with "refs/" (e.g. "refs/heads/main",
+    "refs/remotes/origin/main", "refs/tags/v1", "refs/stash"), which git names each entry by.
+    A shorter one (e.g. "origin/main"), git names by the ref it finds the reflog of, which
+    can't be told from the name, so it raises ValueError. So does a name that holds what no
+    ref's can and git reads as something else: "~", "^" or ":" (a revision that's no ref, e.g.
+    "refs/heads/main~1", of which git prints nothing, as of a ref with no reflog), "@{" (a
+    reflog selector), or a NUL; and "". Raises UnknownRevisionError if a ref names nothing
+    (failing them all)."""
     names = list(dict.fromkeys(refs))
     for name in names:
-        if not name or "\0" in name or "@{" in name:
-            raise ValueError(f"not a ref: {name!r}")
+        full = name == "HEAD" or name.startswith("refs/")
+        if not full or any(part in name for part in ("~", "^", ":", "@{", "\0")):
+            raise ValueError(f"not a full ref name: {name!r}")
     found: dict[str, list[ReflogEntry]] = {name: [] for name in names}
     if not names:
         return found

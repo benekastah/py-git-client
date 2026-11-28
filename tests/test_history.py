@@ -257,14 +257,17 @@ def test_count_and_any_commit(history: Git) -> None:
 
 def make_moves(git: Git) -> None:
     """From make_repo's first commit: `topic`, made there by Test, then moved by Mover to a
-    commit on it, `moved`; `quiet`, with no reflog; and `-x`, a branch whose name starts
-    with "-"."""
+    commit on it, `moved`; `quiet`, with no reflog; `-x`, a branch whose name starts with "-";
+    and, with a reflog each, a remote-tracking ref, origin/main, and a tag, t."""
     moved = git.run("commit-tree", "-p", "main", "-m", "moved", "main^{tree}")
     git.run("update-ref", "-m", "made: here", "refs/heads/topic", "main")
     mover = {"GIT_COMMITTER_NAME": "Mover", "GIT_COMMITTER_EMAIL": "m@e"}
     git.run("update-ref", "-m", "déplacé: on", "refs/heads/topic", moved, env=mover)
     git.run("-c", "core.logAllRefUpdates=false", "update-ref", "refs/heads/quiet", "main")
     git.run("update-ref", "-m", "dash", "refs/heads/-x", "main")
+    git.run("update-ref", "-m", "fetched", "refs/remotes/origin/main", "main")
+    always = ("-c", "core.logAllRefUpdates=always")  # git logs no tag's moves by default
+    git.run(*always, "update-ref", "-m", "tagged", "refs/tags/t", "main")
 
 
 @pytest.fixture
@@ -275,7 +278,7 @@ def moves(repo_from: RepoFrom) -> Git:
 def test_reflogs_reads_many_refs_newest_first_with_one_process(
     moves: Git, git_calls: list[GitCall]
 ) -> None:
-    found = reflogs(moves.read_only(), "refs/heads/topic", "main", "quiet")
+    found = reflogs(moves.read_only(), "refs/heads/topic", "refs/heads/main", "refs/heads/quiet")
 
     assert [call[0] for call in git_calls] == ["log"]
     first, moved = moves.run("rev-parse", "main", "topic").split()
@@ -284,18 +287,24 @@ def test_reflogs_reads_many_refs_newest_first_with_one_process(
             ReflogEntry(0, moved, "Mover", "m@e", "déplacé: on"),
             ReflogEntry(1, first, "Test", "test@example.com", "made: here"),
         ],
-        "main": [ReflogEntry(0, first, "Test", "test@example.com", "commit (initial): first")],
-        "quiet": [],  # a ref with no reflog
+        "refs/heads/main": [
+            ReflogEntry(0, first, "Test", "test@example.com", "commit (initial): first")
+        ],
+        "refs/heads/quiet": [],  # a ref with no reflog
     }
 
 
-def test_reflogs_gives_each_name_once_as_given(moves: Git) -> None:
-    found = reflogs(moves, "topic", "refs/heads/topic", "topic", "-x")
+def test_reflogs_gives_each_ref_once_as_given(moves: Git) -> None:
+    refs = ["refs/heads/topic", "HEAD", "refs/heads/topic", "refs/heads/-x"]
+    found = reflogs(moves, *refs, "refs/remotes/origin/main", "refs/tags/t")
 
-    assert list(found) == ["topic", "refs/heads/topic", "-x"]
-    assert [entry.message for entry in found["topic"]] == ["déplacé: on", "made: here"]
-    assert found["refs/heads/topic"] == found["topic"]
-    assert [entry.message for entry in found["-x"]] == ["dash"]
+    assert {ref: [entry.message for entry in entries] for ref, entries in found.items()} == {
+        "refs/heads/topic": ["déplacé: on", "made: here"],
+        "HEAD": ["commit (initial): first"],
+        "refs/heads/-x": ["dash"],
+        "refs/remotes/origin/main": ["fetched"],
+        "refs/tags/t": ["tagged"],
+    }
 
 
 def test_reflogs_prints_no_signature_whatever_the_config(moves: Git) -> None:
@@ -322,14 +331,33 @@ def test_reflogs_of_no_refs_starts_no_git(git_calls: list[GitCall]) -> None:
 
 def test_reflogs_of_an_unknown_ref_raises(moves: Git) -> None:
     with pytest.raises(UnknownRevisionError):
-        reflogs(moves, "main", "nothing")
+        reflogs(moves, "HEAD", "refs/heads/nothing")
 
 
-# Each would reach git as something else: a reflog selector, or no name at all.
-@pytest.mark.parametrize("name", ["", "main@{1}", "main@{u}", "ma\0in"])
-def test_reflogs_refuses_what_isnt_a_ref(name: str) -> None:
-    with pytest.raises(ValueError, match="not a ref"):
-        reflogs(FakeGit(), "main", name)
+# What git would print another ref's name for, in its selectors (a short name of what it
+# finds the reflog of elsewhere, e.g. origin/main's, or a tag's), so its entries couldn't be
+# told apart; what git reads as a revision that's no ref (an id, `main~1`, `:/text`), of which
+# it prints nothing, as of a ref with no reflog; a reflog selector; and no name at all.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "origin/main",
+        "main",
+        "@",
+        "t",
+        "1" * 40,
+        "refs/heads/main~1",
+        "refs/heads/main^0",
+        "refs/heads/main:a",
+        "refs/heads/main@{1}",
+        "refs/heads/main@{u}",
+        "",
+        "refs/heads/ma\0in",
+    ],
+)
+def test_reflogs_refuses_what_isnt_a_full_ref_name(name: str) -> None:
+    with pytest.raises(ValueError, match="not a full ref name"):
+        reflogs(FakeGit(), "HEAD", name)
 
 
 REFLOG = ["log", "--walk-reflogs"]
@@ -338,12 +366,12 @@ REFLOG = ["log", "--walk-reflogs"]
 @pytest.mark.parametrize(
     "output",
     [
-        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0",  # a field short
-        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x\0",  # a field over
-        b"main\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # no index
-        b"main@{now}\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # not an index
-        "main@{\u0663}\0".encode() + b"1" * 40 + b"\0T\0t@e\0m\0",  # a digit, not ASCII
-        b"main@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x",  # an entry unended
+        b"HEAD@{0}\0" + b"1" * 40 + b"\0T\0t@e\0",  # a field short
+        b"HEAD@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x\0",  # a field over
+        b"HEAD\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # no index
+        b"HEAD@{now}\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # not an index
+        "HEAD@{\u0663}\0".encode() + b"1" * 40 + b"\0T\0t@e\0m\0",  # a digit, not ASCII
+        b"HEAD@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0x",  # an entry unended
         b"other@{0}\0" + b"1" * 40 + b"\0T\0t@e\0m\0",  # a ref not asked for
     ],
 )
@@ -352,4 +380,4 @@ def test_reflogs_raises_for_output_git_doesnt_document(output: bytes) -> None:
     git.respond(REFLOG, output)
 
     with pytest.raises(GitError, match="log printed"):
-        reflogs(git, "main")
+        reflogs(git, "HEAD")
