@@ -592,3 +592,13 @@ def test_a_base_but_a_full_object_id_is_refused_before_git_starts(
         merge_trees(repo, [Merge(head, head, base=name)])
 
     assert git_calls == []
+
+
+def test_a_tuple_of_three_is_refused_before_git_starts(repo: Git, git_calls: list[GitCall]) -> None:
+    head = repo.run("rev-parse", "HEAD")
+    git_calls.clear()
+
+    with pytest.raises(ValueError, match="too many values"):
+        merge_trees(repo, [(head, head, head)])  # pyright: ignore[reportArgumentType]
+
+    assert git_calls == []

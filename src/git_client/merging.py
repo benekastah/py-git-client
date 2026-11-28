@@ -113,7 +113,13 @@ def merge_trees(git: Git, pairs: Sequence[tuple[str, str] | Merge]) -> list[Merg
     whose merge-tree takes no `--stdin` (2.39's), each pair takes a process of its own, with
     the same results, after the batch was tried once and refused. A Merge with a base needs git
     2.40 (merge-tree's merge base), else raises GitError."""
-    merges = [pair if isinstance(pair, Merge) else Merge(*pair) for pair in pairs]
+    merges: list[Merge] = []
+    for pair in pairs:
+        if isinstance(pair, Merge):
+            merges.append(pair)
+        else:
+            ours, theirs = pair  # a tuple of another length raises ValueError
+            merges.append(Merge(ours, theirs))
     for merge in merges:
         for object_id in (merge.ours, merge.theirs, merge.base):
             if object_id is not None and not OBJECT_ID.fullmatch(object_id):
