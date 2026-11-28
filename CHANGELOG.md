@@ -359,6 +359,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `CatFile` no longer splits what git said at U+0085, U+2028 or U+2029, which a ref name can
+  hold: a warning in `ObjectInfo.warnings` that quotes such a name is one warning, and
+  `UnknownRevisionError.reason` keeps the name whole.
 - Config writes recognize a busy lock on paths containing newlines, including with Git's
   performance or Trace2 logging enabled. Retries depend on the reason after the path, which
   can contain text shaped like an exit trace line. Bare performance traces and aliases that
