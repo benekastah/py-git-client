@@ -6,31 +6,34 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, NoReturn, cast
 
+from git_client.cat_file import CatFile
 from git_client.client import (
     CLIENT_TIMEOUT,
     ReadOnlyGit,
     Timeout,
     decode,
     encode,
-    object_header,
     read_output,
     read_process,
     stdout_of,
 )
-from git_client.errors import WRONG_TYPE, GitError, UnknownRevisionError, WrongTypeError
+from git_client.errors import GitError, WrongTypeError
 from git_client.performance import record_read
 
 type ChangeStatus = Literal["A", "C", "D", "M", "R", "T", "U", "X"]
 
 type Diff = str | tuple[str, str]
 """What to diff: a commit, against its parent (a root commit against the empty tree, a merge
-not at all, as git diffs one by default), or a pair, (old, new), each a commit or a tree."""
+not at all, as git diffs one by default), or a pair, (old, new), each a commit or a tree. Each
+is a revision that names one (e.g. a ref, an object id, "main~2", "main:src", ":/fix")."""
 
 # A raw entry's fields, before its path: ":<old mode> <new mode> <old id> <new id> <status>",
 # the status a letter, and, for a rename or copy, its score.
 _RAW = re.compile(rb":([0-7]+) ([0-7]+) ([0-9a-f]+) ([0-9a-f]+) ([ACDMRTUX])([0-9]*)")
 # An ls-tree entry: "<mode> <type> <id>\t<path>".
 _TREE_ENTRY = re.compile(rb"([0-7]+) (blob|tree|commit) ([0-9a-f]+)\t(.+)", re.DOTALL)
+# What ls-tree says of a name of a blob.
+_NOT_A_TREE = re.compile(r"^fatal: not a tree object$", re.MULTILINE)
 # A numstat entry's counts, before its path ("-" for a binary file's).
 _NUMSTAT = re.compile(rb"([0-9]+|-)\t([0-9]+|-)\t")
 
@@ -38,8 +41,9 @@ _NUMSTAT = re.compile(rb"([0-9]+|-)\t([0-9]+|-)\t")
 @dataclass(frozen=True)
 class TreeChange:
     """A path a diff changes, as git's raw diff gives it: its status (git's `--diff-filter`
-    letters: "A" added, "D" deleted, "M" modified, its mode or its content, "R" renamed, ...;
-    a file that becomes a symlink, or a submodule, is deleted and added), its path (the new
+    letters: "A" added, "D" deleted, "M" modified, its mode or its content, "R" renamed, "T"
+    a file that became a symlink or a submodule, or the reverse; a file that became a
+    directory, or the reverse, is deleted and its new form added), its path (the new
     one, for a rename), its old and new mode ("100644", "100755", "120000" a symlink,
     "160000" a submodule; "000000" where it isn't there) and object id (all zeros where it
     isn't there), and, for a rename, the path it had and how alike the two are, in percent."""
@@ -57,7 +61,8 @@ class TreeChange:
 @dataclass(frozen=True)
 class LineChange:
     """How many lines a diff adds to a path and removes from it (its new path, for a rename),
-    as git's numstat counts them; both None for a binary file, as git tells one."""
+    as git's numstat counts them; both None for a binary file, as git tells one. A path that
+    is a file on one side and a directory on the other has an entry for each."""
 
     path: str
     added: int | None
@@ -70,7 +75,7 @@ def changed_paths(
     git: ReadOnlyGit,
     diffs: Sequence[Diff],
     *,
-    renames: bool = False,
+    renames: bool = True,
     ignore_submodules: bool = False,
     paths: Sequence[str] = (),
     pathspecs: Sequence[str] = (),
@@ -81,11 +86,13 @@ def changed_paths(
     compares, and `line_changes` for its switches. A merge's changes against its first
     parent are the pair (first parent, merge).
 
-    Two processes for all of them: one `git cat-file --batch-check` to resolve the names
-    (each a revision, e.g. a ref, an object id, "main~2"), then one `git diff-tree --stdin`.
-    Raises ValueError for a name git would read as another (empty, or with a newline, a
-    carriage return or a NUL), UnknownRevisionError for one that names no commit (or no tree,
-    in a pair), and WrongTypeError for a commit that's a tree."""
+    Two processes for all of them: a CatFile (`git cat-file --batch-command`) to resolve the
+    names and peel each to a commit (or, in a pair, a tree), within the client's timeout, then
+    one `git diff-tree --stdin`, within `timeout`. Raises ValueError for a name git would read
+    as another (empty, or with a newline, a carriage return or a NUL), UnknownRevisionError
+    for one that names nothing, and WrongTypeError for one that names what isn't a commit (or
+    in a pair, a tree): the first such name's. As it uses a CatFile, a FakeGit can't answer
+    it."""
     output = _diff_tree(git, diffs, "--raw", renames, ignore_submodules, paths, pathspecs, timeout)
     return output.entries(_raw_entry)
 
@@ -95,26 +102,27 @@ def line_changes(
     git: ReadOnlyGit,
     diffs: Sequence[Diff],
     *,
-    renames: bool = False,
+    renames: bool = True,
     ignore_submodules: bool = False,
     paths: Sequence[str] = (),
     pathspecs: Sequence[str] = (),
     timeout: Timeout = CLIENT_TIMEOUT,
 ) -> list[list[LineChange]]:
     """How many lines each of `diffs` adds and removes, path by path, as `changed_paths`
-    lists them (and with its processes and errors), with git's numstat. A file whose type
-    changes has two: its deletion and its addition.
+    lists them (and with its processes and errors), with git's numstat.
 
-    - `renames`: find renames (`-M`, git's default threshold of 50% alike), rather than a
-      deletion and an addition.
+    - `renames`: find renames (`-M`, git's default threshold of 50% alike), as `git diff` and
+      `git log` do by default (diff-tree, git's plumbing, doesn't), so a rename is one path,
+      its new one, not a deletion and an addition. git's `diff.renameLimit` applies: past it,
+      git finds only exact renames, saying so only on its stderr, which is dropped.
     - `ignore_submodules`: leave out changes to submodules' commits.
     - `paths`: only these paths, each from the top of the worktree, as git reports one,
       literally (`*` is a file named so), and the files in a directory of that name.
     - `pathspecs`: only what these pathspecs match, as git reads them on its command line
       (from the client's directory, with wildcards and magic): e.g. what a user typed.
 
-    The user's config doesn't change what git reports: an external diff, textconv,
-    `diff.relative`, `diff.renames`, a submodule's `ignore`."""
+    diff-tree reads no diff config but `diff.renameLimit` (not `diff.renames`, an external
+    diff, textconv or `diff.relative`); a submodule's `ignore` is overridden."""
     output = _diff_tree(
         git, diffs, "--numstat", renames, ignore_submodules, paths, pathspecs, timeout
     )
@@ -168,14 +176,14 @@ def _diff_tree(
         raise TypeError(f"diffs is a sequence of diffs, not one: [{diffs!r}]")
     if not diffs:
         return _Output(b"", [], (), "")
-    names: list[str] = []
+    names: list[tuple[str, str]] = []
     for diff in diffs:
         for name in [diff] if isinstance(diff, str) else diff:
-            # On cat-file's stdin, a line each, where git would read these as another name.
+            # Lines for cat-file, which would read these as another name.
             if not name or any(c in name for c in "\n\r\0"):
                 raise ValueError(f"not a revision: {name!r}")
-            names.append(f"{name}^{{{'commit' if isinstance(diff, str) else 'tree'}}}")
-    ids = iter(_resolve(git, names, timeout))
+            names.append((name, "commit" if isinstance(diff, str) else "tree"))
+    ids = iter(_resolve(git, names))
     lines: list[bytes] = []
     headers: list[bytes] = []
     for diff in diffs:
@@ -199,9 +207,6 @@ def _diff_tree(
         format,
         "-M" if renames else "--no-renames",
         f"--ignore-submodules={'all' if ignore_submodules else 'none'}",
-        "--no-relative",
-        "--no-ext-diff",
-        "--no-textconv",
         "--",
         *(f":(top,literal){path}" for path in paths),
         *pathspecs,
@@ -213,25 +218,24 @@ def _diff_tree(
     return _Output(stdout_of(args, result), headers, args, decode(result.stderr))
 
 
-def _resolve(git: ReadOnlyGit, names: list[str], timeout: Timeout) -> list[bytes]:
-    """The id of the object each of `names` names, from one `git cat-file --batch-check`."""
-    lines = b"".join(encode(name) + b"\n" for name in names)
-    args = ("cat-file", "--batch-check")
-    result = read_process(git, *args, capture_output=True, input=lines, timeout=timeout)
-    answers = stdout_of(args, result).split(b"\n")
-    stderr = decode(result.stderr)
-    if len(answers) != len(names) + 1:
-        raise GitError(args, 0, f"cat-file gave {len(answers) - 1} answers for {len(names)}")
+def _resolve(git: ReadOnlyGit, names: list[tuple[str, str]]) -> list[bytes]:
+    """The id of the object of the kind given ("commit", "tree") each name names, from one
+    CatFile. Each name is resolved as it is, then peeled by its id (`<id>^{tree}`), as git
+    takes a name with a path or a search (`main:src`, `:/fix`) to run to its end."""
     ids: list[bytes] = []
-    for name, answer in zip(names, answers, strict=False):
-        header = object_header(answer)
-        if header is None:
-            if WRONG_TYPE.search(stderr):
-                raise WrongTypeError(args, 0, stderr)
-            raise UnknownRevisionError(
-                args, 0, f"{name!r} names nothing\n{stderr}".rstrip(), reason=""
-            )
-        ids.append(encode(header[0]))
+    with CatFile(git) as cat:
+        for name, kind in names:
+            found = cat.info(name)
+            if found is not None and found.type == kind:
+                ids.append(encode(found.id))
+                continue
+            # Raises UnknownRevisionError, with git's reason, if it names nothing.
+            object_id = cat.verify(name) if found is None else found.id
+            try:
+                ids.append(encode(cat.verify(f"{object_id}^{{{kind}}}")))
+            except WrongTypeError as error:
+                error.add_note(f"{name!r} names {object_id}, which isn't a {kind}")
+                raise
     return ids
 
 
@@ -312,14 +316,21 @@ def tree_entries(
     one `git ls-tree -z`: those at its top, or with `recursive`, every file (`-r`, which lists
     no directories). With `paths` (each from the top, literally), only those: a directory's
     entry, or with `recursive` or a path ending in "/", its files. git's ls-tree takes one
-    tree, so it's one process for each. Raises UnknownRevisionError if `tree` names no tree."""
+    tree, so it's one process for each. Raises UnknownRevisionError if `tree` names nothing,
+    and WrongTypeError if it names a blob."""
     args = ("ls-tree", "-z", "--full-tree", *(["-r"] if recursive else []))
-    # No "--": ls-tree would take it as a path. Nothing after --end-of-options is an option.
+    # Not "--", which after --end-of-options is a path; nothing after it is an option.
     args += ("--end-of-options", tree, *paths)
     # Paths as they are, whatever the environment says; --full-tree takes them from the top.
     env = {"GIT_LITERAL_PATHSPECS": "1", "GIT_ICASE_PATHSPECS": "0"}
     found: list[TreeEntry] = []
-    for field in read_output(git, *args, env=env, timeout=timeout).split(b"\0")[:-1]:
+    try:
+        output = read_output(git, *args, env=env, timeout=timeout)
+    except GitError as error:
+        if _NOT_A_TREE.search(error.stderr):
+            raise WrongTypeError(error.command, error.returncode, error.stderr) from None
+        raise
+    for field in output.split(b"\0")[:-1]:
         entry = _TREE_ENTRY.fullmatch(field)
         if entry is None:
             raise GitError(args, 0, f"ls-tree printed what it doesn't document: {field!r}")

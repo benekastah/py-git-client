@@ -3,10 +3,12 @@ from pathlib import Path
 
 import pytest
 
+import git_client.diffs
 from git_client import (
     Git,
     GitError,
     LineChange,
+    ReadOnlyGit,
     TreeChange,
     TreeEntry,
     UnknownRevisionError,
@@ -28,13 +30,15 @@ ZEROS = "0" * 40
 def make_diffs(git: Git) -> None:
     """Commits made of trees git builds, so paths no filesystem takes can be in them: `p0`, a
     root commit, and `p1` on it, which changes `a` (3 lines added, 1 removed), renames `keep`
-    to `kept` (changing a line), makes `run` executable, and adds a binary file, `*`, a path
-    with a newline, one that isn't UTF-8, `:x`, `dir/f` and a submodule, `sub`; and `m`, a merge
-    of p1 and p0 with p1's tree."""
-    a0, a1, keep, kept, run, binary, other = hash_blobs(
+    to `kept` (changing a line), makes `run` executable, turns the files `link` and `gitl`
+    into a symlink and a submodule, the file `fd` into a directory and the directory `df` into
+    a file, and adds a binary file, `*`, a path with a newline, one that isn't UTF-8, `:x`,
+    `dir/f` and a submodule, `sub` (its message "add dir"); `m`, a merge of p1 and p0 with
+    p1's tree; and `ann`, an annotated tag of p1."""
+    a0, a1, keep, kept, run, binary, other, link, gitl, fd, dx, target = hash_blobs(
         git,
         [b"a\n", b"x\ny\nz\n", KEEP, KEEP.replace(b"9", b"nine"), b"r\n",
-         b"\0\1", b"o\n"],
+         b"\0\1", b"o\n", b"l\n", b"g\n", b"fd\n", b"dx\n", b"target"],
     )  # fmt: skip
 
     def tree(*entries: tuple[str, str, bytes]) -> str:
@@ -45,11 +49,21 @@ def make_diffs(git: Git) -> None:
         )
         return git.run_bytes("mktree", "-z", input=listing).decode().strip()
 
-    def commit(tree: str, *parents: str) -> str:
+    def commit(tree: str, *parents: str, message: str = "x") -> str:
         options = [arg for parent in parents for arg in ("-p", parent)]
-        return git.run("commit-tree", tree, *options, "-m", "x")
+        return git.run("commit-tree", tree, *options, "-m", message)
 
-    p0 = commit(tree(("100644", a0, b"a"), ("100644", keep, b"keep"), ("100644", run, b"run")))
+    p0 = commit(
+        tree(
+            ("100644", a0, b"a"),
+            ("100644", keep, b"keep"),
+            ("100644", run, b"run"),
+            ("100644", link, b"link"),
+            ("100644", gitl, b"gitl"),
+            ("100644", fd, b"fd"),
+            ("040000", tree(("100644", dx, b"x")), b"df"),
+        )
+    )
     t1 = tree(
         ("100644", a1, b"a"),
         ("100644", kept, b"kept"),
@@ -61,11 +75,16 @@ def make_diffs(git: Git) -> None:
         ("100644", other, b"caf\xe9"),
         ("040000", tree(("100644", other, b"f")), b"dir"),
         ("160000", p0, b"sub"),
+        ("120000", target, b"link"),
+        ("160000", p0, b"gitl"),
+        ("040000", tree(("100644", other, b"y")), b"fd"),
+        ("100644", other, b"df"),
     )
-    p1 = commit(t1, p0)
+    p1 = commit(t1, p0, message="add dir")
     m = commit(t1, p1, p0)
     for name, id in (("p0", p0), ("p1", p1), ("m", m)):
         git.run("tag", name, id)
+    git.run("tag", "--annotate", "--message=x", "ann", p1)
 
 
 @pytest.fixture
@@ -77,7 +96,10 @@ def statuses(changes: list[TreeChange]) -> list[tuple[str, str]]:
     return [(change.status, change.path) for change in changes]
 
 
-P1_PATHS = ["*", ":x", "a", "bin", "caf\udce9", "dir/f", "keep", "kept", "new\nline", "run", "sub"]
+P1_PATHS = [
+    "*", ":x", "a", "bin", "caf\udce9", "df", "df/x", "dir/f", "fd", "fd/y", "gitl", "kept",
+    "link", "new\nline", "run", "sub",
+]  # fmt: skip
 
 
 def test_changed_paths_lists_what_a_commit_changes_in_gits_order(diffs: Git) -> None:
@@ -85,21 +107,29 @@ def test_changed_paths_lists_what_a_commit_changes_in_gits_order(diffs: Git) -> 
 
     assert [change.path for change in changes] == P1_PATHS
     by_path = {change.path: change for change in changes}
-    a0, a1, run = diffs.run("rev-parse", "p0:a", "p1:a", "p0:run").split()
+    a0, a1, run, link, target = diffs.run(
+        "rev-parse", "p0:a", "p1:a", "p0:run", "p0:link", "p1:link"
+    ).split()
     assert by_path["a"] == TreeChange("M", "a", "100644", "100644", a0, a1)
     assert by_path["run"] == TreeChange("M", "run", "100644", "100755", run, run)
-    assert by_path["keep"].status == "D"
-    assert (by_path["keep"].new_mode, by_path["keep"].new_id) == ("000000", ZEROS)
+    # A rename, found by default, as porcelain finds them.
+    assert by_path["kept"].status == "R"
+    assert (by_path["kept"].old_path, by_path["kept"].similarity) == ("keep", 86)
     assert (by_path["sub"].status, by_path["sub"].new_mode) == ("A", "160000")
-    assert (by_path["kept"].status, by_path["kept"].old_path) == ("A", None)
+    assert (by_path["sub"].old_mode, by_path["sub"].old_id) == ("000000", ZEROS)
+    # A file that becomes a symlink or a submodule changes type; one that becomes a
+    # directory, or a directory that becomes a file, is deleted, and its new form added.
+    assert by_path["link"] == TreeChange("T", "link", "100644", "120000", link, target)
+    assert (by_path["gitl"].status, by_path["gitl"].new_mode) == ("T", "160000")
+    assert [by_path[p].status for p in ("df", "df/x", "fd", "fd/y")] == ["A", "D", "D", "A"]
 
 
-def test_changed_paths_finds_renames_if_asked(diffs: Git) -> None:
-    [changes] = changed_paths(diffs, ["p1"], renames=True)
+def test_changed_paths_finds_no_renames_if_asked(diffs: Git) -> None:
+    [changes] = changed_paths(diffs, ["p1"], renames=False)
 
-    [renamed] = [change for change in changes if change.status == "R"]
-    assert (renamed.old_path, renamed.path, renamed.similarity) == ("keep", "kept", 86)
-    assert [change.path for change in changes] == [p for p in P1_PATHS if p != "keep"]
+    assert ("D", "keep") in statuses(changes)
+    assert ("A", "kept") in statuses(changes)
+    assert all(change.old_path is None for change in changes)
 
 
 def test_changed_paths_answers_each_diff_in_order(diffs: Git, git_calls: list[GitCall]) -> None:
@@ -107,8 +137,11 @@ def test_changed_paths_answers_each_diff_in_order(diffs: Git, git_calls: list[Gi
         diffs, ["p0", ("p1", "p0^{tree}"), ("p1", "m"), "m"]
     )
 
-    assert statuses(root) == [("A", "a"), ("A", "keep"), ("A", "run")]
-    assert set(statuses(backwards)) >= {("D", "kept"), ("A", "keep"), ("D", "sub")}
+    assert statuses(root) == [
+        ("A", "a"), ("A", "df/x"), ("A", "fd"), ("A", "gitl"), ("A", "keep"), ("A", "link"),
+        ("A", "run"),
+    ]  # fmt: skip
+    assert set(statuses(backwards)) >= {("R", "keep"), ("D", "sub"), ("T", "link")}
     [a] = [change for change in backwards if change.path == "a"]
     assert (a.old_id, a.new_id) == tuple(diffs.run("rev-parse", "p1:a", "p0:a").split())
     assert same == []
@@ -124,7 +157,7 @@ def test_changed_paths_takes_only_the_paths_asked_for(
     [matched] = changed_paths(diffs, ["p1"], pathspecs=["k*"])
 
     assert statuses(literal) == [("A", "*"), ("A", "dir/f"), ("A", "new\nline")]
-    assert statuses(matched) == [("D", "keep"), ("A", "kept")]
+    assert statuses(matched) == [("R", "kept")]
 
 
 def test_changed_paths_can_ignore_submodules(diffs: Git) -> None:
@@ -134,9 +167,28 @@ def test_changed_paths_can_ignore_submodules(diffs: Git) -> None:
     assert "dir/f" in [change.path for change in changes]
 
 
+def test_changed_paths_takes_any_revision(diffs: Git) -> None:
+    # A path's tree, a commit found by its message, an annotated tag, a tree.
+    [subtree, found, tagged, tree] = changed_paths(
+        diffs, [("p0:df", "p1:fd"), ":/add dir", "ann", ("p1^{tree}", "ann")]
+    )
+
+    assert statuses(subtree) == [("D", "x"), ("A", "y")]
+    [p1] = changed_paths(diffs, ["p1"])
+    assert found == p1
+    assert tagged == p1
+    assert tree == []
+
+
 def test_changed_paths_raises_for_a_name_that_names_nothing(diffs: Git) -> None:
     with pytest.raises(UnknownRevisionError, match="nope"):
         changed_paths(diffs, ["p0", ("p0", "nope")])
+    with pytest.raises(UnknownRevisionError, match="nope"):
+        changed_paths(diffs, ["nope", "p0^{tree}"])  # not the tree's error, which comes after
+    with pytest.raises(UnknownRevisionError, match="no upstream"):
+        changed_paths(diffs, ["@{upstream}"])  # which cat-file exits on
+    with pytest.raises(WrongTypeError, match="p0:a"):
+        changed_paths(diffs, [("p0", "p0:a")])  # a blob, where a tree is diffed
     with pytest.raises(WrongTypeError):
         changed_paths(diffs, ["p0^{tree}"])  # a tree, where a commit is diffed
 
@@ -147,12 +199,22 @@ def test_changed_paths_refuses_a_name_git_would_read_as_another(name: str) -> No
         changed_paths(FakeGit(), [("p0", name)])
 
 
-def fake_diff(output: bytes) -> FakeGit:
-    """A FakeGit whose `p0` is ZEROS's commit, and whose diff-tree prints `output`."""
-    git = FakeGit()
-    git.respond(["cat-file", "--batch-check"], f"{ZEROS} commit 100\n")
-    git.respond(["diff-tree"], output)
-    return git
+@pytest.fixture
+def fake_diff(monkeypatch: pytest.MonkeyPatch) -> Callable[[bytes], FakeGit]:
+    """A FakeGit whose diff-tree prints the output given, every name naming ZEROS (in place
+    of the CatFile, which a FakeGit can't start)."""
+
+    def resolve(git: ReadOnlyGit, names: list[tuple[str, str]]) -> list[bytes]:
+        return [ZEROS.encode()] * len(names)
+
+    monkeypatch.setattr(git_client.diffs, "_resolve", resolve)
+
+    def fake(output: bytes) -> FakeGit:
+        git = FakeGit()
+        git.respond(["diff-tree"], output)
+        return git
+
+    return fake
 
 
 HEADER = ZEROS.encode() + b"\0"
@@ -172,13 +234,15 @@ HEADER = ZEROS.encode() + b"\0"
         HEADER + b"stray",
     ],
 )
-def test_changed_paths_raises_for_output_git_doesnt_document(output: bytes) -> None:
+def test_changed_paths_raises_for_output_git_doesnt_document(
+    fake_diff: Callable[[bytes], FakeGit], output: bytes
+) -> None:
     with pytest.raises(GitError, match="diff-tree printed"):
         changed_paths(fake_diff(output), ["p0"])
 
 
 def test_line_changes_counts_each_files_lines(diffs: Git, git_calls: list[GitCall]) -> None:
-    [changes] = line_changes(diffs.read_only(), [("p0", "p1")], renames=True)
+    [changes] = line_changes(diffs.read_only(), [("p0", "p1")])
 
     by_path = {change.path: change for change in changes}
     assert by_path["a"] == LineChange("a", 3, 1)
@@ -186,6 +250,8 @@ def test_line_changes_counts_each_files_lines(diffs: Git, git_calls: list[GitCal
     assert by_path["bin"] == LineChange("bin", None, None)  # binary
     assert by_path["run"] == LineChange("run", 0, 0)
     assert by_path["new\nline"] == LineChange("new\nline", 1, 0)
+    assert by_path["link"] == LineChange("link", 1, 1)  # a type change: one entry
+    assert [change.path for change in changes].count("gitl") == 1
     assert [call[0] for call in git_calls] == ["cat-file", "diff-tree"]
 
 
@@ -197,17 +263,11 @@ def test_line_changes_counts_each_files_lines(diffs: Git, git_calls: list[GitCal
         HEADER + b"1\t2\t\0p\0",  # a rename with one path
     ],
 )
-def test_line_changes_raises_for_output_git_doesnt_document(output: bytes) -> None:
+def test_line_changes_raises_for_output_git_doesnt_document(
+    fake_diff: Callable[[bytes], FakeGit], output: bytes
+) -> None:
     with pytest.raises(GitError, match="diff-tree printed"):
         line_changes(fake_diff(output), ["p0"])
-
-
-def test_changed_paths_raises_if_cat_file_answers_fewer_names_than_asked() -> None:
-    git = FakeGit()
-    git.respond(["cat-file", "--batch-check"], f"{ZEROS} commit 100\n")
-
-    with pytest.raises(GitError, match="cat-file gave 1 answers for 2"):
-        changed_paths(git, ["p0", "p1"])
 
 
 def test_no_diffs_take_no_process() -> None:
@@ -223,7 +283,10 @@ def test_changed_paths_refuses_one_diff_for_many() -> None:
 def test_tree_entries_lists_a_trees_entries(diffs: Git, git_calls: list[GitCall]) -> None:
     entries = tree_entries(diffs.read_only(), "p1")
 
-    top = ["*", ":x", "a", "bin", "caf\udce9", "dir", "kept", "new\nline", "run", "sub"]
+    top = [
+        "*", ":x", "a", "bin", "caf\udce9", "df", "dir", "fd", "gitl", "kept", "link",
+        "new\nline", "run", "sub",
+    ]  # fmt: skip
     assert [entry.path for entry in entries] == top
     by_path = {entry.path: entry for entry in entries}
     assert by_path["a"] == TreeEntry("100644", "blob", diffs.run("rev-parse", "p1:a"), "a")
@@ -260,6 +323,11 @@ def test_tree_entries_takes_only_the_paths_asked_for(
 def test_tree_entries_raises_for_a_name_that_names_no_tree(diffs: Git, tree: str) -> None:
     with pytest.raises(UnknownRevisionError):
         tree_entries(diffs, tree)
+
+
+def test_tree_entries_raises_for_a_name_of_a_blob(diffs: Git) -> None:
+    with pytest.raises(WrongTypeError, match="not a tree object"):
+        tree_entries(diffs, "p1:a")
 
 
 @pytest.mark.parametrize(

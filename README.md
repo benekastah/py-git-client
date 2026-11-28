@@ -284,8 +284,8 @@ datetime can't hold (a bad zone, a year past 9999), which git takes and fsck onl
 ### Diffs and trees
 
 `changed_paths` lists the paths each of many diffs changes, and `line_changes` how many lines
-each adds and removes there, with one `git cat-file --batch-check` to resolve the names and one
-`git diff-tree --stdin` for all the diffs:
+each adds and removes there, with a `CatFile` to resolve the names and one `git diff-tree --stdin`
+for all the diffs:
 
 ```python
 from git_client import ReadOnlyGit, changed_paths, line_changes
@@ -293,10 +293,11 @@ from git_client import ReadOnlyGit, changed_paths, line_changes
 reader = ReadOnlyGit("path/to/repo")
 # A commit, against its parent (a root commit against nothing; a merge isn't diffed, as git
 # does by default: give (merge.parents[0], merge.id) for its first parent's), or a pair,
-# (old, new), of commits or trees: e.g. commit.id from commits(), "main", "a^{tree}".
-for changes in changed_paths(reader, ["main", ("main", "a")], renames=True):  # one list each
+# (old, new), of commits or trees: any revision, e.g. commit.id from commits(), "main",
+# "a^{tree}", "main:src", ":/fix the bug".
+for changes in changed_paths(reader, ["main", ("main", "a")]):  # one list each
     for change in changes:  # in git's order, recursing into directories; [] if none
-        change.status, change.path  # "A", "D", "M", "R" (renames=True), ...; from the top
+        change.status, change.path  # "A", "D", "M", "R", "T", ...; from the top
         change.old_mode, change.new_mode, change.old_id, change.new_id  # "000000", zeros: none
         change.old_path, change.similarity  # a rename's; None otherwise
 [counts] = line_changes(reader, [("a", "main")], paths=["src", "README.md"])  # literally
@@ -304,13 +305,18 @@ for count in counts:
     count.path, count.added, count.removed  # both None for a binary file
 ```
 
-Both also take `ignore_submodules=True`, to leave out submodules' changes, and `pathspecs`,
-git's pathspecs as a user types them (from the client's directory, with wildcards and magic). A
-file that becomes a symlink or a submodule is deleted and added. The user's diff config doesn't
-change what git reports. A name that is empty or holds a newline, a carriage return or a NUL
-raises ValueError. A `FakeGit` test responds to `["cat-file", "--batch-check"]` with a line for
-each name (`<id> commit 100`) and to `["diff-tree", "--stdin"]` with git's output. Merges'
-combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and patches aren't supported.
+Both find renames, as `git diff` and `git log` do by default (so a rename is one path, its new
+one); `renames=False` gives a deletion and an addition, as diff-tree, git's plumbing, does by
+default. Past `diff.renameLimit`, git finds only exact renames, warning only on its stderr,
+which is dropped. Both also take `ignore_submodules=True`, to leave out submodules' changes,
+and `pathspecs`, git's pathspecs as a user types them (from the client's directory, with
+wildcards and magic). A file that becomes a symlink or a submodule, or the reverse, has status
+`T`; one that becomes a directory, or the reverse, is deleted and its new form added. No other
+diff config changes what git reports. A name that is empty or holds a newline, a carriage
+return or a NUL raises ValueError; one that names nothing, `UnknownRevisionError`; one that
+names what isn't a commit (in a pair, a tree), `WrongTypeError`. As they use a `CatFile`, a
+`FakeGit` can't answer them. Merges' combined diffs (`-c`, `--cc`, `-m`), copies (`-C`) and
+patches aren't supported.
 
 `tree_entries` lists a tree's entries, from one `git ls-tree -z` (which takes one tree, so it's
 one process for each):
@@ -327,7 +333,8 @@ tree_entries(reader, "main", recursive=True)  # every file, in every directory (
 tree_entries(reader, "main", ["README.md", "src/"])
 ```
 
-A name that names no tree raises `UnknownRevisionError`. A `FakeGit` test responds to
+A name that names nothing raises `UnknownRevisionError`, and one of a blob `WrongTypeError`.
+A `FakeGit` test responds to
 `["ls-tree", "-z", "--full-tree"]` with git's output.
 
 ### Push results
