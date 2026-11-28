@@ -123,6 +123,35 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
+  with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
+  *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
+  reported, with its `FetchStatus` and old and new ids; `refs` None before git 2.41, where it
+  runs fetch again without `--porcelain`). It fetches no submodules on any git (git takes no
+  `--recurse-submodules` with `--porcelain`; on older git it passes `--no-recurse-submodules`),
+  where `git fetch` by default fetches the commits a fetched superproject commit needs: a tool
+  that wants them runs `git submodule update`. Its output is captured, so it shows no progress,
+  and with `--porcelain` git prints no summary (older git's goes to `stderr`): git-stack's
+  `passthrough("fetch", "--prune", remote)` (`git_stack/git.py:1223`) stays a passthrough,
+  unless git-stack accepts losing them (it can print `refs` itself). git-stack replaces
+  `fetch --quiet --no-write-fetch-head <remote> <refspecs>` (`git_stack/stack.py:3039`,
+  `git_stack/adapters/github.py:580`); move-forward, `fetch --quiet <remote>` and `fetch --quiet
+  . <commit>:refs/heads/<branch>` (`src/move_forward/plugins/git/actions.py:260`, `283`).
+- `remote_refs(git, remote, patterns=(), *, heads=False, symrefs=False, env=None)`: what a
+  remote has, from one `git ls-remote`, as a `RemoteRefs` (each ref's id, and with `symrefs`
+  each symbolic ref's target). git-stack replaces `ls-remote --symref <remote> HEAD`
+  (`git_stack/git.py:1087`, reading `symrefs["HEAD"]`), its probe at a push URL (`1202`,
+  passing its `GIT_CONFIG_COUNT` rewrite as `env`) and `ls-remote --heads -- <remote> <refs>`
+  (`git_stack/stack.py:3036`, `3666`).
+- `remote_urls(git, remote, *, push=False)`: the URLs git fetches a remote from or pushes it
+  to, rewritten as git rewrites them (`insteadOf`, `pushInsteadOf`), from one `git remote
+  get-url --all [--push]`. git-stack replaces `remote get-url --push --all`
+  (`git_stack/git.py:1131`) and `remote get-url` (`git_stack/adapters/github.py:1981`), and
+  can drop its own reading of `insteadOf`, `pushInsteadOf` and `pushurl`
+  (`git_stack/git.py:353-370`, `580-610`, `1110-1190`) for comparing what git gives with the
+  configured URLs; move-forward, `remote get-url` (`src/move_forward/plugins/github/setup.py:36`;
+  its `git remote` at `:34`, which lists the remotes, stays). Unlike `fetch` and `remote_refs`,
+  it takes only a remote the repository's own config names.
 - `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
   worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
   doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,
