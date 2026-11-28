@@ -191,8 +191,8 @@ def check_names_nothing(git: ReadOnlyGit, name: str, *, timeout: Timeout = CLIEN
 
 # How long git, asked to stop, has to clean up (e.g. remove index.lock) and exit before it's
 # killed. It usually takes milliseconds, but on a machine busy writing to disk, over a second
-# (seen locally, and past 0.25 seconds in CI, which then left index.lock behind). Spent only
-# on a git that doesn't exit when asked (e.g. one waiting for an editor, which ignores SIGINT).
+# (seen locally; in CI, cut short, it left index.lock behind). Spent only on a git that
+# doesn't exit when asked (e.g. one waiting for an editor, which ignores SIGINT).
 _GRACE = 5.0
 
 # How long a command that was stopped is given to let go of its output.
