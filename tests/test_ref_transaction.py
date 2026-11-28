@@ -12,6 +12,7 @@ from git_client import (
     GitError,
     GitTimeoutError,
     NotARepositoryError,
+    NotStartedError,
     ref_transaction,
 )
 from git_client.client import Arg
@@ -153,9 +154,16 @@ def test_raises_as_git_fails_to_start_it() -> None:
         pass
 
 
-class SilentGit(Git):
-    """Starts a process that never answers in place of git's, kept in `started`."""
+@pytest.mark.usefixtures("outside_any_repository")
+def test_starts_nothing_once_the_client_is_stopping() -> None:
+    with pytest.raises(NotStartedError), ref_transaction(Git(".", stopping=lambda: True)):
+        pass
 
+
+class ScriptedGit(Git):
+    """Runs `script`, Python, in place of git, keeping the process in `started`."""
+
+    script: str
     started: list[subprocess.Popen[bytes]]
 
     def popen(
@@ -164,20 +172,54 @@ class SilentGit(Git):
         env: Mapping[str, EnvValue] | None = None,
         stderr: int | IO[bytes] = subprocess.DEVNULL,
     ) -> subprocess.Popen[bytes]:
-        command = [sys.executable, "-c", "import time; time.sleep(60)"]
         process = subprocess.Popen(
-            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr
+            [sys.executable, "-c", self.script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
         )
         self.started.append(process)
         return process
 
 
+def scripted(repo: Git, script: str, timeout: float | None = None) -> ScriptedGit:
+    git = ScriptedGit(repo.directory, timeout=timeout)
+    git.script, git.started = "import sys, time\n" + script, []
+    return git
+
+
+# Answers start, then exits on the end of its input.
+_STARTS = "sys.stdin.buffer.read(6); print('start: ok', flush=True); sys.stdin.buffer.read()\n"
+
+
 def test_raises_and_stops_git_past_the_timeout(repo: Git) -> None:
-    git = SilentGit(repo.directory, timeout=0.2)
-    git.started = []
+    git = scripted(repo, "time.sleep(60)", timeout=0.2)
     with pytest.raises(GitTimeoutError), ref_transaction(git):
         pass
     (process,) = git.started
     if sys.platform != "win32":  # where terminating is killing
         # Terminated, as git removes its lock files then, not killed.
         assert process.returncode == -signal.SIGTERM
+
+
+def test_kills_git_that_doesnt_exit_once_its_input_ends(
+    repo: Git, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("git_client.transaction.EXIT_WAIT", 0.01)
+    git = scripted(repo, _STARTS + "time.sleep(60)")
+    with pytest.raises(GitError), ref_transaction(git):
+        pass
+    if sys.platform != "win32":
+        assert git.started[0].returncode == -signal.SIGKILL
+
+
+def test_raises_when_git_fails_as_its_input_ends(repo: Git) -> None:
+    git = scripted(repo, _STARTS + "sys.exit('fatal: gave up')")
+    with pytest.raises(GitError, match="gave up"), ref_transaction(git):
+        pass
+
+
+def test_raises_on_an_answer_git_doesnt_give(repo: Git) -> None:
+    git = scripted(repo, "print('what')")
+    with pytest.raises(GitError, match="answered start with b'what"), ref_transaction(git):
+        pass
