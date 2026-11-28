@@ -73,7 +73,7 @@ from git_client.history import (
     count,
     reflogs,
 )
-from git_client.merging import MergeResult, merge_trees
+from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
 from git_client.pushing import (
     PushDestination,
@@ -123,6 +123,7 @@ __all__ = [
     "Head",
     "Ignored",
     "LineChange",
+    "Merge",
     "MergeResult",
     "MissingObjectError",
     "NoAnswerError",

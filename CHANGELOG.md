@@ -250,6 +250,19 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   --stdin` from 2.39 (on 2.38, one process each): whether each is clean, its tree and its
   conflicted paths, or why git couldn't merge that pair. It takes a `Git`, as merge-tree
   writes objects (#59).
+- `Merge(ours, theirs, base=None)`, which `merge_trees` takes as well as pairs, in the same
+  one process: a merge with its own merge base (git 2.40's `merge-tree --stdin` line `<base>
+  -- <ours> <theirs>`, else `GitError`), so a cherry-pick of commit C onto ours is
+  `Merge(ours, C, base=<C's parent>)`. git-stack can replace `is_rebased_copy`
+  (`git_stack/git.py:1345-1372`: `show`, `apply --3way` and `write-tree` per commit) with one
+  `merge_trees` of `Merge(<the previous upstream commit, or new_base>, <commit>,
+  base=<commit's parent>)` for every commit, comparing each tree with the upstream commit's.
+  That is close to what it does now, not the same: for a merge commit among its commits, `git
+  show` prints a combined diff (often empty, so nothing is applied) where the Merge brings in
+  the second parent's changes, and merge-ort finds renames, which `apply --3way` doesn't; its
+  tests should cover both. (Its other raw `merge-tree --write-tree` runs, `git_stack/git.py:1258`,
+  `1294` and the one per merge from `1308`, need no base: `merge_trees` already takes them, once
+  git-stack resolves their branch names to ids and gathers calls now made one at a time.)
 - `Git.write_configs`'s changes: `ConfigSet`, `ConfigUnset` (with a `value`, only that value,
   as `--unset --fixed-value`) and their union `ConfigChange`, and `ConfigResult` (`CHANGED`,
   `NOT_FOUND`, `SEVERAL_VALUES`) (#61, #64).
