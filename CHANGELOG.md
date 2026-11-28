@@ -165,6 +165,18 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
     `reset(git, quiet=True)`, and move-forward's `run("commit", "--all", "--quiet", "-m",
     WIP_MESSAGE)` (`plugins/git/actions.py:307`) with `commit(git, WIP_MESSAGE, all=True,
     quiet=True)`.
+- `rebase(git, upstream, branch=None, *, onto=None, update_refs=None, stop_at=())`: one
+  `git rebase`, typed like the porcelain writes (a `ConflictError` for a conflict stop,
+  `inherit_output`). `update_refs` True is `--update-refs` (git 2.38; older git raises
+  `GitError`), False `-c rebase.updateRefs=false` (any git), None the config; `upstream`
+  None is `--root`. `stop_at` (full ids) makes it interactive, the library's sequence editor
+  marking those commits "edit". It replaces git-stack's `passthrough("rebase",
+  "--no-update-refs" | "--update-refs", "--onto", parent_tip, base, branch)`
+  (`git_stack/core.py:672, 848`) with `rebase(git, base, branch, onto=parent_tip,
+  update_refs=False | True, inherit_output=True, stdout=...)`, catching `ConflictError`;
+  and git-recommit's `passthrough("rebase", "--interactive", "--no-autosquash", ...)` with
+  its own `GIT_SEQUENCE_EDITOR` (`git_recommit/edit_commit.py:29`, `sequence_editor.py`)
+  with `rebase(git, f"{sha}^" or None, stop_at=[sha], inherit_output=True)`.
 - `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
   with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
   *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git

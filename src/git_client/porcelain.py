@@ -1,8 +1,12 @@
-"""git's porcelain writes (switch, reset, merge, cherry-pick, revert, commit), typed: each
+"""git's porcelain writes (switch, reset, merge, cherry-pick, revert, rebase, commit), typed: each
 starts one git, its hooks running, and raises what stopped or failed it."""
 
-from collections.abc import Mapping
+import re
+import shlex
+import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO, Literal
 
 from git_client.client import (
@@ -18,6 +22,11 @@ from git_client.errors import ConflictError, GitError
 
 type Stdout = int | IO[bytes] | IO[str] | None
 """Where git's stdout goes with `inherit_output` (None: the tool's), e.g. sys.stderr."""
+
+# What rebase's stop_at takes: a full id, which an abbreviated one in the todo list begins.
+_FULL_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# The sequence editor that marks rebase's stop_at "edit", run by its path.
+_SEQUENCE_EDITOR = (Path(__file__).parent / "_sequence_editor.py").as_posix()
 
 # git's exit status for a stop: a conflict, or a hook's or an empty commit's.
 _STOPPED = 1
@@ -279,6 +288,71 @@ def revert(
     _refuse_options("revert", commits)
     _refuse_edit(edit, inherit_output)
     args = ("revert", "--edit" if edit else "--no-edit", *commits)
+    return _write(
+        git,
+        args,
+        inherit_output=inherit_output,
+        stdout=stdout,
+        env=env,
+        timeout=timeout,
+        can_conflict=True,
+    )
+
+
+def rebase(
+    git: Git,
+    upstream: str | None,
+    branch: str | None = None,
+    *,
+    onto: str | None = None,
+    update_refs: bool | None = None,
+    stop_at: Sequence[str] = (),
+    inherit_output: bool = False,
+    stdout: Stdout = None,
+    env: Mapping[str, EnvValue] | None = None,
+    timeout: Timeout = CLIENT_TIMEOUT,
+) -> CommandOutput:
+    """Replay the commits of `branch` (switched to first; HEAD if None) that `upstream` lacks
+    onto `onto` (`--onto`; `upstream` if None) with one `git rebase`; with `upstream` None,
+    every commit, from the root (`--root`). `update_refs` True also moves the branches that
+    point into what's replayed (`--update-refs`, git 2.38: older git refuses it, raising
+    GitError), False never does (`-c rebase.updateRefs=false`, which older git, which never
+    does, ignores), and None does as `rebase.updateRefs` says.
+
+    `stop_at`, full commit ids, makes it an interactive rebase (`--interactive
+    --no-autosquash`) whose sequence editor (the library's, as `GIT_SEQUENCE_EDITOR`) marks
+    each of those commits "edit": it returns once git stops at the first, the rebase left for
+    the user to change it and `git rebase --continue`. A commit that isn't replayed makes git
+    stop the rebase before it starts, raising GitError. Raises ValueError for a stop that
+    isn't a full id.
+
+    A conflict stops the rebase, the rest left for the user: see `merge` for the ConflictError
+    that raises, and for `inherit_output`, `stdout` and what else is raised. With
+    `inherit_output`, a rebase refused because the index already has unmerged paths (exit
+    status 1 too) raises ConflictError as well. Hooks run: pre-rebase (whose refusal raises
+    GitError), post-checkout, post-commit, post-rewrite."""
+    for commit in stop_at:
+        if not _FULL_ID.fullmatch(commit):
+            raise ValueError(f"stop_at takes full commit ids, not {commit!r}")
+    switches = {
+        "--interactive": bool(stop_at),
+        "--no-autosquash": bool(stop_at),
+        "--update-refs": update_refs is True,
+        "--root": upstream is None,
+    }
+    args = (
+        *(("-c", "rebase.updateRefs=false") if update_refs is False else ()),
+        "rebase",
+        *(switch for switch, on in switches.items() if on),
+        *(() if onto is None else (f"--onto={onto}",)),
+        "--end-of-options",
+        *(() if upstream is None else (upstream,)),
+        *(() if branch is None else (branch,)),
+    )
+    if stop_at:
+        editor = [Path(sys.executable).as_posix(), "-I", _SEQUENCE_EDITOR, *stop_at]
+        # git runs it with sh, on every system, the todo list's path after these arguments.
+        env = {**(env or {}), "GIT_SEQUENCE_EDITOR": " ".join(map(shlex.quote, editor))}
     return _write(
         git,
         args,
