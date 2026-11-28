@@ -8,6 +8,10 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### What a tool may need to change
 
+- `Git.run` (with `strip`, the default) strips only ASCII space, tab, CR and newline from the
+  ends of git's output, no longer U+0085, U+2028, U+2029 or other characters `str.strip()`
+  takes: a ref name or path printed last keeps such a final character. A tool that relied on
+  those being stripped strips them itself.
 - `refs()` no longer takes `fields` (raw `--format` names), and `Ref` has no `fields`: a tool
   asks for the typed attributes instead. move-forward's `push_target`
   (`src/move_forward/plugins/git/client.py:289`, `push:remotename`, `upstream:remotename` and
@@ -123,6 +127,104 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Added
 
+- `ref_transaction(git, *, message=None, deref=True, timeout=...)`, for a `with` block: a
+  `RefTransaction` over one `git update-ref --stdin -z`, whose `update`, `delete` and `verify`
+  changes git checks and locks at `prepare()`, before the tool commits (`commit()`) or aborts
+  (`abort()`, or the block's end) them. git-stack replaces its hand-built `start`, changes,
+  `prepare`, `commit`/`abort` input (`git_stack/git.py:314`, called from `integrations.py:1017`)
+  with it, `deref=False` for its `option no-deref`, and can now decide after `prepare` rather
+  than before. A step that runs past `timeout` stops git: on Windows that kills it, leaving a
+  prepared transaction's lock files behind, and on any system a commit stopped partway may have
+  made only some of its changes (see the README).
+- Typed branch writes, each one `git branch` on a `Git`, names after `--end-of-options`:
+  `delete_branches(git, names, *, force=False)` deletes many with one `git branch
+  --delete`/`-D` (and their config), each git can, and returns `DeletedBranches` (each
+  deleted branch's full id, git's exit status, and its reasons for the others), raising only
+  for a failure not of one branch; `create_branch(git, name, start_point=None, *, force=False,
+  track=None)` (`track`: True, False, "inherit", or None for git's config);
+  `rename_branch(git, old, new, *, force=False)`; and `set_upstream(git, branch, upstream)`,
+  None to remove it. `valid_branch_name(git, name)` (a read) asks `git check-ref-format
+  --branch`, and says no to a name git expands (`@{-1}`). git-stack replaces `branch --quiet
+  --delete --force` (`git_stack/core.py:1239`), `branch --quiet --track` (`stack.py:754`,
+  `777`, `780`; `track=True`), `--no-track` (`stack.py:1016`; `track=False`), `--move`
+  (`stack.py:934`), `--set-upstream-to=` (`stack.py:760`, `3457`), `--unset-upstream`
+  (`stack.py:947`), and its two `check-ref-format` runs (`stack.py:1403`) with one
+  `valid_branch_name`; move-forward replaces `branch -D`
+  (`src/move_forward/plugins/git/actions.py:104`, `127`) and its one `branch -D` per line
+  (`actions.py:195`) with one `delete_branches(..., force=True)` per repository, reporting
+  each name not in `deleted` as failed, with `stderr`. Unlike `git.run`, `delete_branches`
+  doesn't raise when a branch isn't deleted: git-stack's untrack (`core.py:1239`) checks
+  `branch in result.deleted` before saving its state. move-forward passes each name once: a
+  name given twice makes git delete none of that repository's branches (its loop deleted the
+  first and reported the second as failed); and its per-name failure text becomes git's
+  `stderr` for all of them, as git's reasons aren't one per name.
+- Porcelain writes, one git each, typed: `switch(git, target, *, detach, create,
+  start_point, track, force, quiet)`, `reset(git, commit=None, *, mode, quiet)`, `merge(git,
+  commit, *, ff, message, edit, quiet)`, `cherry_pick(git, *commits, ff, record_origin,
+  allow_empty)`, `revert(git, *commits, edit)`, `commit(git, message=None, *, all, amend,
+  allow_empty, no_verify, quiet)`, `abort(git, operation)` and `skip(git, operation)`. Each
+  returns a `CommandOutput` (stdout and stderr), raises `ConflictError` for a conflict that
+  stopped it and `GitError` for any other failure (a hook's refusal too), and takes
+  `inherit_output=True` (and `stdout=`) to leave git's input and output the tool's, as
+  `passthrough` does. Hooks run; no editor opens unless `edit=True`, which needs
+  `inherit_output`. They replace:
+  - git-stack's `run("reset", "--quiet", "--keep", t)` (`git_stack/core.py:1112`) with
+    `reset(git, t, mode="keep", quiet=True)`, and `run("merge", "--ff-only", "--quiet",
+    new)` (`core.py:1185`) and move-forward's (`plugins/git/actions.py:290`) with
+    `merge(git, new, ff="only", quiet=True)`.
+  - git-stack's `passthrough("cherry-pick", "--ff", *commits)` (`core.py:1045`) with
+    `cherry_pick(git, *commits, ff=True, inherit_output=True, stdout=...)`, and
+    `passthrough("revert", "--no-edit", *commits)` (`stack.py:1025`) with `revert(git,
+    *commits, inherit_output=True, stdout=...)`: catching `ConflictError`, and on any other
+    `GitError` still checking `operation_in_progress()`, as now. Stops that aren't
+    conflicts (a commit that's become empty; a pick of several commits stopped partway by
+    an untracked file) raise a plain `GitError` with the operation still in progress.
+  - The integration worktree's `run("merge", "--no-ff", "--no-edit", "-m", m, tip)`,
+    `run("cherry-pick", "-x", "--allow-empty", c)` and `run("cherry-pick", "--skip")`
+    (`integrations.py:882, 892, 898`) with `merge(git, tip, ff="no", message=m)`,
+    `cherry_pick(git, c, record_origin=True, allow_empty=True)` and `skip(git,
+    "cherry-pick")`, a `ConflictError` in place of the `ls-files -u` check; and its
+    `ok(command, "--abort")` (`integrations.py:969`) with `abort(git, command)`, in a `try`:
+    `abort` raises `GitError` where `ok` returned False.
+  - git-stack's `switch` calls (`git.py:904`, `core.py:1237, 1321`, `stack.py:484, 1148`,
+    `integrations.py:930, 992`) with `switch(git, ..., quiet=True)` (`detach=True`;
+    `create=True, start_point=..., track=False`), `inherit_output=True` for the passthrough
+    at `stack.py:1148`. git-stack's `-c core.warnAmbiguousRefs=false` has no typed form: with
+    captured output git's warning of a name that's both a branch and a tag is only in
+    `stderr`, but at `stack.py:1148`, with `inherit_output`, it reaches the user.
+  - git-recommit's `run("reset", "--quiet")` (`git_recommit/session.py:527`) with
+    `reset(git, quiet=True)`, and move-forward's `run("commit", "--all", "--quiet", "-m",
+    WIP_MESSAGE)` (`plugins/git/actions.py:307`) with `commit(git, WIP_MESSAGE, all=True,
+    quiet=True)`.
+- `fetch(git, remote, refspecs=(), *, prune=False, tags=None, write_fetch_head=True)` fetches
+  with one `git fetch --porcelain`, refspecs typed as `FetchRefspec(source, destination=None,
+  *, force=False)`, and returns a `FetchResult` (exit status, output, and each `FetchRef` git
+  reported, with its `FetchStatus` and old and new ids; `refs` None before git 2.41, where it
+  runs fetch again without `--porcelain`). It fetches no submodules on any git (git takes no
+  `--recurse-submodules` with `--porcelain`; on older git it passes `--no-recurse-submodules`),
+  where `git fetch` by default fetches the commits a fetched superproject commit needs: a tool
+  that wants them runs `git submodule update`. Its output is captured, so it shows no progress,
+  and with `--porcelain` git prints no summary (older git's goes to `stderr`): git-stack's
+  `passthrough("fetch", "--prune", remote)` (`git_stack/git.py:1223`) stays a passthrough,
+  unless git-stack accepts losing them (it can print `refs` itself). git-stack replaces
+  `fetch --quiet --no-write-fetch-head <remote> <refspecs>` (`git_stack/stack.py:3039`,
+  `git_stack/adapters/github.py:580`); move-forward, `fetch --quiet <remote>` and `fetch --quiet
+  . <commit>:refs/heads/<branch>` (`src/move_forward/plugins/git/actions.py:260`, `283`).
+- `remote_refs(git, remote, patterns=(), *, heads=False, symrefs=False, env=None)`: what a
+  remote has, from one `git ls-remote`, as a `RemoteRefs` (each ref's id, and with `symrefs`
+  each symbolic ref's target). git-stack replaces `ls-remote --symref <remote> HEAD`
+  (`git_stack/git.py:1087`, reading `symrefs["HEAD"]`), its probe at a push URL (`1202`,
+  passing its `GIT_CONFIG_COUNT` rewrite as `env`) and `ls-remote --heads -- <remote> <refs>`
+  (`git_stack/stack.py:3036`, `3666`).
+- `remote_urls(git, remote, *, push=False)`: the URLs git fetches a remote from or pushes it
+  to, rewritten as git rewrites them (`insteadOf`, `pushInsteadOf`), from one `git remote
+  get-url --all [--push]`. git-stack replaces `remote get-url --push --all`
+  (`git_stack/git.py:1131`) and `remote get-url` (`git_stack/adapters/github.py:1981`), and
+  can drop its own reading of `insteadOf`, `pushInsteadOf` and `pushurl`
+  (`git_stack/git.py:353-370`, `580-610`, `1110-1190`) for comparing what git gives with the
+  configured URLs; move-forward, `remote get-url` (`src/move_forward/plugins/github/setup.py:36`;
+  its `git remote` at `:34`, which lists the remotes, stays). Unlike `fetch` and `remote_refs`,
+  it takes only a remote the repository's own config names.
 - `status(git, *, untracked=, ignored=, ignore_submodules=, renames=, branch=)` reads a
   worktree's status from one `git --no-optional-locks status --porcelain=v2 -z`, which
   doesn't refresh the index, so a `ReadOnlyGit` offers it: typed entries (`Changed`,
@@ -142,6 +244,28 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   all its branches' reflogs at once. Unlike those, run with `check=False`, a ref that names
   nothing raises `UnknownRevisionError`, failing the whole call: a tool passes only refs
   that exist, or catches it.
+- `is_ancestor(git, ancestor, descendant)`, `merge_base(git, a, b)`, `merge_bases(git, a, b)`,
+  `independent(git, *commits)` and `fork_point(git, upstream, commit)` ask `git merge-base`
+  (`--is-ancestor`, plain, `--all`, `--independent`, `--fork-point`) with typed results: a
+  bool, an id or None, a list of ids, a list of ids, an id or None. git's no (exit 1) is
+  False, None or []; any other failure raises (`UnknownRevisionError` for a name that names
+  nothing, `WrongTypeError` for one that names no commit). They replace a tool's
+  `ok`/`succeeds("merge-base", "--is-ancestor", ...)` (git-stack `git_stack/git.py:679`,
+  `700`, `705`; git-recommit `git_recommit/git.py:141`; move-forward
+  `src/move_forward/plugins/git/actions.py:275`), `run("merge-base", ...)` (git-stack
+  `core.py:1087`, `stack.py:3915`; git-recommit `revisions.py:35`), `--all` (git-stack
+  `core.py:723`), `--independent` (`stack.py:4005`) and `--fork-point` (`stack.py:567`). A
+  tool whose wrapper answered False or "" for a name that names nothing (git-recommit's
+  `succeeds`; git-stack's `ok`, `git_stack/git.py:306`, which wraps `succeeds`, so its
+  `is_ancestor` at `git.py:679` and `700`; and its `check=False`) catches
+  `UnknownRevisionError` where it relied on that. `fork_point` gives None for a full id the
+  repository lacks, of which git says nothing, and raises for an error git reports reading
+  upstream's reflog. git-stack's `core.py:723` and `check_ancestry`, which pass `env=` for
+  one call, use a client made with that `env`.
+- A failure whose stderr has git's wrong-type message (`error: object <id> is a <type>, not a
+  <type>`, or `...: expected <type> type, but the object dereferences to <type> type`) and no
+  other message the library knows raises `WrongTypeError` (a `GitError`) where it raised
+  `GitError`, e.g. `merge-base --fork-point` of a tree, or `branch <name> <tree>`.
 - `commits(git, revisions, *, max_count=None, reverse=False, topo_order=False, messages=False)`
   lists the commits a typed `Revisions` describes (includes, excludes, `merges`,
   `first_parent`, `cherry_pick`, `since`, `author`, `paths`), each a `Commit` (id, parents,
@@ -157,6 +281,31 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
   (log.mailmap); and the top of the worktree is the path `""`: `"."` matches nothing, so
   move-forward's derive.py, whose `PurePosixPath(path).parent` gives `"."` for top-level
   files, passes `""` for them.
+- `changed_paths(git, diffs, *, renames=True, ignore_submodules=False, paths=(),
+  pathspecs=())` lists the paths each of many diffs changes (`TreeChange`: status, path, old
+  and new mode and object id, and a rename's old path and similarity), and `line_changes`, with
+  the same arguments, how many lines each adds and removes per path (`LineChange`; None for a
+  binary file). A diff is a commit, against its parent, or a pair (old, new) of commits or
+  trees, each any revision. Two processes for all of them: a `CatFile` to resolve the names,
+  and `git diff-tree --stdin -z`; so a `FakeGit` can't answer them. Renames are found by
+  default, as porcelain `diff` and `log` find them (a rename is its new path alone), within
+  `diff.renameLimit`. A tool replaces its per-diff runs: git-stack's `changes_something`
+  (`git_stack/adapters/git.py:108`, `diff --quiet`: an empty list) and `changed_files`
+  (`adapters/git.py:231`, `diff --name-only -z`), one per branch, by one call for all
+  branches, and `batch_line_changes` (`git.py:741`) and its hand parser by `line_changes`;
+  git-recommit's `match` (`git_recommit/session.py:194`, `pathspecs=`, `renames=False`) and
+  `_old_commits`' `diff-tree --stdin` and parser (`oldcommits.py:138`, `renames=False`, with
+  `commits()` for each commit's author); move-forward's `_my_dirs`
+  (`src/move_forward/plugins/git/client.py:306`) and git-stack's `disjoint_source_paths`
+  (`git_stack/integrations.py:780`, `renames=False`), `log --name-only` and `--name-status
+  -z`, by `commits()` and `changed_paths` of their ids, which give the same paths (a merge's,
+  which `log` doesn't list by default, aren't listed either).
+- `tree_entries(git, tree, paths=(), *, recursive=False)` lists a tree's entries (`TreeEntry`:
+  mode, type, object id, path from the top), from one `git ls-tree -z --full-tree`, its paths
+  taken literally. A tool replaces its raw `ls-tree` runs and parsers: git-recommit's
+  `add_unchanged` (`git_recommit/session.py:333`, run per file: one call with all the paths
+  instead) and `_trees` (`oldcommits.py:255`, `recursive=True`), and git-stack's
+  `disjoint_source_paths` listing (`git_stack/integrations.py:801`).
 - `refs()` takes for-each-ref's filters, `contains`, `no_contains`, `merged`, `no_merged` and
   `points_at`, and its order, `sort` (`SortKey`s, the first deciding) and `count`; and fills
   in typed `Ref` attributes when asked, in the same one process: `track=True` gives `track`,
@@ -283,6 +432,9 @@ as git tags (`vX.Y.Z`), each with a GitHub release of its section; see the READM
 
 ### Fixed
 
+- `CatFile` no longer splits what git said at U+0085, U+2028 or U+2029, which a ref name can
+  hold: a warning in `ObjectInfo.warnings` that quotes such a name is one warning, and
+  `UnknownRevisionError.reason` keeps the name whole.
 - Config writes recognize a busy lock on paths containing newlines, including with Git's
   performance or Trace2 logging enabled. Retries depend on the reason after the path, which
   can contain text shaped like an exit trace line. Bare performance traces and aliases that

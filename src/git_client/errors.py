@@ -164,7 +164,7 @@ class PushRejectedError(GitError):
 
 
 class ConflictError(GitError):
-    """A rebase, merge or cherry-pick stopped on a conflict."""
+    """A rebase, merge, cherry-pick or revert stopped on a conflict."""
 
 
 # What git says (on stderr, but for a conflict: on stdout) for each failure, in the order
@@ -306,7 +306,9 @@ _STDERR_SAYS: tuple[tuple[type[GitError], re.Pattern[str]], ...] = (
             "| - not something we can merge|Failed to resolve '.*' as a valid ref"
             # Of a full id the repository lacks, as some commands say it.
             "|Not a valid commit name |Invalid revision range |Does not point to a valid commit '"
-            "| is not a valid object$|Could not parse object '|^fatal: unknown commit ",
+            "| is not a valid object$|Could not parse object '|^fatal: unknown commit "
+            # merge-base --fork-point's, of a name that names no ref.
+            "|^fatal: No such ref: '",
             re.MULTILINE,
         ),
     ),
@@ -338,4 +340,6 @@ def error_for(stderr: str, stdout: str, *, command: object) -> type[GitError]:
             if error is UnknownRevisionError and WRONG_TYPE.search(stderr):
                 return WrongTypeError  # it names something
             return error
+    if WRONG_TYPE.search(stderr):  # alone, as merge-base --fork-point says it
+        return WrongTypeError
     return GitError

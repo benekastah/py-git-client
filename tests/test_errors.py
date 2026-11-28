@@ -68,6 +68,7 @@ MISSING = "0123" * 10
         ("tag", "new", "no-such-branch"),  # Failed to resolve '...' as a valid ref
         ("merge-base", "HEAD", MISSING),  # Not a valid commit name
         ("merge-base", "--is-ancestor", MISSING, "HEAD"),
+        ("merge-base", "--fork-point", "no-such-branch", "HEAD"),  # No such ref
         ("log", f"HEAD..{MISSING}"),  # Invalid revision range
         ("rebase", "--onto", MISSING, "HEAD"),  # Does not point to a valid commit
         ("commit-tree", "-p", MISSING, "HEAD^{tree}"),  # <id> is not a valid object
@@ -102,6 +103,8 @@ def test_a_name_that_is_a_revision_and_a_path_is_another_failure(repo: Git) -> N
         # "expected commit type, but the object dereferences to tree type", then "not
         # something we can merge"
         ("merge", "HEAD^{tree}"),
+        # Only "object <id> is a tree, not a commit", with exit 1.
+        ("merge-base", "--fork-point", "HEAD", "HEAD^{tree}"),
     ],
 )
 def test_a_name_of_the_wrong_type(repo: Git, args: tuple[str, ...]) -> None:

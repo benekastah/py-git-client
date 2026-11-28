@@ -1,6 +1,7 @@
 """Run git from Python with as few processes as possible: one way to start git, a long-lived
 cat-file, and batched reads and writes."""
 
+from git_client.ancestry import fork_point, independent, is_ancestor, merge_base, merge_bases
 from git_client.batch import (
     ConfigType,
     ConfigValue,
@@ -23,6 +24,14 @@ from git_client.batch import (
     refs,
     update_refs,
 )
+from git_client.branches import (
+    DeletedBranches,
+    create_branch,
+    delete_branches,
+    rename_branch,
+    set_upstream,
+    valid_branch_name,
+)
 from git_client.cat_file import CatFile, ObjectInfo, ObjectType
 from git_client.client import (
     CLIENT_TIMEOUT,
@@ -38,6 +47,16 @@ from git_client.client import (
     printable,
 )
 from git_client.config_file import ConfigChange, ConfigResult, ConfigSet, ConfigUnset
+from git_client.diffs import (
+    ChangeStatus,
+    Diff,
+    LineChange,
+    TreeChange,
+    TreeEntry,
+    changed_paths,
+    line_changes,
+    tree_entries,
+)
 from git_client.errors import (
     ConfigLockedError,
     ConflictError,
@@ -65,6 +84,17 @@ from git_client.history import (
 )
 from git_client.merging import Merge, MergeResult, merge_trees
 from git_client.performance import PerformanceEvent, PerformanceRecorder
+from git_client.porcelain import (
+    CommandOutput,
+    abort,
+    cherry_pick,
+    commit,
+    merge,
+    reset,
+    revert,
+    skip,
+    switch,
+)
 from git_client.pushing import (
     PushDestination,
     PushRef,
@@ -73,6 +103,17 @@ from git_client.pushing import (
     PushUpdate,
     push,
 )
+from git_client.remotes import (
+    FetchRef,
+    FetchRefspec,
+    FetchResult,
+    FetchStatus,
+    RemoteRefs,
+    fetch,
+    remote_refs,
+    remote_urls,
+)
+from git_client.transaction import RefTransaction, ref_transaction
 from git_client.worktree import (
     Changed,
     Ignored,
@@ -92,7 +133,9 @@ __all__ = [
     "CLIENT_TIMEOUT",
     "Arg",
     "CatFile",
+    "ChangeStatus",
     "Changed",
+    "CommandOutput",
     "Commit",
     "ConfigChange",
     "ConfigLockedError",
@@ -103,13 +146,20 @@ __all__ = [
     "ConfigValue",
     "ConflictError",
     "CorruptObjectError",
+    "DeletedBranches",
+    "Diff",
     "EnvValue",
+    "FetchRef",
+    "FetchRefspec",
+    "FetchResult",
+    "FetchStatus",
     "Git",
     "GitCache",
     "GitError",
     "GitTimeoutError",
     "Head",
     "Ignored",
+    "LineChange",
     "Merge",
     "MergeResult",
     "MissingObjectError",
@@ -128,9 +178,11 @@ __all__ = [
     "PushUpdate",
     "ReadOnlyGit",
     "Ref",
+    "RefTransaction",
     "RefUpdate",
     "ReflogEntry",
     "RemoteError",
+    "RemoteRefs",
     "Renamed",
     "Revisions",
     "Signature",
@@ -141,34 +193,61 @@ __all__ = [
     "SubmoduleState",
     "Timeout",
     "Track",
+    "TreeChange",
+    "TreeEntry",
     "UnknownRevisionError",
     "Unmerged",
     "Untracked",
     "Worktree",
     "WrongTypeError",
+    "abort",
     "any_commit",
+    "changed_paths",
+    "cherry_pick",
     "color_enabled",
+    "commit",
     "commits",
     "config",
     "config_values",
     "count",
+    "create_branch",
     "decode",
+    "delete_branches",
     "encode",
+    "fetch",
     "find_git",
+    "fork_point",
     "git_common_dir",
     "git_dir",
     "git_paths",
     "git_paths_and_head",
     "hash_blob_at",
     "hash_blobs",
+    "independent",
+    "is_ancestor",
+    "line_changes",
+    "merge",
+    "merge_base",
+    "merge_bases",
     "merge_file",
     "merge_trees",
     "patch_ids",
     "printable",
     "push",
+    "ref_transaction",
     "reflogs",
     "refs",
+    "remote_refs",
+    "remote_urls",
+    "rename_branch",
+    "reset",
+    "revert",
+    "set_upstream",
+    "skip",
     "status",
+    "switch",
+    "tree_entries",
     "update_refs",
+    "valid_branch_name",
     "worktrees",
 ]

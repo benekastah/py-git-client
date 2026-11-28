@@ -810,8 +810,9 @@ class ReadOnlyGit:
     library's reads alone, each a command the library fixes: `resolve`, `var`, `prefix`, `cdup`
     and `object_id_length`, and the functions that take a ReadOnlyGit (`refs`, `config`,
     `config_values`, `color_enabled`, `git_paths`, `git_paths_and_head`, `git_dir`,
-    `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `status`, `worktrees` and
-    `CatFile`).
+    `git_common_dir`, `commits`, `count`, `any_commit`, `reflogs`, `is_ancestor`, `merge_base`,
+    `merge_bases`, `independent`, `fork_point`, `changed_paths`, `line_changes`, `tree_entries`,
+    `status`, `worktrees` and `CatFile`).
     It has no public way to run a command of the caller's (no `run`, `process` and the like),
     so a tool that only reads can show that it does by making one: what it doesn't offer, it
     can't be asked to run (the library's private helpers can, as anything private can be
@@ -1219,9 +1220,10 @@ class Git(ReadOnlyGit):
         timeout: Timeout = CLIENT_TIMEOUT,
         strip: bool = True,
     ) -> str:
-        """Run git and return its stdout as text (see decode), stripped of space at both ends
-        unless `strip` is False: then as git wrote it, for output whose edges matter (e.g.
-        `status --porcelain`'s " M file", or a name that starts or ends with a space).
+        """Run git and return its stdout as text (see decode), stripped of ASCII space and
+        newlines (" \\t\\r\\n") at both ends, not of other characters a name can end in (e.g.
+        U+2028), unless `strip` is False: then as git wrote it, for output whose edges matter
+        (e.g. `status --porcelain`'s " M file", or a name that starts or ends with a space).
         Raises GitError if it fails, as `run_bytes` does.
 
         Input and output pass as bytes, so line endings stay as they are: text mode would
@@ -1229,7 +1231,7 @@ class Git(ReadOnlyGit):
         """
         encoded = None if input is None else encode(input)
         output = decode(self.run_bytes(*args, input=encoded, env=env, timeout=timeout))
-        return output.strip() if strip else output
+        return output.strip(" \t\r\n") if strip else output
 
     def ok(
         self,
